@@ -1,0 +1,15 @@
+<!doctype html>
+<html><body>
+<script>
+(()=> {
+  const params = new URLSearchParams(location.search)
+  const code = params.get('code')
+  const state = params.get('state')
+  // post message back to opener
+  if(window.opener){
+    window.opener.postMessage({ type: 'oauth_code', code, state }, window.location.origin)
+  }
+  document.body.innerText = 'OAuth complete. You can close this window.'
+})()
+</script>
+</body></html>

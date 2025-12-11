@@ -1,0 +1,44 @@
+<svg width="512" height="512" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="logo-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="50" cy="50" r="45" fill="url(#logo-gradient)"/>
+
+  <!-- Lightning bolt integrated into letterform -->
+  <path
+    d="M 35 25 L 50 25 L 45 50 L 60 50 L 40 75 L 45 55 L 30 55 Z"
+    fill="white"
+    opacity="0.95"
+  />
+
+  <!-- Database cylinder with DuckDB yellow accent -->
+  <ellipse
+    cx="65"
+    cy="30"
+    rx="10"
+    ry="4"
+    fill="#FFF000"
+    opacity="0.9"
+  />
+  <rect
+    x="55"
+    y="30"
+    width="20"
+    height="8"
+    fill="#FFF000"
+    opacity="0.7"
+  />
+  <ellipse
+    cx="65"
+    cy="38"
+    rx="10"
+    ry="4"
+    fill="#FFF000"
+    opacity="0.9"
+  />
+</svg>

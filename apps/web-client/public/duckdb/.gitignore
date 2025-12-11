@@ -1,0 +1,8 @@
+# Ignore all files in this directory (auto-downloaded via postinstall)
+*
+
+# Keep this .gitignore
+!.gitignore
+
+# Keep README
+!README.md

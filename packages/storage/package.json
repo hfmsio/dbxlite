@@ -1,0 +1,10 @@
+{
+  "name": "@ide/storage",
+  "version": "0.2.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "dependencies": {
+    "argon2-browser": "^1.18.0"
+  }
+}

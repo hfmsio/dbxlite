@@ -1,0 +1,7 @@
+{
+  "name": "@ide/schema-cache",
+  "version": "0.2.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts"
+}

@@ -1,0 +1,46 @@
+{
+  "name": "dbxlite",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Lightweight browser-native SQL utility powered by DuckDB - no install, just query",
+  "author": "hfmsio",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hfmsio/dbxlite.git"
+  },
+  "homepage": "https://github.com/hfmsio/dbxlite#readme",
+  "bugs": {
+    "url": "https://github.com/hfmsio/dbxlite/issues"
+  },
+  "keywords": [
+    "sql",
+    "duckdb",
+    "browser",
+    "database",
+    "query",
+    "data-analysis",
+    "wasm",
+    "utility"
+  ],
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+ "scripts": {
+    "dev": "pnpm -C apps/web-client dev",
+    "build": "pnpm -w -r --parallel build",
+    "test": "pnpm -w -r test",
+    "lint": "biome lint . --diagnostic-level=error",
+    "lint:fix": "biome check --write .",
+    "e2e": "pnpm -C apps/web-client exec playwright test",
+    "e2e:ui": "pnpm -C apps/web-client exec playwright test --ui",
+    "e2e:headed": "pnpm -C apps/web-client exec playwright test --headed",
+    "e2e:simple": "pnpm -C apps/web-client exec playwright test --config=e2e/playwright-simple.config.ts",
+    "postinstall": "bash scripts/download-duckdb-wasm.sh"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.8",
+    "typescript": "^5.9.3"
+  }
+}

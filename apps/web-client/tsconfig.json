@@ -1,0 +1,24 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "composite": true,
+    "jsx": "react-jsx",
+    "outDir": "./dist",
+    "baseUrl": ".",
+    "paths": {
+      "@ide/connectors": ["../../packages/connectors/src/index.ts"],
+      "@ide/storage": ["../../packages/storage/src/index.ts"],
+      "@ide/duckdb-adapter": ["../../packages/duckdb-wasm-adapter/src/index.ts"],
+      "@ide/schema-cache": ["../../packages/schema-cache/src/index.ts"],
+      "@ide/plugins": ["../../packages/plugins/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../../packages/connectors" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/duckdb-wasm-adapter" },
+    { "path": "../../packages/schema-cache" },
+    { "path": "../../packages/plugins" }
+  ]
+}

@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+*.lcov
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# DuckDB WASM files (downloaded at build time)
+apps/web-client/public/duckdb/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Claude Code settings
+.claude/
+.vercel/
+
+# Various code agents settings
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+
+# Internal development
+plans/
+test-results/
+*.local
+

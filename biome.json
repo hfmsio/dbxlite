@@ -1,0 +1,64 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.3.8/schema.json",
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"a11y": {
+				"noStaticElementInteractions": "off",
+				"useKeyWithClickEvents": "off",
+				"useSemanticElements": "off",
+				"noAutofocus": "off",
+				"useButtonType": "off",
+				"noLabelWithoutControl": "off",
+				"noSvgWithoutTitle": "off",
+				"noNoninteractiveTabindex": "off"
+			},
+			"complexity": {
+				"noExcessiveCognitiveComplexity": "off",
+				"noForEach": "off",
+				"noUselessConstructor": "off",
+				"useOptionalChain": "off"
+			},
+			"correctness": {
+				"noUnusedImports": "warn",
+				"noUnusedVariables": "warn",
+				"useExhaustiveDependencies": "warn",
+				"useParseIntRadix": "warn",
+				"noSwitchDeclarations": "off",
+				"noConstantCondition": "off"
+			},
+			"suspicious": {
+				"noExplicitAny": "off",
+				"noArrayIndexKey": "off",
+				"noConsole": "off",
+				"noAssignInExpressions": "off",
+				"noTemplateCurlyInString": "off",
+				"useIterableCallbackReturn": "warn",
+				"noImplicitAnyLet": "off",
+				"noEmptyInterface": "off"
+			},
+			"style": {
+				"noNonNullAssertion": "off",
+				"useImportType": "off",
+				"noParameterAssign": "off",
+				"useDefaultParameterLast": "off",
+				"useTemplate": "off"
+			}
+		}
+	},
+	"files": {
+		"includes": [
+			"apps/**/*.ts",
+			"apps/**/*.tsx",
+			"packages/**/*.ts",
+			"!**/node_modules",
+			"!**/dist",
+			"!**/*.test.ts",
+			"!**/*.test.tsx",
+			"!**/*.vitest.ts",
+			"!**/*.vitest.tsx",
+			"!**/playwright.config.ts"
+		]
+	}
+}

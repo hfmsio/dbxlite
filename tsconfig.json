@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "paths": {
+      "@ide/connectors": ["./packages/connectors/src/index.ts"],
+      "@ide/storage": ["./packages/storage/src/index.ts"],
+      "@ide/duckdb-adapter": ["./packages/duckdb-wasm-adapter/src/index.ts"],
+      "@ide/schema-cache": ["./packages/schema-cache/src/index.ts"],
+      "@ide/plugins": ["./packages/plugins/src/index.ts"]
+    }
+  },
+  "include": [],
+  "references": [
+    { "path": "./packages/connectors" },
+    { "path": "./packages/storage" },
+    { "path": "./packages/duckdb-wasm-adapter" },
+    { "path": "./packages/schema-cache" },
+    { "path": "./packages/plugins" },
+    { "path": "./apps/web-client" }
+  ]
+}
