@@ -16,7 +16,7 @@ Run SQL locally in your browser—no servers, no installs. dbxlite is a React/Vi
 - Persistent handles: re-open local files and DuckDB databases between sessions; in-memory tables are session-scoped.
 
 ## Quick Start
-**Live Demo:** https://dbxlite.vercel.app
+**Live Demo:** https://sql.dbxlite.com
 
 ```bash
 git clone https://github.com/hfmsio/dbxlite.git
