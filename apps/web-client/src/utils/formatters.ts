@@ -392,11 +392,16 @@ function formatTemporal(
 	if (!date && value instanceof Date) {
 		date = value;
 	} else if (typeof value === "number") {
+		// DATE type: DuckDB sends dates as milliseconds since epoch
+		if (dataType === DataType.DATE) {
+			date = new Date(value);
+		}
 		// Handle Unix timestamps (could be seconds, milliseconds, microseconds, or nanoseconds)
-		if (dataType === DataType.TIMESTAMP_S || value < 1e11) {
+		// Use Math.abs() for threshold checks to handle negative (pre-1970) dates correctly
+		else if (dataType === DataType.TIMESTAMP_S || Math.abs(value) < 1e11) {
 			// Seconds (timestamp less than year 5138)
 			date = new Date(value * 1000);
-		} else if (dataType === DataType.TIMESTAMP_MS || value < 1e14) {
+		} else if (dataType === DataType.TIMESTAMP_MS || Math.abs(value) < 1e14) {
 			// Milliseconds (timestamp less than year 5138)
 			date = new Date(value);
 		} else if (dataType === DataType.TIMESTAMP_NS) {
@@ -462,16 +467,18 @@ function formatTemporal(
  * Format date portion
  */
 function formatDate(date: Date, format: string = "iso"): string {
-	// ISO format: YYYY-MM-DD
+	// ISO format: YYYY-MM-DD (use UTC to avoid timezone shifts)
 	if (format === "iso") {
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, "0");
-		const day = String(date.getDate()).padStart(2, "0");
+		const year = date.getUTCFullYear();
+		const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+		const day = String(date.getUTCDate()).padStart(2, "0");
 		return `${year}-${month}-${day}`;
 	}
 
-	// Locale-based formats
-	const options: Intl.DateTimeFormatOptions = {};
+	// Locale-based formats (use UTC timezone to preserve the date)
+	const options: Intl.DateTimeFormatOptions = {
+		timeZone: "UTC",
+	};
 
 	switch (format) {
 		case "short":

@@ -781,6 +781,8 @@ body {
 	color: #fca5a5;
 	margin-bottom: 6px;
 	font-size: 12px;
+	max-height: 150px;
+	overflow-y: auto;
 }
 
 .result-stats-footer {

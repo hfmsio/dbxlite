@@ -116,7 +116,8 @@ export class DuckDBWorkerAdapter {
         }
       }
       this.worker.onerror = (e) => {
-        reject(new Error(`Worker error: ${e.message}`))
+        console.error('[Worker] Error event:', e, 'filename:', e.filename, 'lineno:', e.lineno, 'colno:', e.colno)
+        reject(new Error(`Worker error: ${e.message || 'Unknown error'} at ${e.filename}:${e.lineno}:${e.colno}`))
       }
       // Provide base URLs for bundle loading: prefer local /duckdb/, fallback handled by worker
       const localBundleBase = `${location.origin}/duckdb`
