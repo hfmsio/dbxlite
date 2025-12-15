@@ -6,14 +6,27 @@
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-8+-blue.svg)](package.json)
 
-Run SQL locally in your browser—no servers, no installs. dbxlite is a React/Vite client powered by DuckDB WebAssembly, so your data never leaves your machine.
+A browser-native SQL workbench powered by DuckDB WebAssembly. Works with files of any size since data stays on disk, not in memory.
 
 ## Highlights
-- Zero-setup: open the app and query immediately; works offline once the DuckDB WASM bundle is downloaded.
-- Private by design: queries execute fully in-browser; files stay on your disk.
-- Multi-source: local files (CSV/TSV/JSON/Parquet/Excel/JSONL), remote URLs, and attached DuckDB databases. BigQuery connector included; Snowflake coming soon.
-- Fast UI: Monaco editor with autocomplete, multi-tabs, formatter; results grid tuned for large datasets with copy/export and keyboard navigation.
-- Persistent handles: re-open local files and DuckDB databases between sessions; in-memory tables are session-scoped.
+
+**Query Any Data, Any Size**
+Powered by DuckDB WASM. Query CSV, Parquet, Excel, JSON, JSONL locally or from cloud URLs. Designed for large datasets. Files register via File System Access API and stay on disk; DuckDB reads only what it needs. Your limit is disk space, not memory.
+
+**Persistent Sessions**
+Attach DuckDB databases (`.db`, `.duckdb`) and local files with handles that persist across browser sessions. Close the browser, come back later, resume where you left off. No re-uploading.
+
+**Cloud Data Warehouses**
+Query BigQuery directly from the browser with cost estimates before you run. Same unified interface for local and cloud data. Snowflake coming soon.
+
+**Full SQL Workbench**
+Monaco editor with autocomplete and formatting. Schema explorer that visualizes nested structs and shows all sheets in Excel files. Results grid with cell-by-cell keyboard navigation, cell modal for large content, export to Parquet/CSV/JSON, and streaming for large datasets. 10 color themes. Extensive settings for formatting, alignment, and display.
+
+**Share Executable SQL**
+Share queries via URL that run on click. Frictionless for teaching, learning, and collaboration. Built-in examples include getting started, remote datasets, DuckDB tutorials, advanced analytics, and extensions.
+
+**Private by Default**
+For local files, no server process. Once loaded, everything runs in your browser. Data never leaves your machine. Cloud connectors (BigQuery) communicate directly with their respective APIs.
 
 ## Quick Start
 **Live Demo:** https://sql.dbxlite.com
