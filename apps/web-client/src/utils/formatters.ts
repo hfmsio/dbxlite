@@ -6,6 +6,7 @@
  */
 
 import type { CellValue } from "../types/table";
+import { databaseTimezone } from "../services/formatter-settings";
 import { DataType, getTypeCategory, TypeCategory } from "./dataTypes";
 import { createLogger } from "./logger";
 
@@ -195,6 +196,8 @@ function deepDecodeArrowJson(value: unknown): unknown {
 export interface FormatterOptions {
 	dateFormat?: "iso" | "short" | "medium" | "long" | "full";
 	timeFormat?: "12h" | "24h";
+	timestampTimezone?: "auto" | "utc" | "local";
+	timezoneFormat?: "offset" | "short" | "long" | "none";
 	decimalPlaces?: number;
 	nullDisplay?: string;
 	booleanDisplay?: "text" | "icon" | "numeric";
@@ -208,10 +211,12 @@ export interface FormatterOptions {
 const DEFAULT_OPTIONS: FormatterOptions = {
 	dateFormat: "iso",
 	timeFormat: "24h",
+	timestampTimezone: "local",
+	timezoneFormat: "short",
 	decimalPlaces: 2,
 	nullDisplay: "NULL",
 	booleanDisplay: "text",
-	timestampPrecision: "milliseconds",
+	timestampPrecision: "seconds",
 };
 
 /**
@@ -392,11 +397,16 @@ function formatTemporal(
 	if (!date && value instanceof Date) {
 		date = value;
 	} else if (typeof value === "number") {
+		// DATE type: DuckDB sends dates as milliseconds since epoch
+		if (dataType === DataType.DATE) {
+			date = new Date(value);
+		}
 		// Handle Unix timestamps (could be seconds, milliseconds, microseconds, or nanoseconds)
-		if (dataType === DataType.TIMESTAMP_S || value < 1e11) {
+		// Use Math.abs() for threshold checks to handle negative (pre-1970) dates correctly
+		else if (dataType === DataType.TIMESTAMP_S || Math.abs(value) < 1e11) {
 			// Seconds (timestamp less than year 5138)
 			date = new Date(value * 1000);
-		} else if (dataType === DataType.TIMESTAMP_MS || value < 1e14) {
+		} else if (dataType === DataType.TIMESTAMP_MS || Math.abs(value) < 1e14) {
 			// Milliseconds (timestamp less than year 5138)
 			date = new Date(value);
 		} else if (dataType === DataType.TIMESTAMP_NS) {
@@ -434,12 +444,15 @@ function formatTemporal(
 	// Format based on data type
 	switch (dataType) {
 		case DataType.DATE:
+			// DATE is always displayed as-is (UTC) - no timezone conversion
 			return formatDate(date, options.dateFormat);
 
 		case DataType.TIME:
+			// TIME is pure time-of-day, no timezone concept
 			return formatTime(date, options.timeFormat);
 
 		case DataType.DATETIME:
+			// DATETIME: date part as-is (UTC), time part in local
 			return `${formatDate(date, options.dateFormat)} ${formatTime(date, options.timeFormat)}`;
 
 		case DataType.TIMESTAMP:
@@ -460,81 +473,249 @@ function formatTemporal(
 
 /**
  * Format date portion
+ * For standalone DATE type: always displays as-is (UTC) - no timezone conversion.
+ * For TIMESTAMP type: respects the timezone parameter to show correct date in that timezone.
  */
-function formatDate(date: Date, format: string = "iso"): string {
-	// ISO format: YYYY-MM-DD
-	if (format === "iso") {
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, "0");
-		const day = String(date.getDate()).padStart(2, "0");
-		return `${year}-${month}-${day}`;
+function formatDate(
+	date: Date,
+	format: string = "iso",
+	timezone: "utc" | "local" = "utc",
+	ianaTimezone?: string,
+): string {
+	let year: number, month: number, day: number;
+
+	if (timezone === "utc") {
+		// UTC: use UTC getters
+		year = date.getUTCFullYear();
+		month = date.getUTCMonth();
+		day = date.getUTCDate();
+	} else if (ianaTimezone) {
+		// Specific IANA timezone: use Intl API to get date components
+		const formatter = new Intl.DateTimeFormat("en-CA", {
+			timeZone: ianaTimezone,
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+		});
+		const parts = formatter.formatToParts(date);
+		year = parseInt(parts.find((p) => p.type === "year")?.value ?? "0");
+		month = parseInt(parts.find((p) => p.type === "month")?.value ?? "1") - 1;
+		day = parseInt(parts.find((p) => p.type === "day")?.value ?? "1");
+	} else {
+		// Browser's local timezone: use local getters
+		year = date.getFullYear();
+		month = date.getMonth();
+		day = date.getDate();
 	}
 
-	// Locale-based formats
-	const options: Intl.DateTimeFormatOptions = {};
+	// ISO format: YYYY-MM-DD
+	if (format === "iso") {
+		return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+	}
+
+	// For locale formats, create a Date at noon in the target timezone to avoid day boundary issues
+	let displayDate: Date;
+	let formatOptions: Intl.DateTimeFormatOptions;
+
+	if (timezone === "utc") {
+		displayDate = new Date(Date.UTC(year, month, day, 12, 0, 0));
+		formatOptions = { timeZone: "UTC" };
+	} else if (ianaTimezone) {
+		// Create date at noon UTC, then format in the target timezone
+		displayDate = new Date(Date.UTC(year, month, day, 12, 0, 0));
+		formatOptions = { timeZone: ianaTimezone };
+	} else {
+		// Local timezone: create local date at noon
+		displayDate = new Date(year, month, day, 12, 0, 0);
+		formatOptions = {};
+	}
 
 	switch (format) {
 		case "short":
-			options.year = "2-digit";
-			options.month = "numeric";
-			options.day = "numeric";
+			formatOptions.year = "2-digit";
+			formatOptions.month = "numeric";
+			formatOptions.day = "numeric";
 			break;
 		case "medium":
-			options.year = "numeric";
-			options.month = "short";
-			options.day = "numeric";
+			formatOptions.year = "numeric";
+			formatOptions.month = "short";
+			formatOptions.day = "numeric";
 			break;
 		case "long":
-			options.year = "numeric";
-			options.month = "long";
-			options.day = "numeric";
+			formatOptions.year = "numeric";
+			formatOptions.month = "long";
+			formatOptions.day = "numeric";
 			break;
 		case "full":
-			options.weekday = "long";
-			options.year = "numeric";
-			options.month = "long";
-			options.day = "numeric";
+			formatOptions.weekday = "long";
+			formatOptions.year = "numeric";
+			formatOptions.month = "long";
+			formatOptions.day = "numeric";
 			break;
 	}
 
-	return date.toLocaleDateString(undefined, options);
+	return displayDate.toLocaleDateString(undefined, formatOptions);
 }
 
 /**
  * Format time portion
  */
-function formatTime(date: Date, format: string = "24h"): string {
+function formatTime(date: Date, format: string = "24h", timezone: "utc" | "local" = "local", ianaTimezone?: string): string {
 	const options: Intl.DateTimeFormatOptions = {
 		hour: "2-digit",
 		minute: "2-digit",
 		second: "2-digit",
 		hour12: format === "12h",
 	};
+	if (timezone === "utc") {
+		options.timeZone = "UTC";
+	} else if (ianaTimezone) {
+		// Use specific IANA timezone (from database setting)
+		options.timeZone = ianaTimezone;
+	}
 
 	return date.toLocaleTimeString(undefined, options);
+}
+
+/**
+ * Resolve "auto" timezone to actual timezone based on database setting
+ */
+function resolveTimezone(tzSetting: "auto" | "utc" | "local"): { tz: "utc" | "local"; ianaTimezone?: string } {
+	if (tzSetting === "utc") {
+		return { tz: "utc" };
+	}
+	if (tzSetting === "local") {
+		return { tz: "local" };
+	}
+	// "auto" - use database timezone
+	const dbTimezone = databaseTimezone.getTimezone();
+	if (dbTimezone.toLowerCase() === "utc" || dbTimezone === "Etc/UTC") {
+		return { tz: "utc" };
+	}
+	// Use the database timezone for display
+	return { tz: "local", ianaTimezone: dbTimezone };
 }
 
 /**
  * Format timestamp with timezone
  */
 function formatTimestamp(date: Date, options: FormatterOptions): string {
-	const dateStr = formatDate(date, options.dateFormat);
-	const timeStr = formatTime(date, options.timeFormat);
+	const tzSetting = options.timestampTimezone ?? "auto";
+	const { tz, ianaTimezone } = resolveTimezone(tzSetting);
+	const tzFormat = options.timezoneFormat ?? "short";
+	const dateStr = formatDate(date, options.dateFormat, tz, ianaTimezone);
+	const timeStr = formatTime(date, options.timeFormat, tz, ianaTimezone);
 
-	// Add milliseconds for more precision if needed
+	// Add precision based on user preference
 	let precision = "";
-	if (options.timestampPrecision === "milliseconds") {
-		precision = `.${date.getMilliseconds().toString().padStart(3, "0")}`;
+	switch (options.timestampPrecision) {
+		case "seconds":
+			// No decimal places
+			precision = "";
+			break;
+		case "milliseconds": {
+			const ms = tz === "utc" ? date.getUTCMilliseconds() : date.getMilliseconds();
+			precision = `.${ms.toString().padStart(3, "0")}`;
+			break;
+		}
+		case "microseconds": {
+			// JavaScript Date only has ms precision, pad with zeros for microseconds
+			const ms = tz === "utc" ? date.getUTCMilliseconds() : date.getMilliseconds();
+			precision = `.${ms.toString().padStart(3, "0")}000`;
+			break;
+		}
+		case "nanoseconds": {
+			// JavaScript Date only has ms precision, pad with zeros for nanoseconds
+			const ms = tz === "utc" ? date.getUTCMilliseconds() : date.getMilliseconds();
+			precision = `.${ms.toString().padStart(3, "0")}000000`;
+			break;
+		}
+		default:
+			// Default to no precision (seconds)
+			precision = "";
 	}
 
-	// Get timezone offset
-	const tzOffset = -date.getTimezoneOffset();
-	const tzHours = Math.floor(Math.abs(tzOffset) / 60);
-	const tzMinutes = Math.abs(tzOffset) % 60;
-	const tzSign = tzOffset >= 0 ? "+" : "-";
-	const tz = `UTC${tzSign}${tzHours.toString().padStart(2, "0")}:${tzMinutes.toString().padStart(2, "0")}`;
+	// Get timezone indicator based on format preference
+	const tzLabel = formatTimezoneLabel(date, tz, tzFormat, ianaTimezone);
 
-	return `${dateStr} ${timeStr}${precision} ${tz}`;
+	if (tzLabel) {
+		return `${dateStr} ${timeStr}${precision} ${tzLabel}`;
+	}
+	return `${dateStr} ${timeStr}${precision}`;
+}
+
+/**
+ * Format timezone label based on format preference
+ */
+function formatTimezoneLabel(
+	date: Date,
+	tz: "utc" | "local",
+	format: "offset" | "short" | "long" | "none",
+	ianaTimezone?: string,
+): string {
+	if (format === "none") {
+		return "";
+	}
+
+	if (tz === "utc") {
+		return "UTC";
+	}
+
+	// Use specific timezone or browser's local
+	const timeZone = ianaTimezone || undefined;
+
+	// For local/database timezone, format based on preference
+	switch (format) {
+		case "short": {
+			// Get short timezone abbreviation (e.g., "PST", "EST")
+			const shortFormatter = new Intl.DateTimeFormat(undefined, {
+				timeZoneName: "short",
+				timeZone,
+			});
+			const parts = shortFormatter.formatToParts(date);
+			const tzPart = parts.find((p) => p.type === "timeZoneName");
+			return tzPart?.value ?? "";
+		}
+		case "long": {
+			// Get long timezone name (e.g., "Pacific Standard Time")
+			const longFormatter = new Intl.DateTimeFormat(undefined, {
+				timeZoneName: "long",
+				timeZone,
+			});
+			const parts = longFormatter.formatToParts(date);
+			const tzPart = parts.find((p) => p.type === "timeZoneName");
+			return tzPart?.value ?? "";
+		}
+		case "offset":
+		default: {
+			// Show offset (e.g., "-08:00")
+			// For specific timezone, we need to calculate the offset for that timezone
+			if (ianaTimezone) {
+				const formatter = new Intl.DateTimeFormat(undefined, {
+					timeZone: ianaTimezone,
+					timeZoneName: "shortOffset",
+				});
+				const parts = formatter.formatToParts(date);
+				const tzPart = parts.find((p) => p.type === "timeZoneName");
+				// Returns something like "GMT-8" - convert to "-08:00" format
+				const value = tzPart?.value ?? "";
+				const match = value.match(/GMT([+-])(\d+)(?::(\d+))?/);
+				if (match) {
+					const sign = match[1];
+					const hours = match[2].padStart(2, "0");
+					const minutes = (match[3] || "0").padStart(2, "0");
+					return `${sign}${hours}:${minutes}`;
+				}
+				return value;
+			}
+			// For local timezone, use Date methods
+			const tzOffset = -date.getTimezoneOffset();
+			const tzHours = Math.floor(Math.abs(tzOffset) / 60);
+			const tzMinutes = Math.abs(tzOffset) % 60;
+			const tzSign = tzOffset >= 0 ? "+" : "-";
+			return `${tzSign}${tzHours.toString().padStart(2, "0")}:${tzMinutes.toString().padStart(2, "0")}`;
+		}
+	}
 }
 
 /**

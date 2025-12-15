@@ -342,7 +342,7 @@ describe("useTableData caching behavior", () => {
 				columns: mockColumns,
 				startIndex: 0,
 				endIndex: 100,
-				done: true,
+				done: false, // Important: false indicates more pages available
 			});
 
 			const { result } = renderHook(() =>
@@ -354,10 +354,15 @@ describe("useTableData caching behavior", () => {
 				}),
 			);
 
+			// Wait for cache abort to complete (totalRows updated after threshold exceeded)
+			// After cache abort: totalRows = 200 * 10 = 2000, and caching stops
 			await waitFor(
 				() => {
 					expect(result.current.isCaching).toBe(false);
 					expect(result.current.cachedAllResults).toBeNull();
+					// Verify cache abort happened (totalRows set to discovered rows * 10)
+					expect(result.current.totalRows).toBeGreaterThan(0);
+					expect(result.current.totalRows).toBeLessThan(50000);
 				},
 				{ timeout: 5000 },
 			);

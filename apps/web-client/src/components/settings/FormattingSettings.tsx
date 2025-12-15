@@ -127,6 +127,39 @@ export default function FormattingSettings({
 								</select>
 							</div>
 							<div>
+								<label style={labelStyle}>Timestamp Timezone</label>
+								<select
+									value={formatSettings.timestampTimezone}
+									onChange={(e) =>
+										formatterSettings.updateSettings({
+											timestampTimezone: e.target.value as "auto" | "utc" | "local",
+										})
+									}
+									style={selectStyle}
+								>
+									<option value="auto">Auto (from database)</option>
+									<option value="local">Local (browser)</option>
+									<option value="utc">UTC</option>
+								</select>
+							</div>
+							<div>
+								<label style={labelStyle}>Timezone Display</label>
+								<select
+									value={formatSettings.timezoneFormat}
+									onChange={(e) =>
+										formatterSettings.updateSettings({
+											timezoneFormat: e.target.value as "offset" | "short" | "long" | "none",
+										})
+									}
+									style={selectStyle}
+								>
+									<option value="short">Short (PST)</option>
+									<option value="long">Long (Pacific Standard Time)</option>
+									<option value="offset">Offset (-08:00)</option>
+									<option value="none">None</option>
+								</select>
+							</div>
+							<div>
 								<label style={labelStyle}>Timestamp Precision</label>
 								<select
 									value={formatSettings.timestampPrecision}

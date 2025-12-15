@@ -523,6 +523,13 @@ self.addEventListener('message', async (ev) => {
         await conn.query("SET memory_limit=-1");  // Unlimited (use all available)
         await conn.query("SET threads=1");  // Single thread reduces fragmentation
         await conn.query("SET preserve_insertion_order=false");  // Memory optimization
+
+        // Set timezone to user's local timezone so CURRENT_DATE/CURRENT_TIMESTAMP
+        // return local date/time instead of UTC
+        const localTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        if (localTimeZone) {
+          await conn.query(`SET TimeZone='${localTimeZone}'`);
+        }
       } catch (e) {
         console.warn('[DuckDB] Config failed (non-critical):', e);
       }
