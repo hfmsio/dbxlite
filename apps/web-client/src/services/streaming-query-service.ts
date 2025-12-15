@@ -14,8 +14,25 @@ import type { CredentialStore } from "@ide/storage";
 import type { ConnectorType } from "../types/data-source";
 import type { TableRow } from "../types/table";
 import { createLogger } from "../utils/logger";
+import { databaseTimezone } from "./formatter-settings";
 
 const logger = createLogger("QueryService");
+
+/**
+ * Detect SET timezone commands and update the database timezone store.
+ * Supports: SET timezone = 'X', SET TimeZone = 'X', SET TimeZone TO 'X'
+ */
+function detectAndUpdateTimezone(sql: string): void {
+	// Match: SET timezone = 'value' or SET TimeZone TO 'value' anywhere in the SQL
+	// Use global flag to find all occurrences (in case of multiple SET statements)
+	const regex = /\bSET\s+timezone\s*(?:=|TO)\s*['"]?([^'";\s]+)['"]?/gi;
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(sql)) !== null) {
+		const newTimezone = match[1];
+		console.log("[Timezone Detection] SET timezone =", newTimezone);
+		databaseTimezone.setTimezone(newTimezone);
+	}
+}
 
 // Re-export ConnectorType for backward compatibility
 export type { ConnectorType };
@@ -268,6 +285,9 @@ class StreamingQueryService {
 		const queryId = `query_${Date.now()}_${Math.random()}`;
 		const abortController = new AbortController();
 		this.activeQueries.set(queryId, abortController);
+
+		// Detect SET timezone commands and update the database timezone store
+		detectAndUpdateTimezone(sql);
 
 			const {
 				limit,
@@ -828,6 +848,9 @@ class StreamingQueryService {
 			throw new Error(`Connector ${connectorType} not available`);
 		}
 
+		// Detect SET timezone commands and update the database timezone store
+		detectAndUpdateTimezone(sql);
+
 		const allRows: TableRow[] = [];
 		const columns: string[] = [];
 		let columnTypes: ColumnMetadata[] | undefined;
@@ -891,6 +914,9 @@ class StreamingQueryService {
 	async executeQuery(sql: string, signal?: AbortSignal): Promise<QueryResult> {
 		const startTime = Date.now();
 		const connector = this.getActiveConnector();
+
+		// Detect SET timezone commands and update the database timezone store
+		detectAndUpdateTimezone(sql);
 
 		const allRows: TableRow[] = [];
 		const columns: string[] = [];

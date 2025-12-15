@@ -98,19 +98,19 @@ describe("formatValue", () => {
 		});
 
 		it("formats unix timestamp (seconds)", () => {
-			// Jan 1, 2024 00:00:00 UTC - displayed in local timezone
+			// Jan 1, 2024 00:00:00 UTC - displayed in local timezone with short format
 			const result = formatValue(1704067200, DataType.TIMESTAMP_S);
-			// The result includes date/time in local timezone format
+			// The result includes date/time in local timezone format with short abbreviation (e.g., "PST")
 			expect(result).toMatch(/\d{4}-\d{2}-\d{2}/);
-			expect(result).toMatch(/UTC[+-]\d{2}:\d{2}/);
+			expect(result).toMatch(/\d{2}:\d{2}:\d{2}/);
 		});
 
 		it("formats unix timestamp (milliseconds)", () => {
-			// Jan 1, 2024 00:00:00 UTC - displayed in local timezone
+			// Jan 1, 2024 00:00:00 UTC - displayed in local timezone with short format
 			const result = formatValue(1704067200000, DataType.TIMESTAMP_MS);
-			// The result includes date/time in local timezone format
+			// The result includes date/time in local timezone format with short abbreviation (e.g., "PST")
 			expect(result).toMatch(/\d{4}-\d{2}-\d{2}/);
-			expect(result).toMatch(/UTC[+-]\d{2}:\d{2}/);
+			expect(result).toMatch(/\d{2}:\d{2}:\d{2}/);
 		});
 
 		it("returns string as-is if date parsing fails", () => {

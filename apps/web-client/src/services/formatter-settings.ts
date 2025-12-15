@@ -22,6 +22,8 @@ export interface TypeAlignmentSettings {
 export interface FormatterSettings {
 	dateFormat: FormatterOptions["dateFormat"];
 	timeFormat: FormatterOptions["timeFormat"];
+	timestampTimezone: "auto" | "utc" | "local";
+	timezoneFormat: "offset" | "short" | "long" | "none";
 	decimalPlaces: number;
 	nullDisplay: string;
 	booleanDisplay: FormatterOptions["booleanDisplay"];
@@ -35,10 +37,12 @@ export interface FormatterSettings {
 const DEFAULT_FORMATTER_SETTINGS: FormatterSettings = {
 	dateFormat: "iso",
 	timeFormat: "24h",
+	timestampTimezone: "local",
+	timezoneFormat: "short",
 	decimalPlaces: 2,
 	nullDisplay: "NULL",
 	booleanDisplay: "text",
-	timestampPrecision: "milliseconds",
+	timestampPrecision: "seconds",
 	copyDelimiter: "tab",
 	copyWithHeaders: true,
 	maxUserLimitRows: 10000,
@@ -105,6 +109,8 @@ class FormatterSettingsStore {
 		return {
 			dateFormat: this.settings.dateFormat,
 			timeFormat: this.settings.timeFormat,
+			timestampTimezone: this.settings.timestampTimezone,
+			timezoneFormat: this.settings.timezoneFormat,
 			decimalPlaces: this.settings.decimalPlaces,
 			nullDisplay: this.settings.nullDisplay,
 			booleanDisplay: this.settings.booleanDisplay,
@@ -146,3 +152,42 @@ class FormatterSettingsStore {
 }
 
 export const formatterSettings = new FormatterSettingsStore();
+
+/**
+ * Database Timezone Tracker
+ * Tracks the current timezone setting in DuckDB for "auto" timezone mode.
+ * This is set when DuckDB initializes and can be updated when SET timezone is detected.
+ */
+class DatabaseTimezoneStore {
+	private timezone: string;
+	private listeners: Set<(tz: string) => void> = new Set();
+
+	constructor() {
+		// Default to browser's local timezone (same as what we set in DuckDB on init)
+		this.timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	}
+
+	getTimezone(): string {
+		return this.timezone;
+	}
+
+	setTimezone(tz: string) {
+		if (tz !== this.timezone) {
+			this.timezone = tz;
+			this.notifyListeners();
+		}
+	}
+
+	private notifyListeners() {
+		this.listeners.forEach((listener) => listener(this.timezone));
+	}
+
+	subscribe(listener: (tz: string) => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+}
+
+export const databaseTimezone = new DatabaseTimezoneStore();
