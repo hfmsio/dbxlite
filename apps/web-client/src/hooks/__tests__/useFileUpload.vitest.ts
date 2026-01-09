@@ -20,6 +20,7 @@ vi.mock("../../services/streaming-query-service", () => ({
 		executeQueryOnConnector: vi.fn(),
 		registerFile: vi.fn(),
 		registerFileHandle: vi.fn(),
+		isHttpMode: vi.fn().mockReturnValue(false), // Default to WASM mode in tests
 	},
 }));
 

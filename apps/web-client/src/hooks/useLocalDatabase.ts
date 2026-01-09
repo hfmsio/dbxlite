@@ -52,13 +52,29 @@ export function useLocalDatabase() {
 				  AND schema_name NOT IN ('information_schema', 'pg_catalog')
 				ORDER BY schema_name, table_name
 			`;
+
+			// Also get views from in-memory database
+			const viewsQuery = `
+				SELECT DISTINCT
+					schema_name AS table_schema,
+					view_name AS table_name,
+					'VIEW' AS table_type
+				FROM duckdb_views()
+				WHERE database_name = 'memory'
+				  AND schema_name NOT IN ('information_schema', 'pg_catalog')
+				ORDER BY schema_name, view_name
+			`;
+
+			// Execute sequentially - DuckDB HTTP doesn't handle concurrent queries well
 			const allTablesResult = await queryService.executeQuery(tablesQuery);
+			const allViewsResult = await queryService.executeQuery(viewsQuery);
 
-			logger.debug("Found tables via duckdb_tables():", allTablesResult.rows);
+			logger.debug("Found tables:", allTablesResult.rows.length, "views:", allViewsResult.rows.length);
 
-			// Group tables by schema
+			// Combine tables and views, group by schema
+			const allObjects = [...allTablesResult.rows, ...allViewsResult.rows];
 			const schemaMap = new Map<string, Array<{ table_name: string; table_type: string }>>();
-			for (const row of allTablesResult.rows) {
+			for (const row of allObjects) {
 				const schemaName = String(row.table_schema);
 				const tableInfo = {
 					table_name: String(row.table_name),
@@ -197,6 +213,17 @@ export function useLocalDatabase() {
 			cancelled = true;
 			clearTimeout(timer);
 		};
+	}, [refreshSchema]);
+
+	// Subscribe to catalog change events (CREATE TABLE, DROP TABLE, etc.)
+	// In HTTP mode, the server sends SSE events; in WASM mode this is a no-op
+	useEffect(() => {
+		const unsubscribe = queryService.onSchemaChange(() => {
+			logger.debug("Catalog change detected, refreshing session tables");
+			refreshSchema();
+		});
+
+		return unsubscribe;
 	}, [refreshSchema]);
 
 	return {

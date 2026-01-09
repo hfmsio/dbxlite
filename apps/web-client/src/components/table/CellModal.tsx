@@ -5,8 +5,8 @@ import type { CellValue } from "../../types/table";
 import type { ColumnInfo, RowData } from "./types";
 import { calculateCellMetadata, formatCellValueForModal } from "./utils";
 import { createLogger } from "../../utils/logger";
-import { CopyIcon, XIcon, CodeIcon, KeyIcon, TypeIcon } from "../Icons";
-import { formatTypeForBadge, normalizeArrowType } from "../../utils/typeFormatter";
+import { KeyIcon, TypeIcon } from "../Icons";
+import { normalizeArrowType } from "../../utils/typeFormatter";
 
 const logger = createLogger("CellModal");
 
@@ -51,7 +51,7 @@ function highlightJsonString(json: string): ReactNode {
 
 	let match: RegExpExecArray | null;
 	while ((match = tokenRegex.exec(json)) !== null) {
-		const [full, strToken, colon, boolToken, numberToken, punct] = match;
+		const [_full, strToken, colon, boolToken, numberToken, punct] = match;
 		if (match.index > lastIndex) {
 			parts.push(json.slice(lastIndex, match.index));
 		}

@@ -20,7 +20,7 @@ export const CostWarningDialog: React.FC<CostWarningDialogProps> = ({
 	isOpen,
 	estimatedCost,
 	estimatedBytes,
-	cachingPossible,
+	cachingPossible: _cachingPossible,
 	onConfirm,
 	onCancel,
 }) => {

@@ -45,6 +45,10 @@ interface UseQueryExecutionOptions {
 	onSchemaChanged?: () => Promise<void>;
 	// Schema change callback for attached databases (for DDL on attached DBs)
 	onDatabaseSchemaChanged?: (dbName: string) => Promise<void>;
+	// Callback when a database is attached via ATTACH command
+	onDatabaseAttached?: (info: { path: string; alias: string; readOnly: boolean }) => Promise<void>;
+	// Callback when a database is detached via DETACH command
+	onDatabaseDetached?: (alias: string) => Promise<void>;
 }
 
 interface UseQueryExecutionReturn {
@@ -112,6 +116,56 @@ function isNonSelectStatement(sql: string): boolean {
 	return /^\s*(COPY|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|EXPORT|IMPORT|ATTACH|DETACH|INSTALL|LOAD|SET|PRAGMA|CHECKPOINT|VACUUM|ANALYZE|BEGIN|COMMIT|ROLLBACK|CALL|EXECUTE|EXPLAIN|SHOW|DESCRIBE)\b/i.test(sql);
 }
 
+/**
+ * Parse an ATTACH statement to extract the database path and alias
+ * Supports: ATTACH 'path' AS alias, ATTACH 'path' AS alias (READ_ONLY), etc.
+ */
+function parseAttachStatement(sql: string): { path: string; alias: string; readOnly: boolean } | null {
+	// Normalize whitespace and remove comments
+	const normalizedSql = sql.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
+
+	// Match ATTACH 'path' AS alias with optional READ_ONLY
+	// Patterns:
+	//   ATTACH 'path/to/db.duckdb' AS mydb
+	//   ATTACH 'path/to/db.duckdb' AS mydb (READ_ONLY)
+	//   ATTACH "path/to/db.duckdb" AS mydb
+	const attachMatch = normalizedSql.match(
+		/^\s*ATTACH\s+['"]([^'"]+)['"]\s+AS\s+["'`]?(\w+)["'`]?\s*(?:\(\s*(READ_ONLY)\s*\))?/i
+	);
+
+	if (attachMatch) {
+		return {
+			path: attachMatch[1],
+			alias: attachMatch[2],
+			readOnly: !!attachMatch[3],
+		};
+	}
+
+	return null;
+}
+
+/**
+ * Parse a DETACH statement to extract the database alias
+ * Supports: DETACH alias, DETACH DATABASE alias, DETACH IF EXISTS alias
+ */
+function parseDetachStatement(sql: string): { alias: string } | null {
+	// Normalize whitespace and remove comments
+	const normalizedSql = sql.replace(/--.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '').trim();
+
+	// Match DETACH [DATABASE] [IF EXISTS] alias
+	const detachMatch = normalizedSql.match(
+		/^\s*DETACH\s+(?:DATABASE\s+)?(?:IF\s+EXISTS\s+)?["'`]?(\w+)["'`]?\s*;?\s*$/i
+	);
+
+	if (detachMatch) {
+		return {
+			alias: detachMatch[1],
+		};
+	}
+
+	return null;
+}
+
 export function useQueryExecution({
 	initializing,
 	initError,
@@ -129,6 +183,8 @@ export function useQueryExecution({
 	isConnectorAvailable,
 	onSchemaChanged,
 	onDatabaseSchemaChanged,
+	onDatabaseAttached,
+	onDatabaseDetached,
 }: UseQueryExecutionOptions): UseQueryExecutionReturn {
 	const [isQueryExecuting, setIsQueryExecuting] = useState(false);
 	const abortControllerRef = useRef<AbortController | null>(null);
@@ -404,6 +460,18 @@ export function useQueryExecution({
 					}
 				}
 
+				// Check if this was an ATTACH statement and add to explorer
+				const attachInfo = parseAttachStatement(sql);
+				if (attachInfo && onDatabaseAttached) {
+					await onDatabaseAttached(attachInfo);
+				}
+
+				// Check if this was a DETACH statement and remove from explorer
+				const detachInfo = parseDetachStatement(sql);
+				if (detachInfo && onDatabaseDetached) {
+					await onDatabaseDetached(detachInfo.alias);
+				}
+
 				showToast(
 					`✓ Query completed in ${formatExecutionTime(result.executionTime)}`,
 					"success",
@@ -512,6 +580,18 @@ export function useQueryExecution({
 						// Default to session tables refresh
 						await onSchemaChanged();
 					}
+				}
+
+				// Check if this was an ATTACH statement and add to explorer
+				const attachInfo = parseAttachStatement(sql);
+				if (attachInfo && onDatabaseAttached) {
+					await onDatabaseAttached(attachInfo);
+				}
+
+				// Check if this was a DETACH statement and remove from explorer
+				const detachInfo = parseDetachStatement(sql);
+				if (detachInfo && onDatabaseDetached) {
+					await onDatabaseDetached(detachInfo.alias);
 				}
 			}
 		} catch (err) {

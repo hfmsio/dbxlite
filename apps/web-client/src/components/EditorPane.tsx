@@ -562,11 +562,6 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 							.filter((t) => t.databaseName)
 							.map((t) => t.databaseName),
 					);
-					const _schemaNames = new Set(
-						schema.tables
-							.filter((t) => t.schemaName)
-							.map((t) => t.schemaName),
-					);
 					const tableNames = new Set(schema.tables.map((t) => t.name));
 
 					// Check for dot notation FIRST - before adding any other suggestions

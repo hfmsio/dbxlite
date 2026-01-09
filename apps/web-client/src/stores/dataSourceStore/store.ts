@@ -262,12 +262,13 @@ export const useDataSourceStore = create<DataSourceStore>()(
 			}));
 		},
 
-		removeDataSource: async (id) => {
+		removeDataSource: async (id, options) => {
 			const dataSource = get().dataSources.find((ds) => ds.id === id);
 			if (!dataSource) return;
 
-			// Detach DuckDB database if attached
+			// Detach DuckDB database if attached (unless already detached)
 			if (
+				!options?.skipDetach &&
 				dataSource.type === "duckdb" &&
 				dataSource.isAttached &&
 				dataSource.attachedAs

@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
-import SettingsModal from "./SettingsModal";
+import SettingsModal, { type SettingsTab } from "./SettingsModal";
 
 interface SettingsModalWrapperProps {
 	isOpen: boolean;
 	onClose: () => void;
+	initialTab?: SettingsTab;
 
 	// Settings values
 	fontSize: number;
@@ -39,6 +40,7 @@ interface SettingsModalWrapperProps {
 export default function SettingsModalWrapper({
 	isOpen,
 	onClose,
+	initialTab,
 	fontSize,
 	fontFamily,
 	gridFontSize,
@@ -154,6 +156,7 @@ export default function SettingsModalWrapper({
 						onConnectionChange={onConnectionChange}
 						onClearBigQueryCache={onClearBigQueryCache}
 						onReloadBigQueryData={onReloadBigQueryData}
+						initialTab={initialTab}
 					/>
 				</div>
 			</div>

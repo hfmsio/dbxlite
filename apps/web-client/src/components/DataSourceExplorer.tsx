@@ -12,6 +12,7 @@ import type { ConnectorType, DataSource } from "../types/data-source";
 import type { UnifiedTreeNode } from "../types/tree";
 import { useDataSourceActions } from "../hooks/useDataSourceActions";
 import { useDataSourceState } from "../hooks/useDataSourceState";
+import { useMode } from "../hooks/useMode";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { TrashIcon, UploadIcon, ChevronsDownIcon, ChevronsUpIcon } from "./Icons";
 import { DataSourceTree } from "./DataSourceTree";
@@ -36,7 +37,9 @@ interface DataSourceExplorerProps {
 	onBigQueryCacheClear?: (clearFn: () => void) => void;
 	onBigQueryDataLoad?: (loadFn: () => Promise<void>) => void;
 	onLocalDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
+	onServerDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
 	onOpenExamples?: () => void;
+	onOpenServerSettings?: () => void;
 }
 
 function DataSourceExplorer({
@@ -57,12 +60,15 @@ function DataSourceExplorer({
 	onBigQueryCacheClear,
 	onBigQueryDataLoad,
 	onLocalDatabaseRefresh,
+	onServerDatabaseRefresh,
 	onOpenExamples,
+	onOpenServerSettings,
 }: DataSourceExplorerProps) {
 	const dataSources = useDataSources();
 	const removeDataSource = useRemoveDataSource();
 	const introspectSheetColumns = useIntrospectSheetColumns();
 	const { showToast } = useToast();
+	const { isHttpMode } = useMode();
 	const [isDragging, setIsDragging] = useState(false);
 	const [isDraggingOverTrash, setIsDraggingOverTrash] = useState(false);
 	const contentRef = useRef<HTMLDivElement>(null);
@@ -92,11 +98,13 @@ function DataSourceExplorer({
 		onBigQueryCacheClear,
 		onBigQueryDataLoad,
 		onLocalDatabaseRefresh,
+		onServerDatabaseRefresh,
 		onFileDelete: actions.handleFileDelete,
 		onDatabaseDelete: actions.handleDatabaseDelete,
 		onDeleteFolder: actions.handleDeleteFolder,
 		onDeleteDomain: actions.handleDeleteDomain,
 		showToast,
+		isHttpMode,
 	});
 
 	// Handle node click
@@ -225,7 +233,8 @@ function DataSourceExplorer({
 			onDragOver={handleDragOver}
 			onDrop={handleDrop}
 		>
-			{isDragging && (
+			{/* Drag-drop overlay only in WASM mode */}
+			{!isHttpMode && isDragging && (
 				<div className="drag-drop-overlay">
 					<div className="drag-drop-message">
 						<div className="drag-drop-icon">
@@ -248,14 +257,17 @@ function DataSourceExplorer({
 			<div className="explorer-header">
 				<h2 className="explorer-title">Data Sources</h2>
 				<div className="explorer-header-actions">
-					<button
-						className="explorer-action-btn"
-						onClick={onUploadFile}
-						title="Upload File (supports zero-copy for large files)"
-					>
-						<UploadIcon size={16} />
-					</button>
-					{onClearFileHandles && (
+					{/* Upload and Clear buttons only shown in WASM mode (browser-based) */}
+					{!isHttpMode && (
+						<button
+							className="explorer-action-btn"
+							onClick={onUploadFile}
+							title="Upload File (supports zero-copy for large files)"
+						>
+							<UploadIcon size={16} />
+						</button>
+					)}
+					{!isHttpMode && onClearFileHandles && (
 						<button
 							className="explorer-action-btn"
 							onClick={() => {
@@ -378,18 +390,59 @@ function DataSourceExplorer({
 				</div>
 			</div>
 
+			{/* Add Project Input for BigQuery */}
+			{state.isBigQueryConnected && state.showAddProjectInput && (
+				<div className="add-project-bar">
+					<input
+						type="text"
+						placeholder="Project ID (e.g., bigquery-public-data)"
+						className="add-project-input"
+						autoFocus
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && e.currentTarget.value.trim()) {
+								state.addPinnedProject(e.currentTarget.value);
+								state.loadBigQueryData();
+							} else if (e.key === "Escape") {
+								state.setShowAddProjectInput(false);
+							}
+						}}
+					/>
+					<button
+						className="add-project-btn"
+						onClick={(e) => {
+							const input = e.currentTarget.previousElementSibling as HTMLInputElement;
+							if (input.value.trim()) {
+								state.addPinnedProject(input.value);
+								state.loadBigQueryData();
+							}
+						}}
+					>
+						Add
+					</button>
+					<button
+						className="add-project-cancel"
+						onClick={() => state.setShowAddProjectInput(false)}
+					>
+						×
+					</button>
+				</div>
+			)}
+
 			<div className="explorer-content unified" ref={contentRef}>
 				<DataSourceTree
 					sections={state.treeSections}
 					selectedNodeId={state.selectedNodeId}
 					isBigQueryConnected={state.isBigQueryConnected}
 					hasDataSources={dataSources.length > 0}
+					isHttpMode={isHttpMode}
 					onSectionToggle={state.handleSectionToggle}
 					onNodeClick={handleNodeClick}
 					onNodeExpand={handleNodeExpand}
 					onNodeDoubleClick={handleNodeDoubleClick}
 					onInsertQuery={onInsertQuery}
 					onOpenExamples={onOpenExamples}
+					onAddProject={() => state.setShowAddProjectInput(true)}
+					onOpenServerSettings={onOpenServerSettings}
 				/>
 			</div>
 
@@ -398,6 +451,8 @@ function DataSourceExplorer({
 				<TableInfoModal
 					table={state.tableInfoModal.table}
 					fullName={state.tableInfoModal.fullName}
+					databaseName={state.tableInfoModal.databaseName}
+					schemaName={state.tableInfoModal.schemaName}
 					onClose={() => state.setTableInfoModal(null)}
 				/>
 			)}

@@ -40,6 +40,7 @@ interface UnifiedTreeViewProps {
 	onNodeExpand?: (node: UnifiedTreeNode) => void;
 	onNodeDoubleClick?: (node: UnifiedTreeNode) => void;
 	selectedNodeId?: string;
+	onAddProject?: () => void;
 }
 
 // formatDataType is now imported from typeFormatter.ts as formatTypeForBadge
@@ -128,6 +129,7 @@ function UnifiedTreeView({
 	onNodeExpand,
 	onNodeDoubleClick,
 	selectedNodeId,
+	onAddProject,
 }: UnifiedTreeViewProps) {
 	// Get compact mode state from explorer context
 	const { isCompact } = useExplorerContext();
@@ -984,6 +986,20 @@ function UnifiedTreeView({
 								<> · {formatBytes(section.totalSize)}</>
 							)}
 						</span>
+
+						{/* Add Project Button (for cloud/BigQuery section only) */}
+						{section.id === "cloud" && onAddProject && (
+							<button
+								className="tree-section-action"
+								onClick={(e) => {
+									e.stopPropagation();
+									onAddProject();
+								}}
+								title="Pin a project (e.g., bigquery-public-data)"
+							>
+								+
+							</button>
+						)}
 					</div>
 
 					{/* Section Content */}

@@ -6,20 +6,210 @@
 
 ## Overview
 
-dbxlite is a browser-native SQL analytics application supporting multiple database connectors:
+dbxlite is a browser-native SQL analytics application with two execution modes:
+
+| Mode | How to Use | Architecture | Best For |
+|------|------------|--------------|----------|
+| **Server** | `duckdb -ui` | HTTP to local DuckDB | Full power, native extensions, filesystem access |
+| **WASM** | Visit sql.dbxlite.com | Browser-only WASM | Zero install, works offline, portable |
+
+**Supported Connectors:**
 
 | Connector | Status | Architecture | Notes |
 |-----------|--------|--------------|-------|
-| **DuckDB** | Implemented | Browser-only WASM | No server required |
+| **DuckDB** | Implemented | WASM or HTTP | Mode auto-detected |
 | **BigQuery** | Implemented | Direct to GCP | CORS natively supported |
 | **Snowflake** | Planned | Via CORS proxy | Future release |
 
 **Key Technical Highlights:**
-- DuckDB runs entirely in-browser using WebAssembly (~105MB bundle)
+- **Server mode**: Full native DuckDB via HTTP connector with binary protocol
+- **WASM mode**: DuckDB runs entirely in-browser using WebAssembly (~105MB bundle)
 - **File handle persistence** - local file references survive browser restarts (no re-upload)
 - BigQuery connects directly to Google APIs
 - Type normalization unifies data types across connectors
 - Memory-safe streaming with backpressure mechanisms
+
+---
+
+## Execution Modes
+
+dbxlite operates in two distinct modes, auto-detected based on how you access it:
+
+```mermaid
+flowchart TB
+    subgraph ServerMode["Server Mode (Recommended)"]
+        CLI["duckdb -ui"]
+        Server["DuckDB Server<br/>localhost:4213"]
+        UI1["dbxlite UI<br/>(Browser)"]
+        FS["Local Filesystem"]
+        Ext["All Extensions"]
+
+        CLI --> Server
+        Server <-->|HTTP| UI1
+        Server --> FS
+        Server --> Ext
+    end
+
+    subgraph WASMMode["WASM Mode"]
+        Browser["Browser"]
+        WASM["DuckDB WASM<br/>(Web Worker)"]
+        Memory["In-Memory DB"]
+        UI2["dbxlite UI"]
+
+        Browser --> UI2
+        UI2 --> WASM
+        WASM --> Memory
+    end
+
+    User["User"] -->|"duckdb -ui"| CLI
+    User -->|"sql.dbxlite.com"| Browser
+```
+
+### Mode Comparison
+
+| Capability | Server Mode | WASM Mode |
+|------------|-------------|-----------|
+| **Memory** | Unlimited (system RAM) | ~2-4GB browser limit |
+| **Extensions** | All (httpfs, spatial, iceberg, etc.) | Limited subset |
+| **Filesystem** | Direct access | File handles only |
+| **Performance** | Native speed | Near-native (WASM overhead) |
+| **BigQuery** | Via DuckDB extension | Browser OAuth connector |
+| **Offline** | Requires DuckDB CLI | Works after first load |
+| **Install** | DuckDB CLI required | Zero install |
+
+### How to Use Server Mode
+
+```bash
+# Start local asset server
+npx dbxlite-ui                              # Serves UI on port 8080
+
+# In another terminal, launch DuckDB with the local UI
+export ui_remote_url="http://localhost:8080"
+duckdb -unsigned -ui
+
+# With an existing database
+duckdb mydata.duckdb -unsigned -ui
+
+# Alternative: Use hosted assets (no npm required)
+export ui_remote_url="https://sql.dbxlite.com"
+duckdb -unsigned -ui
+```
+
+Open http://localhost:4213 in your browser. The `-unsigned` flag is required for custom UI URLs.
+
+> **Note:** The hosted URL only serves static UI assets (similar to the default DuckDB UI hosted by MotherDuck). All data and query execution stays local: DuckDB on your machine talks directly to your browser via localhost:4213. Nothing is sent to external servers.
+
+---
+
+## HTTP Mode Architecture
+
+When running in Server mode, dbxlite communicates with a local DuckDB instance via HTTP:
+
+```mermaid
+sequenceDiagram
+    participant UI as dbxlite UI<br/>(Browser)
+    participant Server as DuckDB Server<br/>(localhost:4213)
+    participant DB as DuckDB Engine
+
+    Note over UI,Server: Mode Detection
+    UI->>Server: GET /status
+    Server-->>UI: 200 OK (server available)
+    UI->>UI: Set mode = "http"
+
+    Note over UI,Server: Query Execution
+    UI->>Server: POST /query<br/>Content-Type: application/json
+    Server->>DB: Execute SQL
+    DB-->>Server: Arrow IPC result
+    Server-->>UI: Binary response<br/>(Arrow format)
+    UI->>UI: Deserialize binary to rows
+
+    Note over UI,Server: Catalog Subscription
+    UI->>Server: GET /catalog (SSE)
+    loop Schema Changes
+        DB-->>Server: Table created/dropped
+        Server-->>UI: SSE event: catalog_changed
+        UI->>UI: Refresh explorer
+    end
+```
+
+### HTTP Connector Components
+
+```mermaid
+flowchart LR
+    subgraph Browser["Browser (dbxlite)"]
+        useMode["useMode()<br/>Mode detection"]
+        httpConn["DuckDBHttpConnector"]
+        queryService["streaming-query-service"]
+        deserialize["Binary deserializer"]
+        SSE["SSE client"]
+
+        useMode -->|isHttpMode| httpConn
+        httpConn --> queryService
+        queryService --> deserialize
+        httpConn --> SSE
+    end
+
+    subgraph Server["DuckDB Server"]
+        HTTP["/query endpoint"]
+        Catalog["/catalog SSE"]
+        Engine["DuckDB Engine"]
+
+        HTTP --> Engine
+        Catalog --> Engine
+    end
+
+    queryService <-->|POST /query| HTTP
+    SSE <-->|GET /catalog| Catalog
+    deserialize -->|"rows, columns"| Grid["Results Grid"]
+```
+
+### Key Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `src/hooks/useMode.ts` | Mode detection (checks /status endpoint) |
+| `src/hooks/useServerDatabases.ts` | Discovers databases/schemas via duckdb_databases() |
+| `src/services/streaming-query-service.ts` | HTTP query execution with binary deserialization |
+| `packages/connectors/src/duckdb-http-connector.ts` | HTTP connector implementation |
+
+### Binary Protocol
+
+DuckDB's HTTP server returns query results in Arrow IPC format for efficiency:
+
+```
+Request:  POST /query { "query": "SELECT * FROM users" }
+Response: Binary (Arrow IPC)
+          - Schema: column names + types
+          - Record batches: row data
+```
+
+The `streaming-query-service.ts` deserializes this binary format into JavaScript objects:
+
+```typescript
+interface QueryResult {
+  rows: TableRow[];      // Deserialized data
+  columns: string[];     // Column names
+  totalRows: number;     // Row count
+  executionTime: number; // Query duration (ms)
+}
+```
+
+### SSE Catalog Notifications
+
+The `/catalog` endpoint uses Server-Sent Events to push schema changes:
+
+```
+GET /catalog
+Connection: keep-alive
+
+event: catalog_changed
+data: {"type": "table_created", "name": "users"}
+
+event: catalog_changed
+data: {"type": "table_dropped", "name": "temp_data"}
+```
+
+This enables real-time explorer updates when tables are created/dropped via SQL.
 
 ---
 

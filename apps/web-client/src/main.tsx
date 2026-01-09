@@ -1,30 +1,29 @@
 import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/react";
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
-import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
-import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
-import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { LockProvider } from "./state/lock";
 
-// Configure Monaco Editor workers
+// Monaco version must match package.json
+const MONACO_VERSION = "0.54.0";
+const MONACO_CDN = `https://cdn.jsdelivr.net/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
+
+// Configure Monaco Editor workers via CDN for proxy compatibility
 self.MonacoEnvironment = {
-	getWorker(_: string, label: string) {
+	getWorkerUrl(_: string, label: string) {
 		if (label === "json") {
-			return new jsonWorker();
+			return `${MONACO_CDN}/language/json/json.worker.js`;
 		}
 		if (label === "css" || label === "scss" || label === "less") {
-			return new cssWorker();
+			return `${MONACO_CDN}/language/css/css.worker.js`;
 		}
 		if (label === "html" || label === "handlebars" || label === "razor") {
-			return new htmlWorker();
+			return `${MONACO_CDN}/language/html/html.worker.js`;
 		}
 		if (label === "typescript" || label === "javascript") {
-			return new tsWorker();
+			return `${MONACO_CDN}/language/typescript/ts.worker.js`;
 		}
-		return new editorWorker();
+		return `${MONACO_CDN}/editor/editor.worker.js`;
 	},
 };
 

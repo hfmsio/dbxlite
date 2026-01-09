@@ -13,7 +13,7 @@ describe('sharingProviders/registry', () => {
   const mockProvider: SharingProviderPlugin = {
     providerId: 'test',
     name: 'Test Provider',
-    share: vi.fn(async (content) => ({
+    share: vi.fn(async (_content) => ({
       shareId: 'test-123',
       providerId: 'test',
       url: `http://localhost?share=test:test-123`,
@@ -265,7 +265,7 @@ describe('sharingProviders/registry', () => {
         providerId: 'custom',
         name: 'Custom Provider',
         icon: '🔗',
-        share: async (content) => ({
+        share: async (_content) => ({
           shareId: `custom-${Date.now()}`,
           providerId: 'custom',
           url: `http://localhost?share=custom:${Date.now()}`,

@@ -361,7 +361,7 @@ describe("dataSourceStore", () => {
 		it("removes correct item when multiple exist", async () => {
 			const store = useDataSourceStore.getState();
 
-			const [ds1, ds2, ds3] = await act(async () => {
+			const [_ds1, ds2, _ds3] = await act(async () => {
 				return Promise.all([
 					store.addDataSource({
 						name: "file1.parquet",

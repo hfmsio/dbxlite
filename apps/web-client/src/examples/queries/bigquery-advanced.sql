@@ -271,13 +271,7 @@ SELECT
 
 -- Complex JSON operations
 WITH json_data AS (
-    SELECT JSON '''{
-        "users": [
-            {"name": "Alice", "scores": [95, 87, 92]},
-            {"name": "Bob", "scores": [78, 85, 90]}
-        ],
-        "metadata": {"version": 2, "active": true}
-    }''' AS doc
+    SELECT JSON '{"users": [{"name": "Alice", "scores": [95, 87, 92]}, {"name": "Bob", "scores": [78, 85, 90]}], "metadata": {"version": 2, "active": true}}' AS doc
 )
 SELECT
     JSON_VALUE(doc, '$.users[0].name') AS first_user,

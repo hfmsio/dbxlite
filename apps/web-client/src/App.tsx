@@ -57,6 +57,9 @@ function AppContent() {
 	const {
 		showSettings,
 		setShowSettings,
+		settingsInitialTab,
+		openSettings,
+		closeSettings,
 		showToastHistory,
 		setShowToastHistory,
 		showExamples,
@@ -101,6 +104,7 @@ function AppContent() {
 		clearAllDataSources,
 		dataSources,
 		updateDataSource,
+		removeDataSource,
 		isLoadingFromStorage,
 		introspectSchema,
 	} = useDataSources();
@@ -136,6 +140,7 @@ function AppContent() {
 	const bigQueryCacheClearRef = useRef<(() => void) | null>(null);
 	const bigQueryDataLoadRef = useRef<(() => Promise<void>) | null>(null);
 	const localDatabaseRefreshRef = useRef<(() => Promise<void>) | null>(null);
+	const serverDatabaseRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
 	const [editorHasFocus, setEditorHasFocus] = useState(false);
 
@@ -244,6 +249,57 @@ function AppContent() {
 			const db = dataSources.find((ds) => ds.attachedAs === dbName);
 			if (db) {
 				await introspectSchema(db.id);
+			}
+		},
+		onDatabaseAttached: async ({ path, alias, readOnly }) => {
+			// In HTTP mode, refresh server databases to reflect the ATTACH
+			if (serverDatabaseRefreshRef.current) {
+				await serverDatabaseRefreshRef.current();
+				showToast(`Database "${alias}" attached`, "success", 3000);
+				return;
+			}
+
+			// In WASM mode, add to dataSources
+			// Check if database is already in explorer
+			const existing = dataSources.find(
+				(ds) => ds.attachedAs === alias || ds.filePath === path
+			);
+			if (existing) {
+				// Just refresh the schema
+				await introspectSchema(existing.id);
+				return;
+			}
+
+			// Extract filename from path
+			const fileName = path.split("/").pop() || path;
+
+			// Add as new data source
+			await addDataSource({
+				name: fileName.replace(/\.duckdb$/i, "") + " (database)",
+				type: "duckdb",
+				filePath: path,
+				isAttached: true,
+				attachedAs: alias,
+				isReadOnly: readOnly,
+				hasFileHandle: false,
+			});
+
+			showToast(`Database "${alias}" added to explorer`, "success", 3000);
+		},
+		onDatabaseDetached: async (alias) => {
+			// In HTTP mode, refresh server databases to reflect the DETACH
+			if (serverDatabaseRefreshRef.current) {
+				await serverDatabaseRefreshRef.current();
+				showToast(`Database "${alias}" detached`, "success", 3000);
+				return;
+			}
+
+			// In WASM mode, find the database by its attachedAs alias and remove
+			const db = dataSources.find((ds) => ds.attachedAs === alias);
+			if (db) {
+				// Remove from explorer (skipDetach: true because DETACH was already executed)
+				await removeDataSource(db.id, { skipDetach: true });
+				showToast(`Database "${alias}" removed from explorer`, "success", 3000);
 			}
 		},
 	});
@@ -511,6 +567,7 @@ function AppContent() {
 				onConnectorChange={handleConnectorChange}
 				showSettings={showSettings}
 				onToggleSettings={() => setShowSettings(!showSettings)}
+				onOpenServerSettings={() => openSettings("server")}
 			/>
 
 			<TabBar
@@ -563,7 +620,11 @@ function AppContent() {
 					onLocalDatabaseRefresh={(refreshFn) => {
 						localDatabaseRefreshRef.current = refreshFn;
 					}}
+					onServerDatabaseRefresh={(refreshFn) => {
+						serverDatabaseRefreshRef.current = refreshFn;
+					}}
 					onOpenExamples={() => setShowExamples(true)}
+					onOpenServerSettings={() => openSettings("server")}
 				/>
 			</ResizableExplorer>
 
@@ -639,7 +700,8 @@ function AppContent() {
 
 			<SettingsModalWrapper
 				isOpen={showSettings}
-				onClose={() => setShowSettings(false)}
+				onClose={closeSettings}
+				initialTab={settingsInitialTab}
 				fontSize={editorFontSize}
 				fontFamily={editorFontFamily}
 				gridFontSize={gridFontSize}

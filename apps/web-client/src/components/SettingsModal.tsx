@@ -1,12 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { DatabaseIcon } from "./Icons";
+import { useMode } from "../hooks/useMode";
 import {
 	AboutSettings,
 	AppearanceSettings,
 	ConnectionsSettings,
 	FormattingSettings,
 	HelpSettings,
+	ServerSettings,
 } from "./settings";
+
+export type SettingsTab = "appearance" | "connections" | "formatting" | "help" | "about" | "server";
 
 interface SettingsModalProps {
 	fontSize: number;
@@ -33,6 +37,7 @@ interface SettingsModalProps {
 	onConnectionChange?: () => void;
 	onClearBigQueryCache?: () => void;
 	onReloadBigQueryData?: () => Promise<void>;
+	initialTab?: SettingsTab;
 }
 
 export default function SettingsModal({
@@ -56,10 +61,19 @@ export default function SettingsModal({
 	onConnectionChange,
 	onClearBigQueryCache,
 	onReloadBigQueryData,
+	initialTab,
 }: SettingsModalProps) {
-	const [activeTab, setActiveTab] = useState<
-		"appearance" | "connections" | "formatting" | "help" | "about"
-	>("appearance");
+	const { isHttpMode } = useMode();
+	// Default to "server" tab in HTTP mode, "appearance" otherwise
+	const defaultTab = isHttpMode ? "server" : "appearance";
+	const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab || defaultTab);
+
+	// Update active tab when initialTab changes
+	useEffect(() => {
+		if (initialTab) {
+			setActiveTab(initialTab);
+		}
+	}, [initialTab]);
 
 	return (
 		<div
@@ -82,6 +96,45 @@ export default function SettingsModal({
 					paddingBottom: 0,
 				}}
 			>
+				{/* Server tab - first position, only visible in HTTP mode */}
+				{isHttpMode && (
+					<button
+						onClick={() => setActiveTab("server")}
+						style={{
+							padding: "12px 24px",
+							background:
+								activeTab === "server" ? "var(--accent)" : "transparent",
+							color:
+								activeTab === "server" ? "white" : "var(--text-secondary)",
+							border: "none",
+							borderRadius: "8px 8px 0 0",
+							cursor: "pointer",
+							fontWeight: activeTab === "server" ? "600" : "normal",
+							fontSize: "14px",
+							transition: "all 0.2s",
+							display: "flex",
+							alignItems: "center",
+							gap: "8px",
+						}}
+					>
+						<svg
+							width="16"
+							height="16"
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						>
+							<rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+							<rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+							<line x1="6" y1="6" x2="6.01" y2="6"></line>
+							<line x1="6" y1="18" x2="6.01" y2="18"></line>
+						</svg>
+						Server
+					</button>
+				)}
 				<button
 					onClick={() => setActiveTab("appearance")}
 					style={{
@@ -292,6 +345,9 @@ export default function SettingsModal({
 
 				{/* About Tab */}
 				{activeTab === "about" && <AboutSettings />}
+
+				{/* Server Tab - HTTP mode only */}
+				{activeTab === "server" && <ServerSettings />}
 			</div>
 		</div>
 	);

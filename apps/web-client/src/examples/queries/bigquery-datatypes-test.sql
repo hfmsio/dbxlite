@@ -46,9 +46,7 @@ SELECT
     'Hello, World!' AS string_val,
     '' AS empty_string,
     'Unicode: 你好 🎉 émojis' AS unicode_string,
-    '''Line1
-Line2
-Line3''' AS multiline_string,
+    'Line1\nLine2\nLine3' AS multiline_string,
     REPEAT('x', 100) AS repeated_string,
     CONCAT('Hello', ' ', 'BigQuery') AS concat_result;
 

@@ -14,7 +14,8 @@ export type TreeNodeType =
 	| "dataset" // BigQuery dataset
 	| "database" // DuckDB database/catalog
 	| "schema" // Schema within database
-	| "table" // Table or view
+	| "table" // Table
+	| "view" // View (virtual table)
 	| "file" // Local file (CSV, Parquet, JSON, DuckDB)
 	| "column"; // Column within table/file
 

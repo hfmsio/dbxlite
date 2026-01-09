@@ -1,0 +1,37 @@
+{
+  "name": "dbxlite-ui",
+  "version": "0.1.0",
+  "description": "Local UI for DuckDB - replaces duckdb -ui with dbxlite",
+  "type": "module",
+  "bin": {
+    "dbxlite-ui": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "assets"
+  ],
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "node src/cli.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "duckdb",
+    "sql",
+    "database",
+    "ui",
+    "browser"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hfmio/dbxlite"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "open": "^10.1.0"
+  }
+}

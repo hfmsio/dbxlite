@@ -9,6 +9,7 @@ import type {
 	TableMetadata,
 } from "@ide/connectors";
 import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useMode } from "../hooks/useMode";
 import { queryService } from "../services/streaming-query-service";
 import { createLogger } from "../utils/logger";
 
@@ -36,10 +37,14 @@ interface ConnectionInfo {
 	projectId?: string;
 }
 
+// Storage key for pinned projects
+const PINNED_PROJECTS_KEY = "bigquery-pinned-projects";
+
 function BigQueryExplorer({
 	onInsertQuery,
 	onSelectTable,
 }: BigQueryExplorerProps) {
+	const { isHttpMode, features } = useMode();
 	const [connections, setConnections] = useState<ConnectionInfo[]>([]);
 	const [expandedConnections, setExpandedConnections] = useState<Set<string>>(
 		new Set(),
@@ -69,6 +74,50 @@ function BigQueryExplorer({
 	);
 	const [isEstimating, setIsEstimating] = useState(false);
 	const contextMenuRef = useRef<HTMLDivElement>(null);
+
+	// Pinned projects state
+	const [pinnedProjects, setPinnedProjects] = useState<string[]>(() => {
+		try {
+			const stored = localStorage.getItem(PINNED_PROJECTS_KEY);
+			return stored ? JSON.parse(stored) : [];
+		} catch {
+			return [];
+		}
+	});
+	const [showAddProject, setShowAddProject] = useState(false);
+	const [newProjectId, setNewProjectId] = useState("");
+	const addProjectInputRef = useRef<HTMLInputElement>(null);
+
+	// Persist pinned projects to localStorage
+	useEffect(() => {
+		localStorage.setItem(PINNED_PROJECTS_KEY, JSON.stringify(pinnedProjects));
+	}, [pinnedProjects]);
+
+	// Focus input when shown
+	useEffect(() => {
+		if (showAddProject && addProjectInputRef.current) {
+			addProjectInputRef.current.focus();
+		}
+	}, [showAddProject]);
+
+	const addPinnedProject = (projectId: string) => {
+		const trimmed = projectId.trim();
+		if (trimmed && !pinnedProjects.includes(trimmed)) {
+			setPinnedProjects((prev) => [...prev, trimmed]);
+		}
+		setNewProjectId("");
+		setShowAddProject(false);
+	};
+
+	const removePinnedProject = (projectId: string) => {
+		setPinnedProjects((prev) => prev.filter((p) => p !== projectId));
+		// Also clear cached data for this project
+		setDatasets((prev) => {
+			const next = new Map(prev);
+			next.delete(projectId);
+			return next;
+		});
+	};
 
 	const loadConnections = useCallback(async () => {
 		try {
@@ -136,7 +185,20 @@ function BigQueryExplorer({
 				(prev) => new Set([...prev, `connection:${connectionId}`]),
 			);
 			const projectList = await queryService.getBigQueryProjects();
-			setProjects((prev) => new Map(prev).set(connectionId, projectList));
+
+			// Merge with pinned projects (add pinned ones that aren't already in the list)
+			const existingIds = new Set(projectList.map((p) => p.id));
+			const pinnedCatalogInfos: CatalogInfo[] = pinnedProjects
+				.filter((id) => !existingIds.has(id))
+				.map((id) => ({
+					id,
+					name: id,
+					type: "project" as const,
+					description: "Pinned project",
+				}));
+
+			const mergedList = [...projectList, ...pinnedCatalogInfos];
+			setProjects((prev) => new Map(prev).set(connectionId, mergedList));
 		} catch (error) {
 			logger.error("Failed to load projects:", error);
 		} finally {
@@ -501,18 +563,163 @@ function BigQueryExplorer({
 		);
 	};
 
+	// In HTTP mode, show guidance for using native BigQuery extension
+	if (isHttpMode || !features.supportsBigQuery) {
+		return (
+			<div className="bigquery-explorer">
+				<div className="explorer-header">
+					<h3 className="explorer-subtitle">BigQuery Catalog</h3>
+				</div>
+				<div className="bigquery-http-mode-info">
+					<div className="http-mode-badge">Server Mode</div>
+					<h4>Use Native BigQuery Extension</h4>
+					<p>
+						In Server mode, query BigQuery directly using DuckDB's native extension:
+					</p>
+					<pre className="code-block">
+{`INSTALL bigquery;
+LOAD bigquery;
+
+-- Query a table
+SELECT * FROM bigquery_scan(
+  'project.dataset.table'
+);`}
+					</pre>
+					<p className="setup-note">
+						<strong>Setup:</strong> Configure authentication via{" "}
+						<code>BIGQUERY_API_KEY</code> environment variable or service account JSON.
+					</p>
+					<a
+						href="https://duckdb.org/docs/extensions/bigquery"
+						target="_blank"
+						rel="noopener noreferrer"
+						className="docs-link"
+					>
+						View DuckDB BigQuery Extension Docs →
+					</a>
+				</div>
+				<style>{`
+					.bigquery-http-mode-info {
+						padding: 16px;
+						text-align: left;
+					}
+					.http-mode-badge {
+						display: inline-block;
+						padding: 4px 8px;
+						background: rgba(34, 197, 94, 0.15);
+						color: #22c55e;
+						border-radius: 4px;
+						font-size: 11px;
+						font-weight: 600;
+						margin-bottom: 12px;
+					}
+					.bigquery-http-mode-info h4 {
+						margin: 0 0 8px 0;
+						font-size: 14px;
+						color: var(--text-primary);
+					}
+					.bigquery-http-mode-info p {
+						margin: 0 0 12px 0;
+						font-size: 12px;
+						color: var(--text-secondary);
+						line-height: 1.5;
+					}
+					.code-block {
+						background: var(--bg-tertiary);
+						border: 1px solid var(--border);
+						border-radius: 6px;
+						padding: 12px;
+						font-family: monospace;
+						font-size: 11px;
+						overflow-x: auto;
+						white-space: pre;
+						color: var(--text-primary);
+						margin: 0 0 12px 0;
+					}
+					.setup-note {
+						font-size: 11px;
+						color: var(--text-muted);
+					}
+					.setup-note code {
+						background: var(--bg-tertiary);
+						padding: 2px 4px;
+						border-radius: 3px;
+						font-size: 10px;
+					}
+					.docs-link {
+						display: inline-block;
+						margin-top: 8px;
+						font-size: 12px;
+						color: var(--accent);
+						text-decoration: none;
+					}
+					.docs-link:hover {
+						text-decoration: underline;
+					}
+				`}</style>
+			</div>
+		);
+	}
+
 	return (
 		<div className="bigquery-explorer">
 			<div className="explorer-header">
 				<h3 className="explorer-subtitle">BigQuery Catalog</h3>
-				<button
-					className="explorer-refresh-btn"
-					onClick={refreshAll}
-					title="Refresh all BigQuery data"
-				>
-					🔄
-				</button>
+				<div className="explorer-actions">
+					<button
+						className="explorer-action-btn"
+						onClick={() => setShowAddProject(true)}
+						title="Pin a project (e.g., bigquery-public-data)"
+					>
+						+
+					</button>
+					<button
+						className="explorer-action-btn"
+						onClick={refreshAll}
+						title="Refresh all BigQuery data"
+					>
+						🔄
+					</button>
+				</div>
 			</div>
+
+			{/* Add Project Input */}
+			{showAddProject && (
+				<div className="add-project-row">
+					<input
+						ref={addProjectInputRef}
+						type="text"
+						value={newProjectId}
+						onChange={(e) => setNewProjectId(e.target.value)}
+						placeholder="Project ID (e.g., bigquery-public-data)"
+						className="add-project-input"
+						onKeyDown={(e) => {
+							if (e.key === "Enter" && newProjectId.trim()) {
+								addPinnedProject(newProjectId);
+							} else if (e.key === "Escape") {
+								setShowAddProject(false);
+								setNewProjectId("");
+							}
+						}}
+					/>
+					<button
+						className="add-project-btn"
+						onClick={() => addPinnedProject(newProjectId)}
+						disabled={!newProjectId.trim()}
+					>
+						Add
+					</button>
+					<button
+						className="add-project-cancel"
+						onClick={() => {
+							setShowAddProject(false);
+							setNewProjectId("");
+						}}
+					>
+						×
+					</button>
+				</div>
+			)}
 
 			<div className="explorer-tree">
 				{loadingItems.has("root") && (
@@ -629,15 +836,36 @@ function BigQueryExplorer({
 					)}
 
 					{contextMenu.item.type === "project" && (
-						<div
-							className="context-menu-item"
-							onClick={() => {
-								const project = contextMenu.item.data as CatalogInfo;
-								copyToClipboard(project.id);
-							}}
-						>
-							Copy Project ID
-						</div>
+						<>
+							<div
+								className="context-menu-item"
+								onClick={() => {
+									const project = contextMenu.item.data as CatalogInfo;
+									copyToClipboard(project.id);
+								}}
+							>
+								Copy Project ID
+							</div>
+							{pinnedProjects.includes(
+								(contextMenu.item.data as CatalogInfo).id,
+							) && (
+								<>
+									<div className="context-menu-separator" />
+									<div
+										className="context-menu-item context-menu-item-danger"
+										onClick={() => {
+											const project = contextMenu.item.data as CatalogInfo;
+											removePinnedProject(project.id);
+											setContextMenu(null);
+											// Refresh to update the list
+											refreshAll();
+										}}
+									>
+										Unpin Project
+									</div>
+								</>
+							)}
+						</>
 					)}
 				</div>
 			)}
@@ -711,7 +939,12 @@ function BigQueryExplorer({
           letter-spacing: 0.5px;
         }
 
-        .explorer-refresh-btn {
+        .explorer-actions {
+          display: flex;
+          gap: 4px;
+        }
+
+        .explorer-action-btn {
           background: var(--bg-tertiary);
           border: 1px solid var(--border);
           border-radius: 4px;
@@ -722,13 +955,73 @@ function BigQueryExplorer({
           transition: all 0.2s;
           display: flex;
           align-items: center;
-          gap: 4px;
+          justify-content: center;
+          min-width: 32px;
         }
 
-        .explorer-refresh-btn:hover {
+        .explorer-action-btn:hover {
           background: var(--bg-hover);
           color: var(--text-primary);
           border-color: var(--accent);
+        }
+
+        .add-project-row {
+          display: flex;
+          gap: 6px;
+          padding: 8px 12px;
+          background: var(--bg-secondary);
+          border-bottom: 1px solid var(--border);
+        }
+
+        .add-project-input {
+          flex: 1;
+          padding: 6px 10px;
+          font-size: 13px;
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          background: var(--bg-primary);
+          color: var(--text-primary);
+          outline: none;
+        }
+
+        .add-project-input:focus {
+          border-color: var(--accent);
+        }
+
+        .add-project-input::placeholder {
+          color: var(--text-muted);
+        }
+
+        .add-project-btn {
+          padding: 6px 12px;
+          font-size: 13px;
+          background: var(--accent);
+          color: white;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          font-weight: 500;
+        }
+
+        .add-project-btn:disabled {
+          background: var(--bg-tertiary);
+          color: var(--text-muted);
+          cursor: not-allowed;
+        }
+
+        .add-project-cancel {
+          padding: 6px 10px;
+          font-size: 16px;
+          background: var(--bg-tertiary);
+          color: var(--text-secondary);
+          border: 1px solid var(--border);
+          border-radius: 4px;
+          cursor: pointer;
+        }
+
+        .add-project-cancel:hover {
+          background: var(--bg-hover);
+          color: var(--text-primary);
         }
 
         .explorer-tree {
@@ -862,6 +1155,14 @@ function BigQueryExplorer({
 
         .context-menu-item:hover {
           background-color: var(--bg-hover);
+        }
+
+        .context-menu-item-danger {
+          color: #e74c3c;
+        }
+
+        .context-menu-item-danger:hover {
+          background-color: rgba(231, 76, 60, 0.1);
         }
 
         .context-menu-separator {

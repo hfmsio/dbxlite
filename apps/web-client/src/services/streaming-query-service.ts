@@ -6,9 +6,12 @@ import {
 	type ColumnInfo,
 	type ConnectionTestResult,
 	DuckDBConnector,
+	DuckDBHttpConnector,
 	type QueryCostEstimate,
 	type SchemaInfo,
 	type TableMetadata,
+	detectMode,
+	type DbxliteMode,
 } from "@ide/connectors";
 import type { CredentialStore } from "@ide/storage";
 import type { ConnectorType } from "../types/data-source";
@@ -238,6 +241,8 @@ class StreamingQueryService {
 		{ count: number; isEstimated: boolean; timestamp: number }
 	>();
 	private readonly COUNT_CACHE_TTL = 2 * 60 * 1000; // 2 minutes (reduced for memory)
+	// Operating mode: 'wasm' for standalone, 'http' for duckdb -ui
+	private mode: DbxliteMode = "wasm";
 
 	/**
 	 * Normalize SQL for statement classification by stripping leading comments/whitespace.
@@ -269,10 +274,58 @@ class StreamingQueryService {
 		this.credentialStore = credentialStore;
 		await this.cache.init();
 
-		// Initialize DuckDB connector
-		const duckdb = new DuckDBConnector();
-		await duckdb.connect({ options: {} });
-		this.connectors.set("duckdb", duckdb);
+		// Detect operating mode (WASM vs HTTP for duckdb -ui)
+		this.mode = detectMode();
+		logger.info(`Initializing in ${this.mode} mode`);
+
+		// Initialize DuckDB connector based on mode
+		if (this.mode === "http") {
+			// HTTP mode: Connect to DuckDB CLI's embedded HTTP server
+			const duckdb = new DuckDBHttpConnector();
+			await duckdb.connect({ options: {} });
+			this.connectors.set("duckdb", duckdb);
+			logger.info("Connected to DuckDB HTTP server");
+		} else {
+			// WASM mode: Use in-browser DuckDB
+			const duckdb = new DuckDBConnector();
+			await duckdb.connect({ options: {} });
+			this.connectors.set("duckdb", duckdb);
+		}
+	}
+
+	/**
+	 * Get the current operating mode
+	 */
+	getMode(): DbxliteMode {
+		return this.mode;
+	}
+
+	/**
+	 * Check if running in HTTP mode (duckdb -ui)
+	 */
+	isHttpMode(): boolean {
+		return this.mode === "http";
+	}
+
+	/**
+	 * Subscribe to schema/catalog change events (HTTP mode only).
+	 * Fires when ATTACH, DETACH, CREATE TABLE, DROP TABLE, etc. occur.
+	 *
+	 * @param listener - Callback to invoke on schema change
+	 * @returns Unsubscribe function
+	 */
+	onSchemaChange(listener: () => void): () => void {
+		if (this.mode !== "http") {
+			// WASM mode doesn't have server-sent events
+			return () => {};
+		}
+
+		const connector = this.connectors.get("duckdb");
+		if (connector && "onSchemaChange" in connector) {
+			return (connector as DuckDBHttpConnector).onSchemaChange(listener);
+		}
+
+		return () => {};
 	}
 
 	/**
@@ -309,7 +362,7 @@ class StreamingQueryService {
 				// Check if this is a statement that doesn't support LIMIT (DDL/DML commands)
 				// These commands don't return result sets in the traditional sense
 				const statementKeyword = this.getStatementKeyword(sql);
-				const isNonSelectStatement = /^(copy|insert|update|delete|create|alter|drop|truncate|export|import|attach|detach|install|load|show|pragma|describe|explain|set)$/i.test(
+				const isNonSelectStatement = /^(copy|insert|update|delete|create|alter|drop|truncate|export|import|attach|detach|use|install|load|show|pragma|describe|explain|set|call|checkpoint|vacuum|analyze|begin|commit|rollback)$/i.test(
 					statementKeyword,
 				);
 

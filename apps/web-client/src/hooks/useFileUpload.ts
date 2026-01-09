@@ -15,6 +15,11 @@ import { createLogger } from "../utils/logger";
 
 const logger = createLogger("FileUpload");
 
+// Extended File type that may have path (Electron/Tauri)
+interface FileWithPath extends File {
+	path?: string;
+}
+
 // Type for file data from openDataFiles
 interface DataFileInfo {
 	name: string;
@@ -25,6 +30,8 @@ interface DataFileInfo {
 	file?: File;
 	fileHandle?: FileSystemFileHandle;
 	sheets?: { name: string; index: number }[];
+	/** Full file path (only available in Electron/Tauri, used for HTTP mode) */
+	fullPath?: string;
 }
 
 interface UseFileUploadOptions {
@@ -224,6 +231,43 @@ export function useFileUpload({
 		async (files: DataFileInfo[], isDragDrop: boolean = false) => {
 			if (files.length === 0) return;
 
+			const isHttpMode = queryService.isHttpMode();
+
+			// In HTTP mode, check if we have file paths available
+			if (isHttpMode) {
+				const filesWithPaths = files.filter((f) => f.fullPath);
+				const filesWithoutPaths = files.filter((f) => !f.fullPath);
+
+				if (filesWithoutPaths.length > 0) {
+					// Some files don't have paths - warn user
+					logger.warn(
+						"HTTP mode: Some files don't have full paths available",
+						filesWithoutPaths.map((f) => f.name),
+					);
+					showToast(
+						`In HTTP mode (duckdb -ui), file upload requires full file paths.\n` +
+							`Use file paths directly in queries instead:\n` +
+							`SELECT * FROM read_csv('/path/to/file.csv')`,
+						"warning",
+						10000,
+					);
+
+					if (filesWithPaths.length === 0) {
+						// No files have paths, abort
+						setIsUploadingFiles(false);
+						setUploadProgress({
+							currentFile: "",
+							currentIndex: 0,
+							totalFiles: 0,
+						});
+						return;
+					}
+				}
+
+				// Only process files that have paths
+				files = filesWithPaths;
+			}
+
 			// Switch to DuckDB for file operations
 			const previousConnector = activeConnector;
 			const needsRestore = activeConnector !== "duckdb";
@@ -248,17 +292,30 @@ export function useFileUpload({
 						fileData.name.endsWith(".duckdb") ||
 						fileData.name.endsWith(".db");
 
-					// Register file with query service
-					if (isDragDrop || !fileData.file) {
-						// Drag-drop or no file handle - use buffer
-						await queryService.registerFile(fileData.name, fileData.buffer);
+					// In HTTP mode with full path, no need to register - DuckDB reads directly
+					if (isHttpMode && fileData.fullPath) {
+						// Use the full path as the file reference
+						// Override filePath with the actual filesystem path
+						fileData.name = fileData.fullPath;
+						logger.info(
+							`HTTP mode: Using local file path: ${fileData.fullPath}`,
+						);
 					} else {
-						// Button upload with file handle - use zero-copy
-						await queryService.registerFileHandle(fileData.name, fileData.file);
-					}
+						// WASM mode: Register file with query service
+						if (isDragDrop || !fileData.file) {
+							// Drag-drop or no file handle - use buffer
+							await queryService.registerFile(fileData.name, fileData.buffer);
+						} else {
+							// Button upload with file handle - use zero-copy
+							await queryService.registerFileHandle(
+								fileData.name,
+								fileData.file,
+							);
+						}
 
-					// Small delay to ensure file is fully registered
-					await new Promise((resolve) => setTimeout(resolve, 100));
+						// Small delay to ensure file is fully registered
+						await new Promise((resolve) => setTimeout(resolve, 100));
+					}
 
 					if (isDuckDBDatabase) {
 						await handleDuckDBDatabase(fileData, isDragDrop);
@@ -281,8 +338,9 @@ export function useFileUpload({
 			// Show summary toast
 			if (files.length > 0 && !files.some((f) => f.type === "duckdb")) {
 				const fileNames = files.map((f) => f.name).join(", ");
+				const modeNote = isHttpMode ? " (using local paths)" : "";
 				showToast(
-					`${files.length} file${files.length > 1 ? "s" : ""} uploaded successfully!\n${fileNames}`,
+					`${files.length} file${files.length > 1 ? "s" : ""} ready${modeNote}!\n${fileNames}`,
 					"success",
 					6000,
 				);
@@ -415,6 +473,10 @@ export function useFileUpload({
 					const extension = file.name.split(".").pop()?.toLowerCase() || "";
 					const type = detectDataSourceType(file.name);
 
+					// Check for full file path (available in Electron/Tauri)
+					const fileWithPath = file as FileWithPath;
+					const fullPath = fileWithPath.path;
+
 					files.push({
 						name: file.name,
 						buffer,
@@ -422,6 +484,7 @@ export function useFileUpload({
 						size: file.size,
 						extension,
 						file,
+						fullPath,
 					});
 				} catch (err) {
 					logger.error(`Failed to read dropped file ${file.name}`, err);

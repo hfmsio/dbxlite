@@ -1,43 +1,96 @@
 # dbxlite
 
 [![CI](https://github.com/hfmsio/dbxlite/workflows/CI/badge.svg)](https://github.com/hfmsio/dbxlite/actions)
+[![npm](https://img.shields.io/npm/v/dbxlite-ui.svg)](https://www.npmjs.com/package/dbxlite-ui)
+[![npm downloads](https://img.shields.io/npm/dm/dbxlite-ui.svg)](https://www.npmjs.com/package/dbxlite-ui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](package.json)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
-[![pnpm](https://img.shields.io/badge/pnpm-8+-blue.svg)](package.json)
 
-A browser-native SQL workbench powered by DuckDB WebAssembly. Works with files of any size since data stays on disk, not in memory.
+A modern SQL workbench for DuckDB. Use it with your local DuckDB CLI for full power, or run entirely in-browser with zero install.
+
+## Quick Start
+
+### Server Mode (Recommended)
+
+Use dbxlite as a drop-in replacement for `duckdb -ui`:
+
+```bash
+# Start local asset server
+npx dbxlite-ui                              # Serves UI on port 8080
+
+# In another terminal, launch DuckDB with the local UI
+export ui_remote_url="http://localhost:8080"
+duckdb -unsigned -ui
+```
+
+Open http://localhost:4213 in your browser. You get full native DuckDB with all extensions, unlimited memory, and direct filesystem access.
+
+**With an existing database:**
+```bash
+duckdb mydata.duckdb -unsigned -ui
+```
+
+**Alternative: Use hosted assets (no npm required):**
+```bash
+export ui_remote_url="https://sql.dbxlite.com"
+duckdb -unsigned -ui
+```
+
+> The hosted URL only serves static UI assets (similar to the default DuckDB UI hosted by MotherDuck). All data and query execution stays local: DuckDB on your machine talks directly to your browser. Nothing is sent to external servers.
+
+> The `-unsigned` flag is required for custom UI URLs. This is a DuckDB security measure.
+
+### WASM Mode (Zero Install)
+
+No DuckDB CLI? Visit **https://sql.dbxlite.com** directly. Runs entirely in your browser with DuckDB WebAssembly.
+
+### Mode Comparison
+
+| | Server Mode | WASM Mode |
+|---|-------------|-----------|
+| **Memory** | Unlimited | ~2-4GB browser limit |
+| **Extensions** | All (httpfs, spatial, iceberg, etc.) | Limited subset |
+| **Filesystem** | Direct access | File handles only |
+| **BigQuery** | Via DuckDB extension | Browser OAuth connector |
+| **Install** | DuckDB CLI required | Zero install |
+| **Offline** | Requires CLI | Works after first load |
+
+---
 
 ## Highlights
 
 **Query Any Data, Any Size**
-Powered by DuckDB WASM. Query CSV, Parquet, Excel, JSON, JSONL locally or from cloud URLs. Designed for large datasets. Files register via File System Access API and stay on disk; DuckDB reads only what it needs. Your limit is disk space, not memory.
-
-**Persistent Sessions**
-Attach DuckDB databases (`.db`, `.duckdb`) and local files with handles that persist across browser sessions. Close the browser, come back later, resume where you left off. No re-uploading.
-
-**Cloud Data Warehouses**
-Query BigQuery directly from the browser with cost estimates before you run. Same unified interface for local and cloud data. Snowflake coming soon.
+Query CSV, Parquet, Excel, JSON, JSONL locally or from cloud URLs. In Server mode, access your entire filesystem. In WASM mode, files register via File System Access API and stay on disk.
 
 **Full SQL Workbench**
-Monaco editor with autocomplete and formatting. Schema explorer that visualizes nested structs and shows all sheets in Excel files. Results grid with cell-by-cell keyboard navigation, cell modal for large content, export to Parquet/CSV/JSON, and streaming for large datasets. 10 color themes. Extensive settings for formatting, alignment, and display.
+Monaco editor with autocomplete and formatting. Schema explorer that visualizes nested structs and shows all sheets in Excel files. Results grid with cell-by-cell keyboard navigation, cell modal for large content, export to Parquet/CSV/JSON. 10 color themes.
+
+**Cloud Data Warehouses**
+Query BigQuery directly with cost estimates before you run. In Server mode, use DuckDB's native BigQuery extension. In WASM mode, use the browser OAuth connector.
 
 **Share Executable SQL**
-Share queries via URL that run on click. Frictionless for teaching, learning, and collaboration. Built-in examples include getting started, remote datasets, DuckDB tutorials, advanced analytics, and extensions.
+Share queries via URL that run on click. Built-in examples include getting started, remote datasets, DuckDB tutorials, and advanced analytics.
 
 **Private by Default**
-For local files, no server process. Once loaded, everything runs in your browser. Data never leaves your machine. Cloud connectors (BigQuery) communicate directly with their respective APIs.
+In WASM mode, everything runs in your browser - data never leaves your machine. In Server mode, data stays on your local machine. Cloud connectors communicate directly with their APIs.
 
-## Quick Start
-**Live Demo:** https://sql.dbxlite.com
+---
+
+## Development
 
 ```bash
 git clone https://github.com/hfmsio/dbxlite.git
 cd dbxlite
-pnpm install  # Automatically downloads DuckDB WASM files (~107 MB)
-pnpm dev
+pnpm install
+pnpm build
+
+# Run with local DuckDB (Server mode)
+cd apps/cli && node scripts/build.js && node dist/cli.js
+# Then: export ui_remote_url="http://127.0.0.1:8080" && duckdb -unsigned -ui
+
+# Run standalone (WASM mode)
+pnpm dev  # Opens http://localhost:5173
 ```
-Open the URL Vite prints (defaults to http://localhost:5173).
 
 Requirements: Node.js 18+, pnpm 8+.
 
@@ -61,6 +114,9 @@ Requirements: Node.js 18+, pnpm 8+.
 **Export to Parquet/CSV/JSON**
 ![Export Status](apps/web-client/public/screenshots/export-status.png)
 
+**Server Settings (HTTP Mode)**
+![Server Settings](apps/web-client/public/screenshots/server-settings.png)
+
 ## Core Commands
 - `pnpm dev` — start the web client locally
 - `pnpm build` — build all workspaces
@@ -72,16 +128,17 @@ Requirements: Node.js 18+, pnpm 8+.
 ```
 dbxlite/
 ├─ apps/
-│  └─ web-client/           # React/Vite frontend
-│     ├─ src/
-│     │  ├─ components/     # UI components (EditorPane, TabBar, Header, etc.)
-│     │  ├─ containers/     # Composite components (DialogsContainer, MainContent)
-│     │  ├─ contexts/       # React contexts (TabContext, QueryContext)
-│     │  ├─ hooks/          # Custom hooks (useQueryExecution, useTabManager, etc.)
-│     │  ├─ services/       # Data services (data-source-store, settings-store)
-│     │  ├─ stores/         # Zustand stores (settingsStore)
-│     │  └─ utils/          # Utilities (formatters, dataTypes, logger)
-│     └─ App.tsx            # Main orchestrator (~680 lines)
+│  ├─ web-client/           # React/Vite frontend
+│  │  ├─ src/
+│  │  │  ├─ components/     # UI components (EditorPane, TabBar, Header, etc.)
+│  │  │  ├─ containers/     # Composite components (DialogsContainer, MainContent)
+│  │  │  ├─ contexts/       # React contexts (TabContext, QueryContext)
+│  │  │  ├─ hooks/          # Custom hooks (useQueryExecution, useTabManager, etc.)
+│  │  │  ├─ services/       # Data services (data-source-store, settings-store)
+│  │  │  ├─ stores/         # Zustand stores (settingsStore)
+│  │  │  └─ utils/          # Utilities (formatters, dataTypes, logger)
+│  │  └─ App.tsx            # Main orchestrator (~680 lines)
+│  └─ cli/                  # dbxlite-ui npm package (for duckdb -ui integration)
 ├─ packages/
 │  ├─ connectors/           # Data connectors (DuckDB, BigQuery)
 │  ├─ duckdb-wasm-adapter/  # Worker/engine bridge

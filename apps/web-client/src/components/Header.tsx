@@ -1,4 +1,5 @@
 import type { ConnectorType } from "../services/streaming-query-service";
+import { useMode } from "../hooks/useMode";
 import {
 	CheckCircleIcon,
 	ChevronLeftIcon,
@@ -12,6 +13,7 @@ import {
 	XCircleIcon,
 } from "./Icons";
 import { Logo, Wordmark } from "./Logo";
+import ModeIndicator from "./ModeIndicator";
 import ThemeToggle from "./ThemeToggle";
 
 interface HeaderProps {
@@ -47,6 +49,7 @@ interface HeaderProps {
 	// Settings
 	showSettings: boolean;
 	onToggleSettings: () => void;
+	onOpenServerSettings?: () => void;
 }
 
 export default function Header({
@@ -71,7 +74,9 @@ export default function Header({
 	onConnectorChange,
 	showSettings: _showSettings,
 	onToggleSettings,
+	onOpenServerSettings,
 }: HeaderProps) {
+	const { isHttpMode } = useMode();
 	const isDisabled =
 		initializing || reloadingFiles || isUploadingFiles || isExporting;
 
@@ -83,19 +88,15 @@ export default function Header({
 					<Logo size={32} />
 					<Wordmark size="lg" style={{ fontSize: "22px", letterSpacing: "-0.5px" }} />
 					<span
-						className="duckdb-badge"
 						style={{
-							fontSize: "11px",
-							fontWeight: "600",
 							borderLeft: "1px solid var(--divider-color)",
 							paddingLeft: "8px",
 							marginLeft: "8px",
 							position: "relative",
-							top: "2px",
-							whiteSpace: "nowrap",
+							top: "1px",
 						}}
 					>
-						powered by DuckDB WASM
+						<ModeIndicator onOpenServerSettings={onOpenServerSettings} />
 					</span>
 				</h1>
 				<div className="status-indicator" style={{ position: "relative", top: "2px" }}>
@@ -224,7 +225,9 @@ export default function Header({
 						disabled={isDisabled}
 						aria-label="Select database connector"
 					>
-						<option value="duckdb">DuckDB</option>
+						<option value="duckdb">
+							{isHttpMode ? "DuckDB Server" : "DuckDB WASM"}
+						</option>
 						<option value="bigquery" disabled={!isBigQueryConnected}>
 							BigQuery {!isBigQueryConnected ? "(not connected)" : ""}
 						</option>

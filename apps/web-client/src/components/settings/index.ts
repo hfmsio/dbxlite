@@ -6,3 +6,4 @@ export { default as AppearanceSettings } from "./AppearanceSettings";
 export { default as ConnectionsSettings } from "./ConnectionsSettings";
 export { default as FormattingSettings } from "./FormattingSettings";
 export { default as HelpSettings } from "./HelpSettings";
+export { default as ServerSettings } from "./ServerSettings";

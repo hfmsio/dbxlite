@@ -18,6 +18,11 @@ export interface FileHandle {
 	fileLastModified?: number;
 }
 
+// Extended File type that may have path (Electron/Tauri)
+interface FileWithPath extends File {
+	path?: string;
+}
+
 export interface DataFileInfo {
 	name: string;
 	buffer: ArrayBuffer;
@@ -27,6 +32,8 @@ export interface DataFileInfo {
 	fileHandle?: FileSystemFileHandle; // File handle for zero-copy access
 	file?: File; // File object for direct access
 	sheets?: Array<{ name: string; index: number }>; // XLSX sheet info (Phase 1)
+	/** Full file path (only available in Electron/Tauri, used for HTTP mode) */
+	fullPath?: string;
 }
 
 /**
@@ -339,6 +346,10 @@ export async function openDataFiles(): Promise<DataFileInfo[]> {
 				// Use zero-copy file handle access for ALL files
 				const buffer = new ArrayBuffer(0); // Empty buffer - we'll use file handle instead
 
+				// Check for full file path (available in Electron/Tauri)
+				const fileWithPath = file as FileWithPath;
+				const fullPath = fileWithPath.path;
+
 				const fileInfo: DataFileInfo = {
 					name: file.name,
 					buffer,
@@ -347,6 +358,7 @@ export async function openDataFiles(): Promise<DataFileInfo[]> {
 					extension: file.name.split(".").pop() || "",
 					fileHandle, // Store the file handle for zero-copy access
 					file, // Store the File object for DuckDB to access directly
+					fullPath,
 				};
 
 				// Extract XLSX sheets (Phase 1: only sheet names)
@@ -377,12 +389,17 @@ export async function openDataFiles(): Promise<DataFileInfo[]> {
 							const buffer = await file.arrayBuffer();
 							const fileType = detectDataSourceType(file.name);
 
+							// Check for full file path (available in Electron/Tauri)
+							const fileWithPath = file as FileWithPath;
+							const fullPath = fileWithPath.path;
+
 							const fileInfo: DataFileInfo = {
 								name: file.name,
 								buffer,
 								type: fileType,
 								size: file.size,
 								extension: file.name.split(".").pop() || "",
+								fullPath,
 							};
 
 							// Extract XLSX sheets (Phase 1: only sheet names)

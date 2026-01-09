@@ -5,6 +5,10 @@ import wasm from 'vite-plugin-wasm'
 import topLevelAwait from 'vite-plugin-top-level-await'
 
 export default defineConfig({
+  // Use relative paths for assets - required for duckdb -ui serving via ui_remote_url
+  base: './',
+  // Treat SQL files as assets to prevent Vite from parsing them as JS
+  assetsInclude: ['**/*.sql'],
   plugins: [react(), wasm(), topLevelAwait()],
   resolve: {
     alias: {
@@ -41,6 +45,12 @@ export default defineConfig({
       // Use credentialless mode instead of require-corp to allow fetching remote files
       // without strict CORS requirements while still enabling SharedArrayBuffer
       'Cross-Origin-Embedder-Policy': 'credentialless'
+    },
+    // Allow connections from DuckDB -ui proxy
+    cors: true,
+    hmr: {
+      // When accessed via DuckDB proxy, HMR should connect to Vite server directly
+      clientPort: 5173
     }
   }
 })

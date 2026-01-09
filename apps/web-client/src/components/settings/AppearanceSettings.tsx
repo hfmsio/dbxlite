@@ -1,5 +1,6 @@
 import type React from "react";
 import {
+	type AutocompleteMode,
 	type EngineDetectionMode,
 	useSettingsStore,
 } from "../../stores/settingsStore";

@@ -1,5 +1,8 @@
 import type { ShareContent, ShareResult, SharingProviderPlugin } from './types';
 
+// Re-export types for consumers
+export type { ShareContent, ShareResult, SharingProviderPlugin };
+
 // Registry of all sharing providers (matches EngineDetector pattern)
 const sharingProviders: SharingProviderPlugin[] = [];
 

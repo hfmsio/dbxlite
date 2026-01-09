@@ -149,7 +149,24 @@ export default function MainContent({
 			className={`main-compact ${showExplorer ? "with-explorer" : ""}`}
 			ref={containerRef}
 		>
-			<div style={{ height: `${editorHeight}px`, minHeight: "150px" }}>
+			{/* Transparent overlay to capture all mouse events during resize */}
+			{isDragging && (
+				<div
+					style={{
+						position: "absolute",
+						top: 0,
+						left: 0,
+						right: 0,
+						bottom: 0,
+						zIndex: 1000,
+						cursor: "row-resize",
+					}}
+				/>
+			)}
+			<div style={{
+				height: `${editorHeight}px`,
+				minHeight: "150px",
+			}}>
 				<EditorPane
 					ref={editorRef}
 					onRunQuery={onRunQuery}

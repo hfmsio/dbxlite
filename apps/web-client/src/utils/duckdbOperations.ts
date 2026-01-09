@@ -14,7 +14,6 @@ import { createLogger } from "./logger";
 import {
 	buildAttachSQL,
 	buildDetachSQL,
-	escapeIdentifier,
 	escapeLikePattern,
 	escapeStringLiteral,
 } from "./sqlSanitizer";

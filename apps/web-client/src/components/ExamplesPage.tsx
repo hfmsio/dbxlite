@@ -130,10 +130,6 @@ const badgeStyle: React.CSSProperties = {
 
 // Simple syntax highlighting for SQL
 function formatSQL(sql: string): React.ReactNode[] {
-	const keywords = /\b(SELECT|FROM|WHERE|AND|OR|AS|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|ORDER|LIMIT|OFFSET|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|ALTER|ATTACH|DETACH|DESCRIBE|SUMMARIZE|COUNT|AVG|SUM|MIN|MAX|DISTINCT|UNION|ALL|CASE|WHEN|THEN|ELSE|END|NULL|NOT|IN|LIKE|BETWEEN|EXISTS|HAVING|WITH|READ_ONLY|READ_WRITE)\b/gi;
-	const strings = /('[^']*'|`[^`]*`)/g;
-	const comments = /(--.*$)/gm;
-
 	const lines = sql.split("\n");
 	return lines.map((line, lineIndex) => {
 		// Check if line is a comment
@@ -148,7 +144,6 @@ function formatSQL(sql: string): React.ReactNode[] {
 
 		// Process keywords and strings
 		const parts: React.ReactNode[] = [];
-		let remaining = line;
 		let partIndex = 0;
 
 		// First, extract strings

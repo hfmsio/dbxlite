@@ -14,8 +14,9 @@ import {
 	convertFilesToTreeNodes,
 	formatBytes,
 } from "../utils/treeConverters";
-import { ClockIcon, CloudIcon, ColumnsIcon, DatabaseIcon, FileIcon, RefreshIcon, TableIcon } from "../components/Icons";
+import { ClockIcon, CloudIcon, ColumnsIcon, DatabaseIcon, EyeIcon, FileIcon, FolderIcon, RefreshIcon, TableIcon } from "../components/Icons";
 import { useLocalDatabase } from "./useLocalDatabase";
+import { useServerDatabases } from "./useServerDatabases";
 import type React from "react";
 import type { CatalogInfo, SchemaInfo } from "@ide/connectors";
 
@@ -39,11 +40,14 @@ export interface DataSourceStateProps {
 	onBigQueryCacheClear?: (clearFn: () => void) => void;
 	onBigQueryDataLoad?: (loadFn: () => Promise<void>) => void;
 	onLocalDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
+	onServerDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
 	onFileDelete: (id: string) => void;
 	onDatabaseDelete: (dbName: string) => void;
 	onDeleteFolder: (domain: string, path: string) => void;
 	onDeleteDomain: (domain: string) => void;
 	showToast?: (message: string, type?: "success" | "error" | "info" | "warning") => void;
+	/** Whether running in HTTP/Server mode (hides browser-specific sections) */
+	isHttpMode?: boolean;
 }
 
 export function useDataSourceState({
@@ -59,17 +63,23 @@ export function useDataSourceState({
 	onBigQueryCacheClear,
 	onBigQueryDataLoad,
 	onLocalDatabaseRefresh,
+	onServerDatabaseRefresh,
 	onFileDelete,
 	onDatabaseDelete,
 	onDeleteFolder,
 	onDeleteDomain,
 	showToast,
+	isHttpMode = false,
 }: DataSourceStateProps) {
 	const [searchQuery, setSearchQuery] = useState("");
 	const [isBigQueryConnected, setIsBigQueryConnected] = useState(false);
 
 	// Local database (OPFS-backed) schema
 	const localDatabase = useLocalDatabase();
+
+	// Server databases (only in HTTP mode)
+	const serverDatabases = useServerDatabases(isHttpMode);
+
 	const [collapsedSections, setCollapsedSections] = useState<Set<string>>(
 		() => {
 			const stored = localStorage.getItem("explorer-collapsed-sections");
@@ -85,7 +95,39 @@ export function useDataSourceState({
 	const [tableInfoModal, setTableInfoModal] = useState<{
 		table: TableMetadata;
 		fullName: string;
+		databaseName?: string;
+		schemaName?: string;
 	} | null>(null);
+
+	// Pinned BigQuery projects (e.g., bigquery-public-data)
+	const [pinnedProjects, setPinnedProjects] = useState<string[]>(() => {
+		try {
+			const stored = localStorage.getItem("bigquery-pinned-projects");
+			return stored ? JSON.parse(stored) : [];
+		} catch {
+			return [];
+		}
+	});
+	const [showAddProjectInput, setShowAddProjectInput] = useState(false);
+
+	// Persist pinned projects
+	useEffect(() => {
+		localStorage.setItem("bigquery-pinned-projects", JSON.stringify(pinnedProjects));
+	}, [pinnedProjects]);
+
+	const addPinnedProject = useCallback((projectId: string) => {
+		const trimmed = projectId.trim();
+		if (trimmed && !pinnedProjects.includes(trimmed)) {
+			setPinnedProjects((prev) => [...prev, trimmed]);
+		}
+		setShowAddProjectInput(false);
+	}, [pinnedProjects]);
+
+	const removePinnedProject = useCallback((projectId: string) => {
+		setPinnedProjects((prev) => prev.filter((p) => p !== projectId));
+		// Clear cached data for this project
+		setBigQueryData((prev) => prev.filter((p) => p.id !== projectId));
+	}, []);
 
 	// Ref to store expanded nodes state before search (for restoration when search is cleared)
 	const savedExpandedNodes = useRef<Set<string> | null>(null);
@@ -141,6 +183,13 @@ export function useDataSourceState({
 		}
 	}, [onLocalDatabaseRefresh, localDatabase.refreshSchema]);
 
+	// Expose server database refresh function to parent (for ATTACH/DETACH detection)
+	useEffect(() => {
+		if (onServerDatabaseRefresh) {
+			onServerDatabaseRefresh(serverDatabases.refreshDatabases);
+		}
+	}, [onServerDatabaseRefresh, serverDatabases.refreshDatabases]);
+
 	// Manual BigQuery data loading
 	const loadBigQueryData = useCallback(async () => {
 		if (!isBigQueryConnected) return;
@@ -151,8 +200,21 @@ export function useDataSourceState({
 			);
 			// Load BigQuery projects and their datasets
 			const projects = await queryService.getBigQueryProjects();
+
+			// Merge with pinned projects (add those not already in list)
+			const existingIds = new Set(projects.map((p) => p.id));
+			const pinnedCatalogInfos: CatalogInfo[] = pinnedProjects
+				.filter((id) => !existingIds.has(id))
+				.map((id) => ({
+					id,
+					name: id,
+					type: "project" as const,
+					description: "Pinned project",
+				}));
+			const allProjects = [...projects, ...pinnedCatalogInfos];
+
 			const projectsWithData: BigQueryProject[] = await Promise.all(
-				projects.map(async (project) => {
+				allProjects.map(async (project) => {
 					try {
 						const datasets = await queryService.getBigQueryDatasets(project.id);
 						const datasetsWithTables = await Promise.all(
@@ -217,7 +279,7 @@ export function useDataSourceState({
 				showToast?.(`BigQuery error: ${errorMessage}`, "error");
 			}
 		}
-	}, [isBigQueryConnected, showToast]);
+	}, [isBigQueryConnected, pinnedProjects, showToast]);
 
 	// Expose BigQuery data load function to parent
 	useEffect(() => {
@@ -391,13 +453,14 @@ export function useDataSourceState({
 					// For other schemas, show schema as parent node
 					if (schema.name === "main") {
 						for (const table of schema.tables) {
-							// Different colors: amber for temp tables, green for regular
-							const tableColor = table.isTemporary ? "#f59e0b" : "#10b981";
+							const isView = table.type === "view";
+							// Different colors: purple for views, amber for temp tables, green for regular
+							const tableColor = isView ? "#8b5cf6" : (table.isTemporary ? "#f59e0b" : "#10b981");
 							const tableNode: UnifiedTreeNode = {
 								id: `session-table-${table.name}`,
 								name: table.name,
-								type: "table",
-								icon: <TableIcon size={14} />,
+								type: isView ? "view" : "table",
+								icon: isView ? <EyeIcon size={14} /> : <TableIcon size={14} />,
 								iconColor: tableColor,
 								source: "duckdb",
 								metadata: {
@@ -425,9 +488,25 @@ export function useDataSourceState({
 										onClick: () => onInsertQuery(`SELECT * FROM "${table.name}" LIMIT 100;`),
 									},
 									{
+										id: `info-${table.name}`,
+										label: "Show Info",
+										onClick: () => setTableInfoModal({
+											table: {
+												id: table.name,
+												name: table.name,
+												type: table.type || "table",
+												columns: table.columns,
+												rowCount: table.rowCount,
+											},
+											fullName: `"${table.name}"`,
+											databaseName: "memory",
+											schemaName: "main",
+										}),
+									},
+									{
 										id: `drop-${table.name}`,
-										label: "DROP TABLE",
-										onClick: () => onInsertQuery(`DROP TABLE "${table.name}";`),
+										label: isView ? "DROP VIEW" : "DROP TABLE",
+										onClick: () => onInsertQuery(isView ? `DROP VIEW "${table.name}";` : `DROP TABLE "${table.name}";`),
 									},
 								],
 							};
@@ -512,8 +591,188 @@ export function useDataSourceState({
 			}
 		}
 
-		// Databases Section (attached DuckDB files)
-		if (databases.length > 0) {
+		// Server Databases Section (HTTP mode only)
+		// Shows databases attached on the DuckDB server (discovered via duckdb_databases())
+		if (isHttpMode && serverDatabases.databases.length > 0) {
+			const serverDbNodes: UnifiedTreeNode[] = [];
+
+			for (const db of serverDatabases.databases) {
+				const dbNode: UnifiedTreeNode = {
+					id: `server-db-${db.name}`,
+					name: db.name,
+					type: "database",
+					icon: <DatabaseIcon size={14} />,
+					iconColor: db.readonly ? "#9ca3af" : "#10b981", // Gray if readonly, green if writable
+					source: "duckdb",
+					metadata: {
+						path: db.path,
+						readonly: db.readonly,
+					},
+					children: [],
+					actions: [
+						{
+							id: `detach-${db.name}`,
+							label: "DETACH",
+							onClick: () => onInsertQuery(`DETACH "${db.name}";`),
+						},
+					],
+				};
+
+				// Add schemas as children
+				for (const schema of db.schemas) {
+					// For "main" schema, show tables directly under database
+					if (schema.name === "main" && db.schemas.length === 1) {
+						// Single main schema - show tables directly
+						for (const table of schema.tables) {
+							const isView = table.type === "view";
+							// Purple for views, amber for temp, blue for regular tables
+							const tableColor = isView ? "#8b5cf6" : (table.isTemporary ? "#f59e0b" : "#3b82f6");
+							const tableNode: UnifiedTreeNode = {
+								id: `server-db-${db.name}-table-${table.name}`,
+								name: table.name,
+								type: isView ? "view" : "table",
+								icon: isView ? <EyeIcon size={14} /> : <TableIcon size={14} />,
+								iconColor: tableColor,
+								source: "duckdb",
+								metadata: {
+									rowCount: table.rowCount,
+									columnCount: table.columns.length,
+								},
+								children: table.columns.map((col) => ({
+									id: `server-db-${db.name}-col-${table.name}-${col.name}`,
+									name: col.name,
+									type: "column" as const,
+									icon: <ColumnsIcon size={14} />,
+									iconColor: "#6b7280",
+									source: "duckdb" as const,
+									metadata: {
+										dataType: col.type,
+										nullable: col.nullable,
+									},
+								})),
+								actions: [
+									{
+										id: `select-${db.name}-${table.name}`,
+										label: "SELECT * FROM",
+										onClick: () => onInsertQuery(`SELECT * FROM "${db.name}"."${schema.name}"."${table.name}" LIMIT 100;`),
+									},
+									{
+										id: `info-${db.name}-${table.name}`,
+										label: "Show Info",
+										onClick: () => setTableInfoModal({
+											table: {
+												id: table.name,
+												name: table.name,
+												type: table.type || "table",
+												columns: table.columns,
+												rowCount: table.rowCount,
+											},
+											fullName: `"${db.name}"."${schema.name}"."${table.name}"`,
+											databaseName: db.name,
+											schemaName: schema.name,
+										}),
+									},
+								],
+							};
+							dbNode.children!.push(tableNode);
+						}
+					} else {
+						// Multiple schemas or non-main schema - show schema as intermediate node
+						const schemaNode: UnifiedTreeNode = {
+							id: `server-db-${db.name}-schema-${schema.name}`,
+							name: schema.name,
+							type: "schema",
+							icon: <FolderIcon size={14} />,
+							iconColor: "#6b7280",
+							source: "duckdb",
+							children: schema.tables.map((table) => {
+								const isView = table.type === "view";
+								const tableColor = isView ? "#8b5cf6" : (table.isTemporary ? "#f59e0b" : "#3b82f6");
+								return {
+									id: `server-db-${db.name}-table-${schema.name}-${table.name}`,
+									name: table.name,
+									type: isView ? "view" as const : "table" as const,
+									icon: isView ? <EyeIcon size={14} /> : <TableIcon size={14} />,
+									iconColor: tableColor,
+									source: "duckdb" as const,
+									metadata: {
+										rowCount: table.rowCount,
+										columnCount: table.columns.length,
+									},
+									children: table.columns.map((col) => ({
+										id: `server-db-${db.name}-col-${schema.name}-${table.name}-${col.name}`,
+										name: col.name,
+										type: "column" as const,
+										icon: <ColumnsIcon size={14} />,
+										iconColor: "#6b7280",
+										source: "duckdb" as const,
+										metadata: {
+											dataType: col.type,
+											nullable: col.nullable,
+										},
+									})),
+									actions: [
+										{
+											id: `select-${db.name}-${schema.name}-${table.name}`,
+											label: "SELECT * FROM",
+											onClick: () => onInsertQuery(`SELECT * FROM "${db.name}"."${schema.name}"."${table.name}" LIMIT 100;`),
+										},
+										{
+											id: `info-${db.name}-${schema.name}-${table.name}`,
+											label: "Show Info",
+											onClick: () => setTableInfoModal({
+												table: {
+													id: table.name,
+													name: table.name,
+													type: table.type || "table",
+													columns: table.columns,
+													rowCount: table.rowCount,
+												},
+												fullName: `"${db.name}"."${schema.name}"."${table.name}"`,
+												databaseName: db.name,
+												schemaName: schema.name,
+											}),
+										},
+									],
+								};
+							}),
+						};
+						dbNode.children!.push(schemaNode);
+					}
+				}
+
+				serverDbNodes.push(dbNode);
+			}
+
+			// Apply tree filtering
+			const { filtered: filteredServerDbNodes, toExpand: serverDbToExpand } =
+				filterTreeNodes(serverDbNodes, searchQuery);
+
+			sections.push({
+				id: "server-databases",
+				title: "Attached Databases",
+				icon: <DatabaseIcon size={16} />,
+				iconColor: "#10b981", // Green to indicate server connection
+				isCollapsed: collapsedSections.has("server-databases"),
+				nodes: filteredServerDbNodes,
+				actions: [
+					{
+						id: "refresh-server-databases",
+						label: "Refresh",
+						icon: <RefreshIcon size={14} />,
+						onClick: () => serverDatabases.refreshDatabases(),
+					},
+				],
+			});
+
+			if (searchQuery) {
+				serverDbToExpand.forEach((id) => nodesToExpand.add(id));
+			}
+		}
+
+		// Databases Section (attached DuckDB files) - WASM mode only
+		// In HTTP mode, we use the Server Databases section instead
+		if (!isHttpMode && databases.length > 0) {
 			const dbNodes = convertDatabasesToTreeNodes(
 				databases,
 				onInsertQuery,
@@ -558,8 +817,9 @@ export function useDataSourceState({
 		}
 
 		// Local Files Section (files with file handles, not remote)
+		// Skip in HTTP mode - server has direct filesystem access, no need for file handles
 		const localFiles = files.filter((f) => !f.isRemote);
-		if (localFiles.length > 0) {
+		if (!isHttpMode && localFiles.length > 0) {
 			const localFileNodes = convertFilesToTreeNodes(
 				localFiles,
 				onInsertQuery,
@@ -646,7 +906,8 @@ export function useDataSourceState({
 		}
 
 		// Cloud Connections Section (BigQuery)
-		if (isBigQueryConnected) {
+		// Skip in HTTP mode - use native BigQuery extension instead
+		if (!isHttpMode && isBigQueryConnected) {
 			let bqNodes: UnifiedTreeNode[] = [];
 
 			if (bigQueryData.length > 0) {
@@ -708,6 +969,8 @@ export function useDataSourceState({
 		onReattachDatabase,
 		onRestoreAccess,
 		localDatabase,
+		isHttpMode,
+		serverDatabases,
 	]);
 
 	// Apply node expansion in useEffect (not during render)
@@ -807,5 +1070,15 @@ export function useDataSourceState({
 
 		// Local database
 		refreshLocalDatabase: localDatabase.refreshSchema,
+
+		// Server databases (HTTP mode)
+		refreshServerDatabases: serverDatabases.refreshDatabases,
+
+		// Pinned projects
+		pinnedProjects,
+		showAddProjectInput,
+		setShowAddProjectInput,
+		addPinnedProject,
+		removePinnedProject,
 	};
 }

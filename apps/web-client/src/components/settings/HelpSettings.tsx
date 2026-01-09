@@ -65,17 +65,6 @@ const warningStyle: React.CSSProperties = {
 	borderLeft: "3px solid #f59e0b",
 };
 
-const disclaimerStyle: React.CSSProperties = {
-	fontSize: 10,
-	color: "var(--text-muted)",
-	marginTop: 8,
-	padding: "12px",
-	backgroundColor: "var(--bg-tertiary)",
-	borderRadius: 6,
-	fontFamily: "monospace",
-	lineHeight: 1.4,
-};
-
 const linkStyle: React.CSSProperties = {
 	color: "var(--accent)",
 	textDecoration: "none",
@@ -754,6 +743,127 @@ function HelpSettings() {
 						<li><strong>No datasets showing:</strong> Ensure your Google account has BigQuery access to the projects</li>
 						<li><strong>Credentials stored locally:</strong> Your credentials are stored in browser local storage only - never sent to any server</li>
 					</ul>
+				</div>
+			</div>
+
+			{/* Execution Modes */}
+			<div style={sectionStyle}>
+				<h3 style={sectionTitleStyle}>Execution Modes</h3>
+				<p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 16 }}>
+					dbxlite can run in two modes depending on how you access it. The mode is auto-detected and shown in the header badge.
+				</p>
+				<table style={tableStyle}>
+					<thead>
+						<tr>
+							<th style={{ ...thStyle, width: "15%" }}>Mode</th>
+							<th style={{ ...thStyle, width: "25%" }}>How to Use</th>
+							<th style={{ ...thStyle, width: "30%" }}>Capabilities</th>
+							<th style={thStyle}>Limitations</th>
+						</tr>
+					</thead>
+					<tbody>
+						<tr>
+							<td style={tdStyle}>
+								<span style={{
+									display: "inline-block",
+									padding: "2px 8px",
+									backgroundColor: "rgba(59, 130, 246, 0.15)",
+									color: "#3b82f6",
+									borderRadius: 4,
+									fontSize: 11,
+									fontWeight: 600,
+								}}>WASM</span>
+							</td>
+							<td style={tdStyle}>
+								Visit <code style={{ fontSize: 10 }}>sql.dbxlite.com</code> directly in browser
+							</td>
+							<td style={tdStyle}>
+								<ul style={{ margin: 0, paddingLeft: 16, fontSize: 11 }}>
+									<li>Zero-copy file handles (Chrome)</li>
+									<li>BigQuery browser connector</li>
+									<li>Works offline after first load</li>
+								</ul>
+							</td>
+							<td style={tdStyle}>
+								<ul style={{ margin: 0, paddingLeft: 16, fontSize: 11 }}>
+									<li>~2-4GB memory limit</li>
+									<li>Limited extensions</li>
+									<li>No filesystem access</li>
+								</ul>
+							</td>
+						</tr>
+						<tr>
+							<td style={tdStyle}>
+								<span style={{
+									display: "inline-block",
+									padding: "2px 8px",
+									backgroundColor: "rgba(34, 197, 94, 0.15)",
+									color: "#22c55e",
+									borderRadius: 4,
+									fontSize: 11,
+									fontWeight: 600,
+								}}>Server</span>
+							</td>
+							<td style={tdStyle}>
+								Run <code style={{ fontSize: 10 }}>duckdb -ui</code> with custom UI URL
+							</td>
+							<td style={tdStyle}>
+								<ul style={{ margin: 0, paddingLeft: 16, fontSize: 11 }}>
+									<li>Full native DuckDB engine</li>
+									<li>All extensions available</li>
+									<li>Direct filesystem access</li>
+									<li>No memory limits</li>
+								</ul>
+							</td>
+							<td style={tdStyle}>
+								<ul style={{ margin: 0, paddingLeft: 16, fontSize: 11 }}>
+									<li>Requires DuckDB CLI</li>
+									<li>Local machine only</li>
+								</ul>
+							</td>
+						</tr>
+					</tbody>
+				</table>
+
+				<div style={{ marginTop: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>How to Use Server Mode</strong>
+					<ol style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.8 }}>
+						<li>Install DuckDB CLI: <a href="https://duckdb.org/docs/installation" target="_blank" rel="noopener noreferrer" style={linkStyle}>duckdb.org/docs/installation</a></li>
+						<li>Set the custom UI URL:
+							<div style={{ marginTop: 4 }}>
+								<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "4px 8px", borderRadius: 3, display: "block" }}>
+									export ui_remote_url="https://sql.dbxlite.com"
+								</code>
+							</div>
+						</li>
+						<li>Launch DuckDB with UI:
+							<div style={{ marginTop: 4 }}>
+								<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "4px 8px", borderRadius: 3, display: "block" }}>
+									duckdb -unsigned -ui
+								</code>
+							</div>
+						</li>
+						<li>Open <code style={{ fontSize: 10 }}>http://localhost:4213</code> in your browser</li>
+					</ol>
+				</div>
+
+				<div style={{ ...noteStyle, marginTop: 16 }}>
+					<strong>Note:</strong> The <code style={{ fontSize: 10 }}>-unsigned</code> flag is required for custom UI URLs. This is a DuckDB security measure since custom UIs have full access to your data.
+				</div>
+
+				<div style={{ marginTop: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>BigQuery in Server Mode</strong>
+					<p style={{ fontSize: 11, color: "var(--text-secondary)", margin: "8px 0" }}>
+						In Server mode, use DuckDB's native BigQuery extension instead of the browser connector:
+					</p>
+					<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "8px", borderRadius: 3, display: "block", lineHeight: 1.6 }}>
+						INSTALL bigquery;<br/>
+						LOAD bigquery;<br/>
+						SELECT * FROM bigquery_scan('project.dataset.table');
+					</code>
+					<p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 8 }}>
+						See <a href="https://duckdb.org/docs/extensions/bigquery" target="_blank" rel="noopener noreferrer" style={linkStyle}>DuckDB BigQuery Extension docs</a> for authentication setup.
+					</p>
 				</div>
 			</div>
 

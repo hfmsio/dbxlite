@@ -4,7 +4,6 @@
  */
 
 import { useMemo } from "react";
-import { shallow } from "zustand/shallow";
 import { useDataSourceStore } from "./store";
 
 // ===== State Selectors =====
