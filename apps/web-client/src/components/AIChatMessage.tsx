@@ -5,7 +5,7 @@
 
 import React from "react";
 import type { ChatMessage } from "../services/ai";
-import { CopyIcon, CheckIcon } from "./Icons";
+import { CheckIcon, CopyIcon } from "./Icons";
 
 interface AIChatMessageProps {
 	message: ChatMessage;
@@ -157,7 +157,10 @@ function TextBlock({ text }: { text: string }) {
 		const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
 		if (headingMatch) {
 			const level = headingMatch[1].length;
-			const sizes = { 1: "16px", 2: "14px", 3: "13px" } as Record<number, string>;
+			const sizes = { 1: "16px", 2: "14px", 3: "13px" } as Record<
+				number,
+				string
+			>;
 			elements.push(
 				<div
 					key={i}
@@ -178,11 +181,7 @@ function TextBlock({ text }: { text: string }) {
 		if (line.match(/^\s*[-*]\s/)) {
 			elements.push(
 				<div key={i} style={{ paddingLeft: "16px", position: "relative" }}>
-					<span
-						style={{ position: "absolute", left: "4px" }}
-					>
-						{"\u2022"}
-					</span>
+					<span style={{ position: "absolute", left: "4px" }}>{"\u2022"}</span>
 					{formatInline(line.replace(/^\s*[-*]\s/, ""))}
 				</div>,
 			);
@@ -217,9 +216,7 @@ function formatInline(text: string): React.ReactNode {
 		}
 		const token = match[0];
 		if (token.startsWith("**")) {
-			parts.push(
-				<strong key={match.index}>{token.slice(2, -2)}</strong>,
-			);
+			parts.push(<strong key={match.index}>{token.slice(2, -2)}</strong>);
 		} else if (token.startsWith("`")) {
 			parts.push(
 				<code
@@ -243,7 +240,7 @@ function formatInline(text: string): React.ReactNode {
 		parts.push(text.slice(lastIndex));
 	}
 
-	return parts.length === 1 ? parts[0] : <>{parts}</>;
+	return parts.length === 1 ? parts[0] : parts;
 }
 
 export function AIChatMessage({ message, onInsertSQL }: AIChatMessageProps) {

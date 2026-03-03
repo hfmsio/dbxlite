@@ -8,14 +8,14 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
 	type AIProviderType,
-	type ChatMessage,
-	type SQLBlock,
 	aiCredentialStore,
 	buildSystemPrompt,
+	type ChatMessage,
 	getCredentialKey,
 	getDefaultModel,
 	getDefaultProvider,
 	getProvider,
+	type SQLBlock,
 } from "../services/ai";
 
 const MAX_MESSAGES = 100;
@@ -91,7 +91,9 @@ export const useAIChatStore = create<AIChatStore>()(
 				if (!apiKey) {
 					// Check generation hasn't changed during async gap
 					if (currentGeneration !== streamGeneration) return;
-					set({ error: "No API key configured. Open Settings > AI to add one." });
+					set({
+						error: "No API key configured. Open Settings > AI to add one.",
+					});
 					return;
 				}
 
@@ -116,7 +118,9 @@ export const useAIChatStore = create<AIChatStore>()(
 				};
 
 				set((s) => ({
-					messages: [...s.messages, userMessage, assistantMessage].slice(-MAX_MESSAGES),
+					messages: [...s.messages, userMessage, assistantMessage].slice(
+						-MAX_MESSAGES,
+					),
 					isStreaming: true,
 					error: null,
 				}));
@@ -163,7 +167,11 @@ export const useAIChatStore = create<AIChatStore>()(
 								error: chunk.error || "Stream error",
 								messages: s.messages.map((m) =>
 									m.id === assistantMessage.id
-										? { ...m, isStreaming: false, content: fullContent || "Error occurred." }
+										? {
+												...m,
+												isStreaming: false,
+												content: fullContent || "Error occurred.",
+											}
 										: m,
 								),
 							}));
@@ -190,9 +198,7 @@ export const useAIChatStore = create<AIChatStore>()(
 						set((s) => ({
 							isStreaming: false,
 							messages: s.messages.map((m) =>
-								m.id === assistantMessage.id
-									? { ...m, isStreaming: false }
-									: m,
+								m.id === assistantMessage.id ? { ...m, isStreaming: false } : m,
 							),
 						}));
 					} else {
@@ -201,7 +207,11 @@ export const useAIChatStore = create<AIChatStore>()(
 							error: (err as Error).message || "Unknown error",
 							messages: s.messages.map((m) =>
 								m.id === assistantMessage.id
-									? { ...m, isStreaming: false, content: m.content || "Error occurred." }
+									? {
+											...m,
+											isStreaming: false,
+											content: m.content || "Error occurred.",
+										}
 									: m,
 							),
 						}));
@@ -242,4 +252,5 @@ export const useAIChatStore = create<AIChatStore>()(
 export const useAIMessages = () => useAIChatStore((s) => s.messages);
 export const useAIStreaming = () => useAIChatStore((s) => s.isStreaming);
 export const useAIError = () => useAIChatStore((s) => s.error);
-export const useAIActiveProvider = () => useAIChatStore((s) => s.activeProvider);
+export const useAIActiveProvider = () =>
+	useAIChatStore((s) => s.activeProvider);

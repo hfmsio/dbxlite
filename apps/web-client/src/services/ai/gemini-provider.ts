@@ -16,7 +16,12 @@ export class GeminiProvider implements AIProvider {
 	readonly type = "gemini" as const;
 	readonly displayName = "Google Gemini";
 	readonly models: AIModelInfo[] = [
-		{ id: "gemini-2.0-flash", name: "Gemini 2.0 Flash", contextWindow: 1048576, isFree: true },
+		{
+			id: "gemini-2.0-flash",
+			name: "Gemini 2.0 Flash",
+			contextWindow: 1048576,
+			isFree: true,
+		},
 	];
 
 	async *streamChat(
@@ -66,7 +71,10 @@ export class GeminiProvider implements AIProvider {
 			} catch {
 				message = errorText;
 			}
-			yield { type: "error", error: `Gemini API error (${response.status}): ${message}` };
+			yield {
+				type: "error",
+				error: `Gemini API error (${response.status}): ${message}`,
+			};
 			return;
 		}
 

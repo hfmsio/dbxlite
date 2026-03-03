@@ -16,8 +16,16 @@ export class AnthropicProvider implements AIProvider {
 	readonly type = "anthropic" as const;
 	readonly displayName = "Anthropic";
 	readonly models: AIModelInfo[] = [
-		{ id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", contextWindow: 200000 },
-		{ id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", contextWindow: 200000 },
+		{
+			id: "claude-sonnet-4-6",
+			name: "Claude Sonnet 4.6",
+			contextWindow: 200000,
+		},
+		{
+			id: "claude-haiku-4-5-20251001",
+			name: "Claude Haiku 4.5",
+			contextWindow: 200000,
+		},
 	];
 
 	async *streamChat(
@@ -62,7 +70,10 @@ export class AnthropicProvider implements AIProvider {
 			} catch {
 				message = errorText;
 			}
-			yield { type: "error", error: `Anthropic API error (${response.status}): ${message}` };
+			yield {
+				type: "error",
+				error: `Anthropic API error (${response.status}): ${message}`,
+			};
 			return;
 		}
 
@@ -101,7 +112,10 @@ export class AnthropicProvider implements AIProvider {
 							yield { type: "done" };
 							return;
 						} else if (parsed.type === "error") {
-							yield { type: "error", error: parsed.error?.message || "Stream error" };
+							yield {
+								type: "error",
+								error: parsed.error?.message || "Stream error",
+							};
 							return;
 						}
 					} catch {

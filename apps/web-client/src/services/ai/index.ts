@@ -4,6 +4,14 @@
 
 import { CredentialStore } from "@ide/storage";
 
+export {
+	getAllProviderTypes,
+	getCredentialKey,
+	getDefaultModel,
+	getDefaultProvider,
+	getProvider,
+} from "./provider-registry";
+export { buildSystemPrompt } from "./system-prompt";
 export type {
 	AIMessage,
 	AIModelInfo,
@@ -14,16 +22,6 @@ export type {
 	ChatMessage,
 	SQLBlock,
 } from "./types";
-
-export {
-	getAllProviderTypes,
-	getCredentialKey,
-	getDefaultModel,
-	getDefaultProvider,
-	getProvider,
-} from "./provider-registry";
-
-export { buildSystemPrompt } from "./system-prompt";
 
 /**
  * Obfuscated credential store for AI API keys.
@@ -135,9 +133,7 @@ class ObfuscatedCredentialStore {
 		if (typeof raw === "string" && raw.length > 24) {
 			try {
 				const key = await this.getDeviceKey();
-				const combined = Uint8Array.from(atob(raw), (c) =>
-					c.charCodeAt(0),
-				);
+				const combined = Uint8Array.from(atob(raw), (c) => c.charCodeAt(0));
 				const iv = combined.slice(0, 12);
 				const ciphertext = combined.slice(12);
 				const decrypted = await crypto.subtle.decrypt(

@@ -47,7 +47,9 @@ export default function AISettings({ showToast }: AISettingsProps) {
 		groq: false,
 	});
 	const [testing, setTesting] = useState(false);
-	const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
+	const [testResult, setTestResult] = useState<"success" | "error" | null>(
+		null,
+	);
 	const testAbortRef = useRef<AbortController | null>(null);
 
 	// Abort any in-flight test on unmount
@@ -71,7 +73,10 @@ export default function AISettings({ showToast }: AISettingsProps) {
 
 	const handleSaveKey = useCallback(async () => {
 		if (!apiKey.trim()) return;
-		await aiCredentialStore.save(getCredentialKey(activeProvider), apiKey.trim());
+		await aiCredentialStore.save(
+			getCredentialKey(activeProvider),
+			apiKey.trim(),
+		);
 		setSavedKeys((prev) => ({ ...prev, [activeProvider]: true }));
 		setApiKey("");
 		showToast?.("API key saved", "success", 2000);
@@ -109,11 +114,15 @@ export default function AISettings({ showToast }: AISettingsProps) {
 			];
 
 			let gotResponse = false;
-			for await (const chunk of provider.streamChat(testMessages, {
-				apiKey: key,
-				model,
-				maxTokens: 10,
-			}, controller.signal)) {
+			for await (const chunk of provider.streamChat(
+				testMessages,
+				{
+					apiKey: key,
+					model,
+					maxTokens: 10,
+				},
+				controller.signal,
+			)) {
 				if (chunk.type === "text") {
 					gotResponse = true;
 					break;
@@ -133,11 +142,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 		} catch (err) {
 			if ((err as Error).name === "AbortError") return;
 			setTestResult("error");
-			showToast?.(
-				`Test failed: ${(err as Error).message}`,
-				"error",
-				4000,
-			);
+			showToast?.(`Test failed: ${(err as Error).message}`, "error", 4000);
 		} finally {
 			testAbortRef.current = null;
 			setTesting(false);
@@ -372,9 +377,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 				<label style={labelStyle}>Model</label>
 				<select
 					value={selectedModels[activeProvider]}
-					onChange={(e) =>
-						setSelectedModel(activeProvider, e.target.value)
-					}
+					onChange={(e) => setSelectedModel(activeProvider, e.target.value)}
 					style={{
 						width: "100%",
 						padding: "8px 12px",
@@ -442,16 +445,30 @@ export default function AISettings({ showToast }: AISettingsProps) {
 					color: "var(--text-muted)",
 				}}
 			>
-				<div style={{ fontWeight: 500, marginBottom: "4px", color: "var(--text-secondary)" }}>
+				<div
+					style={{
+						fontWeight: 500,
+						marginBottom: "4px",
+						color: "var(--text-secondary)",
+					}}
+				>
 					Free tier options
 				</div>
-				<div><strong>Google Gemini</strong> - 15 requests/min, no credit card needed</div>
-				<div><strong>Groq</strong> - 30 requests/min, free for smaller models</div>
-				<div style={{ marginTop: "4px", fontSize: "11px" }}>
-					API keys are stored locally in your browser (obfuscated, not encrypted). They are never sent to any server except the AI provider you choose.
+				<div>
+					<strong>Google Gemini</strong> - 15 requests/min, no credit card
+					needed
+				</div>
+				<div>
+					<strong>Groq</strong> - 30 requests/min, free for smaller models
 				</div>
 				<div style={{ marginTop: "4px", fontSize: "11px" }}>
-					Note: Gemini sends the API key as a URL parameter (required by their browser API). Other providers use secure HTTP headers.
+					API keys are encrypted locally in your browser (AES-GCM with a
+					device-bound key). They are never sent to any server except the AI
+					provider you choose.
+				</div>
+				<div style={{ marginTop: "4px", fontSize: "11px" }}>
+					Note: Gemini sends the API key as a URL parameter (required by their
+					browser API). Other providers use secure HTTP headers.
 				</div>
 			</div>
 		</div>

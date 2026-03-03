@@ -61,7 +61,10 @@ export class OpenAICompatibleProvider implements AIProvider {
 			} catch {
 				message = errorText;
 			}
-			yield { type: "error", error: `${this.displayName} API error (${response.status}): ${message}` };
+			yield {
+				type: "error",
+				error: `${this.displayName} API error (${response.status}): ${message}`,
+			};
 			return;
 		}
 

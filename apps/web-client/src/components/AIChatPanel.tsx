@@ -50,7 +50,9 @@ export function AIChatPanel({
 	useEffect(() => {
 		let cancelled = false;
 		(async () => {
-			const key = await aiCredentialStore.load(getCredentialKey(activeProvider));
+			const key = await aiCredentialStore.load(
+				getCredentialKey(activeProvider),
+			);
 			if (!cancelled) setHasApiKey(!!key);
 		})();
 		return () => {
@@ -61,7 +63,10 @@ export function AIChatPanel({
 	// Close on ESC only if focus is inside the panel
 	useEffect(() => {
 		const handleEsc = (e: KeyboardEvent) => {
-			if (e.key === "Escape" && panelRef.current?.contains(document.activeElement)) {
+			if (
+				e.key === "Escape" &&
+				panelRef.current?.contains(document.activeElement)
+			) {
 				onClose();
 			}
 		};
@@ -229,15 +234,13 @@ export function AIChatPanel({
 				) : messages.length === 0 ? (
 					<EmptyState />
 				) : (
-					<>
-						{messages.map((msg) => (
-							<AIChatMessage
-								key={msg.id}
-								message={msg}
-								onInsertSQL={onInsertSQL}
-							/>
-						))}
-					</>
+					messages.map((msg) => (
+						<AIChatMessage
+							key={msg.id}
+							message={msg}
+							onInsertSQL={onInsertSQL}
+						/>
+					))
 				)}
 				{error && (
 					<div
@@ -349,8 +352,7 @@ export function AIChatPanel({
 						onInput={(e) => {
 							const target = e.currentTarget;
 							target.style.height = "auto";
-							target.style.height =
-								Math.min(target.scrollHeight, 120) + "px";
+							target.style.height = Math.min(target.scrollHeight, 120) + "px";
 						}}
 						onFocus={(e) => {
 							e.currentTarget.style.borderColor = "var(--accent)";
@@ -443,11 +445,26 @@ function WelcomeCard({
 	activeProvider: AIProviderType;
 	onSelectProvider: (p: AIProviderType) => void;
 }) {
-	const providers: { type: AIProviderType; name: string; desc: string; free: boolean }[] = [
-		{ type: "gemini", name: "Google Gemini", desc: "Free - 15 req/min", free: true },
+	const providers: {
+		type: AIProviderType;
+		name: string;
+		desc: string;
+		free: boolean;
+	}[] = [
+		{
+			type: "gemini",
+			name: "Google Gemini",
+			desc: "Free - 15 req/min",
+			free: true,
+		},
 		{ type: "groq", name: "Groq", desc: "Free - 30 req/min", free: true },
 		{ type: "openai", name: "OpenAI", desc: "Paid - GPT-4o", free: false },
-		{ type: "anthropic", name: "Anthropic", desc: "Paid - Claude", free: false },
+		{
+			type: "anthropic",
+			name: "Anthropic",
+			desc: "Paid - Claude",
+			free: false,
+		},
 	];
 
 	const apiKeyUrls: Record<AIProviderType, string> = {
@@ -464,10 +481,7 @@ function WelcomeCard({
 				padding: "32px 16px",
 			}}
 		>
-			<SparklesIcon
-				size={40}
-				style={{ marginBottom: "16px", opacity: 0.4 }}
-			/>
+			<SparklesIcon size={40} style={{ marginBottom: "16px", opacity: 0.4 }} />
 			<h4
 				style={{
 					margin: "0 0 8px",
@@ -573,10 +587,7 @@ function EmptyState() {
 				color: "var(--text-muted)",
 			}}
 		>
-			<SparklesIcon
-				size={48}
-				style={{ marginBottom: "16px", opacity: 0.2 }}
-			/>
+			<SparklesIcon size={48} style={{ marginBottom: "16px", opacity: 0.2 }} />
 			<div style={{ fontSize: "14px", marginBottom: "6px" }}>
 				Ask anything about SQL
 			</div>
