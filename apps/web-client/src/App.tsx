@@ -64,6 +64,8 @@ function AppContent() {
 		setShowToastHistory,
 		showExamples,
 		setShowExamples,
+		showAIChat,
+		setShowAIChat,
 		showExplorer,
 		setShowExplorer,
 		toggleExplorer,
@@ -521,15 +523,27 @@ function AppContent() {
 
 	const showExamplesButton = useSettingsStore((s) => s.showExamplesButton);
 
-	// Toggle examples with mutual exclusivity (closes toast history when opening)
+	// Toggle examples with mutual exclusivity (closes toast history and AI chat when opening)
 	const toggleExamples = useCallback(() => {
 		setShowExamples((prev) => {
 			if (!prev) {
 				setShowToastHistory(false);
+				setShowAIChat(false);
 			}
 			return !prev;
 		});
-	}, [setShowExamples, setShowToastHistory]);
+	}, [setShowExamples, setShowToastHistory, setShowAIChat]);
+
+	// Toggle AI chat with mutual exclusivity
+	const toggleAIChat = useCallback(() => {
+		setShowAIChat((prev) => {
+			if (!prev) {
+				setShowToastHistory(false);
+				setShowExamples(false);
+			}
+			return !prev;
+		});
+	}, [setShowAIChat, setShowToastHistory, setShowExamples]);
 
 	useKeyboardShortcuts({
 		onNewTab: handleTabAdd,
@@ -540,6 +554,7 @@ function AppContent() {
 		onNextTab: handleNextTab,
 		onPrevTab: handlePrevTab,
 		onRotateTheme: handleRotateTheme,
+		onToggleAIChat: toggleAIChat,
 		canCloseTab: tabs.length > 1,
 	});
 
@@ -568,6 +583,8 @@ function AppContent() {
 				showSettings={showSettings}
 				onToggleSettings={() => setShowSettings(!showSettings)}
 				onOpenServerSettings={() => openSettings("server")}
+				showAIChat={showAIChat}
+				onToggleAIChat={toggleAIChat}
 			/>
 
 			<TabBar
@@ -765,6 +782,12 @@ function AppContent() {
 				onConflictReload={handleConflictReload}
 				onConflictSaveAs={handleConflictSaveAs}
 				onCancelConflict={() => setFileConflict(null)}
+				showAIChat={showAIChat}
+				onCloseAIChat={() => setShowAIChat(false)}
+				onInsertSQL={(sql) => {
+					editorRef.current?.insertAtCursor(sql);
+				}}
+				getEditorContent={() => editorRef.current?.getValue() || ""}
 			/>
 		</div>
 	);

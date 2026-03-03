@@ -14,6 +14,7 @@ export function useUIVisibility() {
 	const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
 	const [showToastHistory, setShowToastHistory] = useState(false);
 	const [showExamples, setShowExamples] = useState(false);
+	const [showAIChat, setShowAIChat] = useState(false);
 	const [showExplorer, setShowExplorer] = useState(() => {
 		try {
 			const saved = localStorage.getItem("dbxlite-show-explorer");
@@ -61,6 +62,8 @@ export function useUIVisibility() {
 		setShowToastHistory,
 		showExamples,
 		setShowExamples,
+		showAIChat,
+		setShowAIChat,
 		showExplorer,
 		setShowExplorer,
 		toggleExplorer,

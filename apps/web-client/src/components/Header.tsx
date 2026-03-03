@@ -9,6 +9,7 @@ import {
 	PlayIcon,
 	SaveIcon,
 	SettingsIcon,
+	SparklesIcon,
 	StopIcon,
 	XCircleIcon,
 } from "./Icons";
@@ -50,6 +51,10 @@ interface HeaderProps {
 	showSettings: boolean;
 	onToggleSettings: () => void;
 	onOpenServerSettings?: () => void;
+
+	// AI Chat
+	showAIChat?: boolean;
+	onToggleAIChat?: () => void;
 }
 
 export default function Header({
@@ -75,6 +80,8 @@ export default function Header({
 	showSettings: _showSettings,
 	onToggleSettings,
 	onOpenServerSettings,
+	showAIChat: _showAIChat,
+	onToggleAIChat,
 }: HeaderProps) {
 	const { isHttpMode } = useMode();
 	const isDisabled =
@@ -233,6 +240,18 @@ export default function Header({
 						</option>
 					</select>
 				</div>
+				{onToggleAIChat && (
+					<button
+						onClick={onToggleAIChat}
+						className="file-button"
+						title="AI SQL Assistant (Cmd/Ctrl+Shift+A)"
+						aria-label="Toggle AI SQL Assistant"
+						style={{ display: "flex", alignItems: "center", gap: "6px" }}
+					>
+						<SparklesIcon size={16} aria-hidden="true" />
+						AI
+					</button>
+				)}
 				<ThemeToggle />
 				<button
 					className="settings-button"
