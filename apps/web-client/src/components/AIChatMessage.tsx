@@ -153,6 +153,27 @@ function TextBlock({ text }: { text: string }) {
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
 
+		// Headings
+		const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+		if (headingMatch) {
+			const level = headingMatch[1].length;
+			const sizes = { 1: "16px", 2: "14px", 3: "13px" } as Record<number, string>;
+			elements.push(
+				<div
+					key={i}
+					style={{
+						fontSize: sizes[level] || "13px",
+						fontWeight: 600,
+						marginTop: i > 0 ? "8px" : 0,
+						marginBottom: "4px",
+					}}
+				>
+					{formatInline(headingMatch[2])}
+				</div>,
+			);
+			continue;
+		}
+
 		// List items
 		if (line.match(/^\s*[-*]\s/)) {
 			elements.push(

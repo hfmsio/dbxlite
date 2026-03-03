@@ -5,9 +5,9 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { CredentialStore } from "@ide/storage";
 import {
 	type AIProviderType,
+	aiCredentialStore,
 	getAllProviderTypes,
 	getCredentialKey,
 	getProvider,
@@ -19,15 +19,13 @@ import { SendIcon, SparklesIcon, StopIcon, TrashIcon, XIcon } from "./Icons";
 interface AIChatPanelProps {
 	onClose: () => void;
 	onInsertSQL?: (sql: string) => void;
-	editorContent?: string;
+	getEditorContent?: () => string;
 }
-
-const credentialStore = new CredentialStore();
 
 export function AIChatPanel({
 	onClose,
 	onInsertSQL,
-	editorContent,
+	getEditorContent,
 }: AIChatPanelProps) {
 	const panelRef = useRef<HTMLDivElement>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -40,6 +38,7 @@ export function AIChatPanel({
 		isStreaming,
 		error,
 		activeProvider,
+		selectedModels,
 		sendMessage,
 		stopStreaming,
 		clearMessages,
@@ -51,7 +50,7 @@ export function AIChatPanel({
 	useEffect(() => {
 		let cancelled = false;
 		(async () => {
-			const key = await credentialStore.load(getCredentialKey(activeProvider));
+			const key = await aiCredentialStore.load(getCredentialKey(activeProvider));
 			if (!cancelled) setHasApiKey(!!key);
 		})();
 		return () => {
@@ -59,10 +58,12 @@ export function AIChatPanel({
 		};
 	}, [activeProvider]);
 
-	// Close on ESC
+	// Close on ESC only if focus is inside the panel
 	useEffect(() => {
 		const handleEsc = (e: KeyboardEvent) => {
-			if (e.key === "Escape") onClose();
+			if (e.key === "Escape" && panelRef.current?.contains(document.activeElement)) {
+				onClose();
+			}
 		};
 		document.addEventListener("keydown", handleEsc);
 		return () => document.removeEventListener("keydown", handleEsc);
@@ -77,8 +78,8 @@ export function AIChatPanel({
 		const trimmed = input.trim();
 		if (!trimmed || isStreaming) return;
 		setInput("");
-		sendMessage(trimmed, editorContent);
-	}, [input, isStreaming, sendMessage, editorContent]);
+		sendMessage(trimmed, getEditorContent?.());
+	}, [input, isStreaming, sendMessage, getEditorContent]);
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && !e.shiftKey) {
@@ -89,7 +90,7 @@ export function AIChatPanel({
 
 	const handleQuickAction = (prompt: string) => {
 		if (isStreaming) return;
-		sendMessage(prompt, editorContent);
+		sendMessage(prompt, getEditorContent?.());
 	};
 
 	const provider = getProvider(activeProvider);
@@ -165,6 +166,7 @@ export function AIChatPanel({
 						<button
 							onClick={clearMessages}
 							title="Clear chat"
+							aria-label="Clear chat history"
 							style={{
 								background: "transparent",
 								border: "none",
@@ -187,6 +189,8 @@ export function AIChatPanel({
 					)}
 					<button
 						onClick={onClose}
+						title="Close AI assistant"
+						aria-label="Close AI assistant panel"
 						style={{
 							background: "transparent",
 							border: "none",
@@ -271,7 +275,7 @@ export function AIChatPanel({
 						<button
 							key={action.label}
 							onClick={() => handleQuickAction(action.prompt)}
-							disabled={isStreaming || !editorContent?.trim()}
+							disabled={isStreaming}
 							style={{
 								background: "var(--bg-tertiary)",
 								border: "1px solid var(--border-light)",
@@ -279,15 +283,12 @@ export function AIChatPanel({
 								padding: "4px 12px",
 								fontSize: "12px",
 								color: "var(--text-secondary)",
-								cursor:
-									isStreaming || !editorContent?.trim()
-										? "not-allowed"
-										: "pointer",
-								opacity: isStreaming || !editorContent?.trim() ? 0.5 : 1,
+								cursor: isStreaming ? "not-allowed" : "pointer",
+								opacity: isStreaming ? 0.5 : 1,
 								transition: "all 0.2s",
 							}}
 							onMouseEnter={(e) => {
-								if (!isStreaming && editorContent?.trim()) {
+								if (!isStreaming) {
 									e.currentTarget.style.background = "var(--bg-quaternary)";
 									e.currentTarget.style.color = "var(--text-primary)";
 								}
@@ -362,6 +363,7 @@ export function AIChatPanel({
 						<button
 							onClick={stopStreaming}
 							title="Stop generating"
+							aria-label="Stop generating response"
 							style={{
 								background: "#ef4444",
 								color: "white",
@@ -383,6 +385,7 @@ export function AIChatPanel({
 							onClick={handleSend}
 							disabled={!input.trim() || hasApiKey === false}
 							title="Send message"
+							aria-label="Send message"
 							style={{
 								background:
 									input.trim() && hasApiKey !== false
@@ -419,7 +422,7 @@ export function AIChatPanel({
 						textAlign: "right",
 					}}
 				>
-					{provider.displayName} - {useAIChatStore.getState().selectedModels[activeProvider]}
+					{provider.displayName} - {selectedModels[activeProvider]}
 				</div>
 			</div>
 

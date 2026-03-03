@@ -46,6 +46,8 @@ export class GeminiProvider implements AIProvider {
 			};
 		}
 
+		// Note: Gemini requires API key as URL param for browser CORS compatibility.
+		// Header-based auth is not supported for direct browser requests.
 		const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:streamGenerateContent?alt=sse&key=${config.apiKey}`;
 
 		const response = await fetch(url, {

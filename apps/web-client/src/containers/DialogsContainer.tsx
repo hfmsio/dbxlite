@@ -39,7 +39,7 @@ interface DialogsContainerProps {
 	showAIChat?: boolean;
 	onCloseAIChat?: () => void;
 	onInsertSQL?: (sql: string) => void;
-	editorContent?: string;
+	getEditorContent?: () => string;
 }
 
 export function DialogsContainer({
@@ -65,7 +65,7 @@ export function DialogsContainer({
 	showAIChat,
 	onCloseAIChat,
 	onInsertSQL,
-	editorContent,
+	getEditorContent,
 }: DialogsContainerProps) {
 	return (
 		<>
@@ -91,7 +91,7 @@ export function DialogsContainer({
 				<AIChatPanel
 					onClose={onCloseAIChat}
 					onInsertSQL={onInsertSQL}
-					editorContent={editorContent}
+					getEditorContent={getEditorContent}
 				/>
 			)}
 

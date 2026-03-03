@@ -787,7 +787,7 @@ function AppContent() {
 				onInsertSQL={(sql) => {
 					editorRef.current?.insertAtCursor(sql);
 				}}
-				editorContent={editorRef.current?.getValue() || ""}
+				getEditorContent={() => editorRef.current?.getValue() || ""}
 			/>
 		</div>
 	);

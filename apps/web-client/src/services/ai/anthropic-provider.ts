@@ -17,7 +17,7 @@ export class AnthropicProvider implements AIProvider {
 	readonly displayName = "Anthropic";
 	readonly models: AIModelInfo[] = [
 		{ id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", contextWindow: 200000 },
-		{ id: "claude-haiku-4-20250414", name: "Claude Haiku 4", contextWindow: 200000 },
+		{ id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", contextWindow: 200000 },
 	];
 
 	async *streamChat(

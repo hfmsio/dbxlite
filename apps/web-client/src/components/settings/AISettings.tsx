@@ -3,10 +3,10 @@
  * Settings tab for configuring AI providers, API keys, and models.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { CredentialStore } from "@ide/storage";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type AIProviderType,
+	aiCredentialStore,
 	getAllProviderTypes,
 	getCredentialKey,
 	getProvider,
@@ -21,8 +21,6 @@ interface AISettingsProps {
 		duration?: number,
 	) => void;
 }
-
-const credentialStore = new CredentialStore();
 
 const apiKeyUrls: Record<AIProviderType, string> = {
 	gemini: "https://aistudio.google.com/app/apikey",
@@ -50,13 +48,21 @@ export default function AISettings({ showToast }: AISettingsProps) {
 	});
 	const [testing, setTesting] = useState(false);
 	const [testResult, setTestResult] = useState<"success" | "error" | null>(null);
+	const testAbortRef = useRef<AbortController | null>(null);
+
+	// Abort any in-flight test on unmount
+	useEffect(() => {
+		return () => {
+			testAbortRef.current?.abort();
+		};
+	}, []);
 
 	// Load which providers have saved keys
 	useEffect(() => {
 		(async () => {
 			const result: Record<string, boolean> = {};
 			for (const type of getAllProviderTypes()) {
-				const key = await credentialStore.load(getCredentialKey(type));
+				const key = await aiCredentialStore.load(getCredentialKey(type));
 				result[type] = !!key;
 			}
 			setSavedKeys(result as Record<AIProviderType, boolean>);
@@ -65,14 +71,14 @@ export default function AISettings({ showToast }: AISettingsProps) {
 
 	const handleSaveKey = useCallback(async () => {
 		if (!apiKey.trim()) return;
-		await credentialStore.save(getCredentialKey(activeProvider), apiKey.trim());
+		await aiCredentialStore.save(getCredentialKey(activeProvider), apiKey.trim());
 		setSavedKeys((prev) => ({ ...prev, [activeProvider]: true }));
 		setApiKey("");
 		showToast?.("API key saved", "success", 2000);
 	}, [apiKey, activeProvider, showToast]);
 
 	const handleRemoveKey = useCallback(async () => {
-		await credentialStore.save(getCredentialKey(activeProvider), null);
+		await aiCredentialStore.save(getCredentialKey(activeProvider), null);
 		setSavedKeys((prev) => ({ ...prev, [activeProvider]: false }));
 		showToast?.("API key removed", "info", 2000);
 	}, [activeProvider, showToast]);
@@ -80,8 +86,14 @@ export default function AISettings({ showToast }: AISettingsProps) {
 	const handleTestKey = useCallback(async () => {
 		setTesting(true);
 		setTestResult(null);
+
+		// Abort any previous test
+		testAbortRef.current?.abort();
+		const controller = new AbortController();
+		testAbortRef.current = controller;
+
 		try {
-			const key = (await credentialStore.load(
+			const key = (await aiCredentialStore.load(
 				getCredentialKey(activeProvider),
 			)) as string | null;
 			if (!key) {
@@ -101,7 +113,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 				apiKey: key,
 				model,
 				maxTokens: 10,
-			})) {
+			}, controller.signal)) {
 				if (chunk.type === "text") {
 					gotResponse = true;
 					break;
@@ -119,6 +131,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 				showToast?.("No response received", "error", 2000);
 			}
 		} catch (err) {
+			if ((err as Error).name === "AbortError") return;
 			setTestResult("error");
 			showToast?.(
 				`Test failed: ${(err as Error).message}`,
@@ -126,6 +139,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 				4000,
 			);
 		} finally {
+			testAbortRef.current = null;
 			setTesting(false);
 		}
 	}, [activeProvider, selectedModels, showToast]);
@@ -434,7 +448,10 @@ export default function AISettings({ showToast }: AISettingsProps) {
 				<div><strong>Google Gemini</strong> - 15 requests/min, no credit card needed</div>
 				<div><strong>Groq</strong> - 30 requests/min, free for smaller models</div>
 				<div style={{ marginTop: "4px", fontSize: "11px" }}>
-					API keys are stored locally in your browser. They are never sent to any server except the AI provider you choose.
+					API keys are stored locally in your browser (obfuscated, not encrypted). They are never sent to any server except the AI provider you choose.
+				</div>
+				<div style={{ marginTop: "4px", fontSize: "11px" }}>
+					Note: Gemini sends the API key as a URL parameter (required by their browser API). Other providers use secure HTTP headers.
 				</div>
 			</div>
 		</div>

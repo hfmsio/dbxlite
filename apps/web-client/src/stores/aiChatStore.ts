@@ -6,11 +6,11 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { CredentialStore } from "@ide/storage";
 import {
 	type AIProviderType,
 	type ChatMessage,
 	type SQLBlock,
+	aiCredentialStore,
 	buildSystemPrompt,
 	getCredentialKey,
 	getDefaultModel,
@@ -19,8 +19,6 @@ import {
 } from "../services/ai";
 
 const MAX_MESSAGES = 100;
-
-const credentialStore = new CredentialStore();
 
 /** Extract SQL code blocks from markdown text */
 function extractSQLBlocks(content: string): SQLBlock[] {
@@ -54,6 +52,7 @@ interface AIChatActions {
 type AIChatStore = AIChatState & AIChatActions;
 
 let abortController: AbortController | null = null;
+let streamGeneration = 0;
 
 export const useAIChatStore = create<AIChatStore>()(
 	persist(
@@ -73,17 +72,31 @@ export const useAIChatStore = create<AIChatStore>()(
 				const state = get();
 				if (state.isStreaming) return;
 
+				// Abort any lingering previous stream
+				if (abortController) {
+					abortController.abort();
+					abortController = null;
+				}
+
+				// Capture generation to detect if another stream starts during our async gaps
+				const currentGeneration = ++streamGeneration;
+
 				const providerType = state.activeProvider;
 				const model = state.selectedModels[providerType];
 
 				// Load API key from credential store
-				const apiKey = (await credentialStore.load(
+				const apiKey = (await aiCredentialStore.load(
 					getCredentialKey(providerType),
 				)) as string | null;
 				if (!apiKey) {
+					// Check generation hasn't changed during async gap
+					if (currentGeneration !== streamGeneration) return;
 					set({ error: "No API key configured. Open Settings > AI to add one." });
 					return;
 				}
+
+				// Re-check after async gap
+				if (currentGeneration !== streamGeneration) return;
 
 				// Add user message
 				const userMessage: ChatMessage = {
