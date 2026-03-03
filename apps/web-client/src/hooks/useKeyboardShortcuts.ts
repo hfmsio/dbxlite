@@ -9,6 +9,7 @@ interface KeyboardShortcutsOptions {
 	onNextTab?: () => void;
 	onPrevTab?: () => void;
 	onRotateTheme?: () => void;
+	onToggleAIChat?: () => void;
 	canCloseTab: boolean;
 }
 
@@ -21,6 +22,7 @@ export function useKeyboardShortcuts({
 	onNextTab,
 	onPrevTab,
 	onRotateTheme,
+	onToggleAIChat,
 	canCloseTab,
 }: KeyboardShortcutsOptions) {
 	useEffect(() => {
@@ -75,9 +77,15 @@ export function useKeyboardShortcuts({
 				e.preventDefault();
 				onRotateTheme();
 			}
+
+			// Cmd/Ctrl+Shift+A: Toggle AI Chat
+			if (cmdOrCtrl && e.shiftKey && e.key.toLowerCase() === "a" && onToggleAIChat) {
+				e.preventDefault();
+				onToggleAIChat();
+			}
 		};
 
 		document.addEventListener("keydown", handleKeyDown);
 		return () => document.removeEventListener("keydown", handleKeyDown);
-	}, [onNewTab, onCloseTab, onSave, onOpen, onToggleExplorer, onNextTab, onPrevTab, onRotateTheme, canCloseTab]);
+	}, [onNewTab, onCloseTab, onSave, onOpen, onToggleExplorer, onNextTab, onPrevTab, onRotateTheme, onToggleAIChat, canCloseTab]);
 }

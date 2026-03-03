@@ -1,3 +1,4 @@
+import { AIChatPanel } from "../components/AIChatPanel";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ExamplesPanel } from "../components/ExamplesPanel";
 import { FileConflictDialog } from "../components/FileConflictDialog";
@@ -34,6 +35,11 @@ interface DialogsContainerProps {
 	onConflictReload: () => void;
 	onConflictSaveAs: () => void;
 	onCancelConflict: () => void;
+	// AI Chat Panel
+	showAIChat?: boolean;
+	onCloseAIChat?: () => void;
+	onInsertSQL?: (sql: string) => void;
+	editorContent?: string;
 }
 
 export function DialogsContainer({
@@ -56,6 +62,10 @@ export function DialogsContainer({
 	onConflictReload,
 	onConflictSaveAs,
 	onCancelConflict,
+	showAIChat,
+	onCloseAIChat,
+	onInsertSQL,
+	editorContent,
 }: DialogsContainerProps) {
 	return (
 		<>
@@ -73,6 +83,15 @@ export function DialogsContainer({
 					history={toastHistory}
 					onClose={onCloseToastHistory}
 					onClear={onClearHistory}
+				/>
+			)}
+
+			{/* AI Chat Panel */}
+			{showAIChat && onCloseAIChat && (
+				<AIChatPanel
+					onClose={onCloseAIChat}
+					onInsertSQL={onInsertSQL}
+					editorContent={editorContent}
 				/>
 			)}
 

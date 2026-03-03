@@ -91,6 +91,7 @@ export interface EditorPaneHandle {
 	getSelection: () => string;
 	getCursorPosition: () => number;
 	setCursorPosition: (offset: number) => void;
+	insertAtCursor: (text: string) => void;
 	focus: () => void;
 }
 
@@ -221,6 +222,32 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 				const position = model.getPositionAt(offset);
 				editor.setPosition(position);
 				editor.revealPositionInCenterIfOutsideViewport(position, monaco.editor.ScrollType.Smooth);
+			},
+			insertAtCursor: (text: string) => {
+				const editor = editorInstanceRef.current;
+				if (!editor) return;
+				const position = editor.getPosition();
+				if (!position) return;
+				editor.executeEdits("ai-insert", [
+					{
+						range: new monaco.Range(
+							position.lineNumber,
+							position.column,
+							position.lineNumber,
+							position.column,
+						),
+						text,
+					},
+				]);
+				// Move cursor to end of inserted text
+				const model = editor.getModel();
+				if (model) {
+					const newPosition = model.getPositionAt(
+						model.getOffsetAt(position) + text.length,
+					);
+					editor.setPosition(newPosition);
+				}
+				editor.focus();
 			},
 			focus: () => {
 				if (!editorInstanceRef.current) return;

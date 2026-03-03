@@ -1268,3 +1268,58 @@ export function GlobeIcon({
         </svg>
     );
 }
+
+// Sparkles icon for AI Assistant
+export function SparklesIcon({
+    size = 16,
+    color = "currentColor",
+    className,
+    style,
+}: IconProps) {
+    return (
+        <svg
+            width={size}
+            height={size}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={color}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={className}
+            style={style}
+        >
+            <path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275L21 12l-5.813 1.912a2 2 0 0 0-1.275 1.275L12 21l-1.912-5.813a2 2 0 0 0-1.275-1.275L3 12l5.813-1.912a2 2 0 0 0 1.275-1.275L12 3z"></path>
+            <path d="M5 3v4"></path>
+            <path d="M3 5h4"></path>
+            <path d="M19 17v4"></path>
+            <path d="M17 19h4"></path>
+        </svg>
+    );
+}
+
+// Send icon for chat
+export function SendIcon({
+    size = 16,
+    color = "currentColor",
+    className,
+    style,
+}: IconProps) {
+    return (
+        <svg
+            width={size}
+            height={size}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke={color}
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={className}
+            style={style}
+        >
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+        </svg>
+    );
+}

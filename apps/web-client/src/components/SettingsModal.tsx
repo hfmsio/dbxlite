@@ -3,6 +3,7 @@ import { DatabaseIcon } from "./Icons";
 import { useMode } from "../hooks/useMode";
 import {
 	AboutSettings,
+	AISettings,
 	AppearanceSettings,
 	ConnectionsSettings,
 	FormattingSettings,
@@ -10,7 +11,7 @@ import {
 	ServerSettings,
 } from "./settings";
 
-export type SettingsTab = "appearance" | "connections" | "formatting" | "help" | "about" | "server";
+export type SettingsTab = "appearance" | "connections" | "formatting" | "help" | "about" | "server" | "ai";
 
 interface SettingsModalProps {
 	fontSize: number;
@@ -224,6 +225,39 @@ export default function SettingsModal({
 					Formatting
 				</button>
 				<button
+					onClick={() => setActiveTab("ai")}
+					style={{
+						padding: "12px 24px",
+						background:
+							activeTab === "ai" ? "var(--accent)" : "transparent",
+						color:
+							activeTab === "ai" ? "white" : "var(--text-secondary)",
+						border: "none",
+						borderRadius: "8px 8px 0 0",
+						cursor: "pointer",
+						fontWeight: activeTab === "ai" ? "600" : "normal",
+						fontSize: "14px",
+						transition: "all 0.2s",
+						display: "flex",
+						alignItems: "center",
+						gap: "8px",
+					}}
+				>
+					<svg
+						width="16"
+						height="16"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					>
+						<path d="M12 3l1.912 5.813a2 2 0 0 0 1.275 1.275L21 12l-5.813 1.912a2 2 0 0 0-1.275 1.275L12 21l-1.912-5.813a2 2 0 0 0-1.275-1.275L3 12l5.813-1.912a2 2 0 0 0 1.275-1.275L12 3z"></path>
+					</svg>
+					AI
+				</button>
+				<button
 					onClick={() => setActiveTab("help")}
 					style={{
 						padding: "12px 24px",
@@ -345,6 +379,9 @@ export default function SettingsModal({
 
 				{/* About Tab */}
 				{activeTab === "about" && <AboutSettings />}
+
+				{/* AI Tab */}
+				{activeTab === "ai" && <AISettings showToast={showToast} />}
 
 				{/* Server Tab - HTTP mode only */}
 				{activeTab === "server" && <ServerSettings />}
