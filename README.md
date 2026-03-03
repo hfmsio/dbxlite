@@ -8,6 +8,8 @@
 
 A modern SQL workbench for DuckDB. Use it with your local DuckDB CLI for full power, or run entirely in-browser with zero install.
 
+**New: AI SQL Assistant** -- Write, explain, fix, and optimize SQL with a built-in chat assistant. Free tiers available via Google Gemini and Groq. Open with `Cmd/Ctrl+Shift+A` or the sparkles button.
+
 ## Quick Start
 
 ### Server Mode (Recommended)
@@ -71,8 +73,11 @@ Query BigQuery directly with cost estimates before you run. In Server mode, use 
 **Share Executable SQL**
 Share queries via URL that run on click. Built-in examples include getting started, remote datasets, DuckDB tutorials, and advanced analytics.
 
+**AI SQL Assistant**
+Built-in chat assistant for writing, explaining, fixing, and optimizing SQL. Supports multiple providers (Google Gemini, Groq, OpenAI, Anthropic) with free-tier options that need no credit card. API keys are encrypted locally with AES-GCM and never sent anywhere except the provider you choose. Toggle with the sparkles button or `Cmd/Ctrl+Shift+A`.
+
 **Private by Default**
-In WASM mode, everything runs in your browser - data never leaves your machine. In Server mode, data stays on your local machine. Cloud connectors communicate directly with their APIs.
+In WASM mode, everything runs in your browser - data never leaves your machine. In Server mode, data stays on your local machine. Cloud connectors communicate directly with their APIs. AI API keys are encrypted at rest in your browser.
 
 ---
 
@@ -134,8 +139,8 @@ dbxlite/
 │  │  │  ├─ containers/     # Composite components (DialogsContainer, MainContent)
 │  │  │  ├─ contexts/       # React contexts (TabContext, QueryContext)
 │  │  │  ├─ hooks/          # Custom hooks (useQueryExecution, useTabManager, etc.)
-│  │  │  ├─ services/       # Data services (data-source-store, settings-store)
-│  │  │  ├─ stores/         # Zustand stores (settingsStore)
+│  │  │  ├─ services/       # Data services (data-source-store, settings-store, ai/)
+│  │  │  ├─ stores/         # Zustand stores (settingsStore, aiChatStore)
 │  │  │  └─ utils/          # Utilities (formatters, dataTypes, logger)
 │  │  └─ App.tsx            # Main orchestrator (~680 lines)
 │  └─ cli/                  # dbxlite-ui npm package (for duckdb -ui integration)
@@ -161,7 +166,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed diagrams.
 ## Data & Workflow Notes
 - Local files use the File System Access API; prefer zero-copy paths for speed. Remote URLs are fetched on demand. DuckDB `.db` files can be attached and reused.
 - Query execution runs in a Web Worker; large results stream via Arrow for responsive grids.
-- Keyboard shortcuts: `Cmd/Ctrl+Enter` to run, `Cmd/Ctrl+Shift+F` to format, `Cmd/Ctrl+Home/End` to jump pages in the grid.
+- Keyboard shortcuts: `Cmd/Ctrl+Enter` to run, `Cmd/Ctrl+Shift+F` to format, `Cmd/Ctrl+Shift+A` to toggle AI assistant, `Cmd/Ctrl+Home/End` to jump pages in the grid.
 
 ## URL Sharing
 
@@ -192,8 +197,8 @@ See [docs/URL-SHARING.md](docs/URL-SHARING.md) for full reference.
 ### Current Limitations
 
 **Credential Storage** (`credential-store.ts`)
-- Credentials are stored in browser localStorage without encryption
-- For sensitive production use, implement encrypted storage (planned for v0.3)
+- AI API keys are encrypted at rest (AES-GCM with device-bound key in IndexedDB)
+- Other credentials (e.g., BigQuery) still use plain localStorage
 
 **Parquet Support** (`materialization-manager.ts`, `import-queue.ts`)
 - Parquet export uses JSON serialization as intermediate format
@@ -212,7 +217,8 @@ See [docs/URL-SHARING.md](docs/URL-SHARING.md) for full reference.
 - ✓ BigQuery connector (REST API + OAuth)
 - ⬜ Snowflake connector (SQL REST API + OAuth)
 - ⬜ Supabase connector (PostgREST - browser-friendly PostgreSQL)
-- ⬜ Encrypted credential storage
+- ✓ AI SQL Assistant (multi-provider, streaming, free-tier support)
+- ✓ Encrypted credential storage (AI API keys)
 - ⬜ Native Parquet export via parquetjs
 - ⬜ Query result caching layer
 
