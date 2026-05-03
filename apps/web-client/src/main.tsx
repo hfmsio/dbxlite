@@ -29,10 +29,16 @@ self.MonacoEnvironment = {
 
 const container = document.getElementById("root")!;
 const root = createRoot(container);
+// Only mount Vercel Analytics on the canonical hosted domain. The same build
+// is shipped via npm (npx dbxlite-ui) where /_vercel/* endpoints don't exist
+// and the scripts would 404 with noisy console errors.
+const isHosted = typeof window !== "undefined" &&
+	(window.location.hostname === "sql.dbxlite.com" ||
+	 window.location.hostname.endsWith(".dbxlite.com"));
 root.render(
 	<LockProvider>
 		<App />
-		<Analytics />
-		<SpeedInsights />
+		{isHosted && <Analytics />}
+		{isHosted && <SpeedInsights />}
 	</LockProvider>,
 );

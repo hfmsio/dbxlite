@@ -160,12 +160,22 @@ function findAssetsDir() {
 const ASSETS_DIR = findAssetsDir();
 console.log(`Assets directory: ${ASSETS_DIR}`);
 
+// SPA-route prefixes that map to actual on-disk asset folders. Any path
+// outside these prefixes that doesn't resolve to a file falls back to
+// index.html so the React router can handle it (mirrors the Vercel rewrite).
+const ASSET_PREFIXES = ['/assets/', '/duckdb/', '/sql-templates/', '/logo/', '/screenshots/'];
+const ASSET_FILES = ['/robots.txt', '/sitemap.xml', '/favicon.ico'];
+
+function isAssetPath(urlPath) {
+  return ASSET_PREFIXES.some(p => urlPath.startsWith(p)) || ASSET_FILES.includes(urlPath);
+}
+
 // Create asset server
 const server = createServer((req, res) => {
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/') urlPath = '/index.html';
 
-  const filePath = join(ASSETS_DIR, urlPath);
+  let filePath = join(ASSETS_DIR, urlPath);
 
   // Security: prevent directory traversal
   if (!filePath.startsWith(ASSETS_DIR)) {
@@ -175,10 +185,18 @@ const server = createServer((req, res) => {
   }
 
   try {
-    if (!existsSync(filePath) || statSync(filePath).isDirectory()) {
-      res.writeHead(404, { 'Content-Type': 'text/plain', 'Content-Length': 9 });
-      res.end('Not found');
-      return;
+    const missing = !existsSync(filePath) || statSync(filePath).isDirectory();
+    if (missing) {
+      // SPA fallback: non-asset routes (e.g. /examples, /screenshots-page)
+      // serve index.html so the React router can handle them. True asset
+      // misses (under /assets/, /duckdb/, etc.) still 404.
+      if (!isAssetPath(urlPath) && urlPath !== '/index.html') {
+        filePath = join(ASSETS_DIR, 'index.html');
+      } else {
+        res.writeHead(404, { 'Content-Type': 'text/plain', 'Content-Length': 9 });
+        res.end('Not found');
+        return;
+      }
     }
 
     const content = readFileSync(filePath);
