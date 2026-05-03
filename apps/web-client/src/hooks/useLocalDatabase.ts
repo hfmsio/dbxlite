@@ -66,8 +66,8 @@ export function useLocalDatabase() {
 			`;
 
 			// Execute sequentially - DuckDB HTTP doesn't handle concurrent queries well
-			const allTablesResult = await queryService.executeQuery(tablesQuery);
-			const allViewsResult = await queryService.executeQuery(viewsQuery);
+			const allTablesResult = await queryService.executeQueryOnConnector("duckdb",tablesQuery);
+			const allViewsResult = await queryService.executeQueryOnConnector("duckdb",viewsQuery);
 
 			logger.debug("Found tables:", allTablesResult.rows.length, "views:", allViewsResult.rows.length);
 
@@ -105,7 +105,7 @@ export function useLocalDatabase() {
 						  AND table_name = ${escapedTable}
 						ORDER BY ordinal_position
 					`;
-					const columnsResult = await queryService.executeQuery(columnsQuery);
+					const columnsResult = await queryService.executeQueryOnConnector("duckdb",columnsQuery);
 
 					const columns: Column[] = columnsResult.rows.map((col) => ({
 						name: String(col.column_name),
@@ -119,7 +119,7 @@ export function useLocalDatabase() {
 					const schemaIdent = escapeIdentifier(schemaName);
 					const tableIdent = escapeIdentifier(tableName);
 					try {
-						const countResult = await queryService.executeQuery(
+						const countResult = await queryService.executeQueryOnConnector("duckdb",
 							`SELECT COUNT(*) as cnt FROM ${schemaIdent}.${tableIdent}`,
 						);
 						if (countResult.rows.length > 0) {
@@ -131,7 +131,7 @@ export function useLocalDatabase() {
 
 					// Get estimated size from duckdb_tables()
 					try {
-						const sizeResult = await queryService.executeQuery(
+						const sizeResult = await queryService.executeQueryOnConnector("duckdb",
 							`SELECT estimated_size FROM duckdb_tables()
 							 WHERE schema_name = ${escapedSchema} AND table_name = ${escapedTable}`,
 						);

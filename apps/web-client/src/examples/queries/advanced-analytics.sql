@@ -54,7 +54,7 @@ ranked AS (
         *,
         RANK() OVER (PARTITION BY continent, year ORDER BY gdp_per_capita DESC) AS gdp_rank,
         RANK() OVER (PARTITION BY continent, year ORDER BY life_expectancy DESC) AS health_rank,
-        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY gdp_per_capita)
+        quantile_cont(gdp_per_capita, 0.5)
             OVER (PARTITION BY continent, year) AS continent_median_gdp
     FROM growth_rates
 )
@@ -94,9 +94,9 @@ WITH continental_stats AS (
         SUM(pop) AS total_pop,
         ROUND(AVG(lifeExp), 1) AS avg_life_exp,
         ROUND(AVG(gdpPercap), 0) AS avg_gdp,
-        ROUND(PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY gdpPercap), 0) AS gdp_p25,
-        ROUND(PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY gdpPercap), 0) AS gdp_median,
-        ROUND(PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY gdpPercap), 0) AS gdp_p75,
+        ROUND(quantile_cont(gdpPercap, 0.25), 0) AS gdp_p25,
+        ROUND(quantile_cont(gdpPercap, 0.50), 0) AS gdp_median,
+        ROUND(quantile_cont(gdpPercap, 0.75), 0) AS gdp_p75,
         ROUND(MIN(lifeExp), 1) AS min_life_exp,
         ROUND(MAX(lifeExp), 1) AS max_life_exp
     FROM 'https://raw.githubusercontent.com/plotly/datasets/master/gapminder_unfiltered.csv'

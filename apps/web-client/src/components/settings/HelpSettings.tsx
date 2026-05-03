@@ -1,4 +1,51 @@
 import type React from "react";
+import { useState } from "react";
+import { queryService } from "../../services/streaming-query-service";
+
+// ---------------------------------------------------------------------------
+// Sub-tab navigation
+// ---------------------------------------------------------------------------
+//
+// The Help tab is large (UI shortcuts + cloud-connector setup + AI assistant).
+// Vertical sub-tabs split it into focused sections so a user looking for
+// "How do I connect Snowflake" doesn't scroll through Drag & Drop tables
+// first.
+
+export type HelpSubTab =
+	| "basics"
+	| "files"
+	| "modes"
+	| "bigquery"
+	| "snowflake"
+	| "ai"
+	| "themes";
+
+interface HelpSettingsProps {
+	/**
+	 * Optional initial sub-tab. When unset, the default is picked smartly
+	 * from the active connector - Snowflake → "snowflake", BigQuery →
+	 * "bigquery", everything else → "basics". Callers that want to deep-link
+	 * (e.g. from a connection-error toast) pass an explicit value.
+	 */
+	initialSubTab?: HelpSubTab;
+}
+
+const SUB_TABS: Array<{ id: HelpSubTab; label: string; icon: string }> = [
+	{ id: "basics", label: "Basics", icon: "⌨" },
+	{ id: "files", label: "Files & Data", icon: "📂" },
+	{ id: "modes", label: "Server vs WASM", icon: "🔌" },
+	{ id: "bigquery", label: "BigQuery", icon: "☁" },
+	{ id: "snowflake", label: "Snowflake", icon: "❄" },
+	{ id: "ai", label: "AI Assistant", icon: "✨" },
+	{ id: "themes", label: "Themes & Export", icon: "🎨" },
+];
+
+function pickDefaultSubTab(): HelpSubTab {
+	const c = queryService.getActiveConnectorType?.();
+	if (c === "snowflake") return "snowflake";
+	if (c === "bigquery") return "bigquery";
+	return "basics";
+}
 
 // Shared styles
 const sectionStyle: React.CSSProperties = {
@@ -75,10 +122,87 @@ function Kbd({ children }: { children: React.ReactNode }) {
 	return <span style={kbdStyle}>{children}</span>;
 }
 
-function HelpSettings() {
+function HelpSettings({ initialSubTab }: HelpSettingsProps = {}) {
+	const [activeSubTab, setActiveSubTab] = useState<HelpSubTab>(
+		initialSubTab ?? pickDefaultSubTab(),
+	);
+
 	return (
-		<div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-			{/* Warning Banner */}
+		<div style={{ display: "flex", height: "100%", gap: 16 }}>
+			{/* Sub-tab sidebar */}
+			<nav
+				role="tablist"
+				aria-label="Help sections"
+				style={{
+					flexShrink: 0,
+					width: 170,
+					display: "flex",
+					flexDirection: "column",
+					gap: 2,
+					paddingTop: 4,
+				}}
+			>
+				{SUB_TABS.map((t, idx) => {
+					const active = activeSubTab === t.id;
+					return (
+						<button
+							key={t.id}
+							role="tab"
+							aria-selected={active}
+							tabIndex={active ? 0 : -1}
+							onClick={() => setActiveSubTab(t.id)}
+							onKeyDown={(e) => {
+								if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+									e.preventDefault();
+									const dir = e.key === "ArrowDown" ? 1 : -1;
+									const next = (idx + dir + SUB_TABS.length) % SUB_TABS.length;
+									setActiveSubTab(SUB_TABS[next].id);
+									const buttons = e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+									buttons?.[next]?.focus();
+								} else if (e.key === "Home") {
+									e.preventDefault();
+									setActiveSubTab(SUB_TABS[0].id);
+								} else if (e.key === "End") {
+									e.preventDefault();
+									setActiveSubTab(SUB_TABS[SUB_TABS.length - 1].id);
+								}
+							}}
+							style={{
+								textAlign: "left",
+								padding: "8px 12px",
+								background: active ? "var(--accent)" : "transparent",
+								color: active ? "white" : "var(--text-secondary)",
+								border: "none",
+								borderRadius: 6,
+								cursor: "pointer",
+								fontSize: 12,
+								fontWeight: active ? 600 : 400,
+								display: "flex",
+								alignItems: "center",
+								gap: 8,
+							}}
+						>
+							<span style={{ fontSize: 13 }} aria-hidden="true">{t.icon}</span>
+							<span>{t.label}</span>
+						</button>
+					);
+				})}
+			</nav>
+
+			{/* Content area */}
+			<div
+				role="tabpanel"
+				style={{
+					flex: 1,
+					minWidth: 0,
+					overflowY: "auto",
+					display: "flex",
+					flexDirection: "column",
+					gap: 24,
+					paddingRight: 4,
+				}}
+			>
+			{/* Warning Banner - always visible */}
 			<div style={warningStyle}>
 				<strong style={{ color: "#f59e0b" }}>EXPERIMENTAL SOFTWARE</strong>
 				<p style={{ margin: "8px 0 0 0", fontSize: 11 }}>
@@ -87,12 +211,15 @@ function HelpSettings() {
 				</p>
 			</div>
 
-			{/* Quick Links */}
+			{/* Quick Links - always visible */}
 			<div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
 				<a href="/examples" style={linkStyle}>SQL Examples</a>
 				<a href="/screenshots" style={linkStyle}>Screenshots</a>
 			</div>
 
+			{/* Basics: 2-col grid of UI shortcuts */}
+			{activeSubTab === "basics" && (
+			<>
 			{/* Two Column Layout */}
 			<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 24 }}>
 				{/* Left Column */}
@@ -421,7 +548,12 @@ function HelpSettings() {
 					</div>
 				</div>
 			</div>
+			</>
+			)}
 
+			{/* Files & Data: DuckDB R/W modes, file persistence, DDL/DML, file mgmt, best practices */}
+			{activeSubTab === "files" && (
+			<>
 			{/* ReadOnly vs ReadWrite */}
 			<div style={sectionStyle}>
 				<h3 style={sectionTitleStyle}>DuckDB Read/Write Modes</h3>
@@ -469,6 +601,50 @@ function HelpSettings() {
 				</div>
 			</div>
 
+			{/* Best Practices */}
+			<div style={sectionStyle}>
+				<h3 style={sectionTitleStyle}>Best Practices</h3>
+				<div style={warningStyle}>
+					<ul style={{ margin: 0, paddingLeft: 20, fontSize: 11, lineHeight: 1.6 }}>
+						<li><strong>Keep backups:</strong> Always maintain a separate copy of your SQL files and data</li>
+						<li><strong>Avoid ORDER BY on large tables:</strong> Can cause memory issues in WASM</li>
+						<li><strong>Use LIMIT:</strong> Always add LIMIT to exploratory queries</li>
+						<li><strong>Memory limits:</strong> Browser WASM has ~2-4GB memory limit. Avoid operations that load entire large datasets into memory (e.g., ORDER BY, window functions on large tables, SELECT * without LIMIT, large JOINs, heavy aggregations). Feel free to experiment - what works depends on your data size!</li>
+						<li><strong>Large files are OK:</strong> You can attach databases of any size (50GB+) via OPFS - it's just file permission, not memory loading</li>
+						<li><strong>Session data:</strong> Data in "Session" tables is lost on page refresh</li>
+					</ul>
+				</div>
+			</div>
+
+			{/* DDL/DML Warnings */}
+			<div style={sectionStyle}>
+				<h3 style={sectionTitleStyle}>DDL/DML Operations</h3>
+				<div style={warningStyle}>
+					<strong style={{ color: "#f59e0b" }}>CREATE, INSERT, UPDATE, DELETE Caution</strong>
+					<ul style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 11, lineHeight: 1.6 }}>
+						<li><strong>CTAS (CREATE TABLE AS):</strong> Loads entire result set into memory. Use LIMIT for large datasets or process in batches.</li>
+						<li><strong>Large INSERTs:</strong> Bulk inserts consume memory. Consider batching (e.g., INSERT ... LIMIT 100000 OFFSET 0, then OFFSET 100000, etc.)</li>
+						<li><strong>Session tables:</strong> DDL/DML on session tables only affects memory - lost on refresh</li>
+						<li><strong>Attached databases (READ_WRITE):</strong> Changes are permanent and written to your actual files on disk. Keep backups!</li>
+						<li><strong>Test first:</strong> Always test DDL/DML operations with small samples before running on large datasets</li>
+					</ul>
+				</div>
+			</div>
+
+			{/* File Management Note */}
+			<div style={sectionStyle}>
+				<h3 style={sectionTitleStyle}>File Management</h3>
+				<div style={noteStyle}>
+					<strong>Trash / Remove:</strong> The trash button and "Remove from Workspace" do NOT delete your actual files.
+					They only clear file handles and memory references in dbxlite. Your original files on disk remain untouched.
+				</div>
+			</div>
+			</>
+			)}
+
+			{/* Themes & Export */}
+			{activeSubTab === "themes" && (
+			<>
 			{/* Themes */}
 			<div style={sectionStyle}>
 				<h3 style={sectionTitleStyle}>Available Themes</h3>
@@ -622,46 +798,12 @@ function HelpSettings() {
 					<strong>Tip:</strong> Configure copy delimiter (Tab/Comma/Pipe) in Formatting settings.
 				</div>
 			</div>
+			</>
+			)}
 
-			{/* Best Practices */}
-			<div style={sectionStyle}>
-				<h3 style={sectionTitleStyle}>Best Practices</h3>
-				<div style={warningStyle}>
-					<ul style={{ margin: 0, paddingLeft: 20, fontSize: 11, lineHeight: 1.6 }}>
-						<li><strong>Keep backups:</strong> Always maintain a separate copy of your SQL files and data</li>
-						<li><strong>Avoid ORDER BY on large tables:</strong> Can cause memory issues in WASM</li>
-						<li><strong>Use LIMIT:</strong> Always add LIMIT to exploratory queries</li>
-						<li><strong>Memory limits:</strong> Browser WASM has ~2-4GB memory limit. Avoid operations that load entire large datasets into memory (e.g., ORDER BY, window functions on large tables, SELECT * without LIMIT, large JOINs, heavy aggregations). Feel free to experiment - what works depends on your data size!</li>
-						<li><strong>Large files are OK:</strong> You can attach databases of any size (50GB+) via OPFS - it's just file permission, not memory loading</li>
-						<li><strong>Session data:</strong> Data in "Session" tables is lost on page refresh</li>
-					</ul>
-				</div>
-			</div>
-
-			{/* DDL/DML Warnings */}
-			<div style={sectionStyle}>
-				<h3 style={sectionTitleStyle}>DDL/DML Operations</h3>
-				<div style={warningStyle}>
-					<strong style={{ color: "#f59e0b" }}>CREATE, INSERT, UPDATE, DELETE Caution</strong>
-					<ul style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 11, lineHeight: 1.6 }}>
-						<li><strong>CTAS (CREATE TABLE AS):</strong> Loads entire result set into memory. Use LIMIT for large datasets or process in batches.</li>
-						<li><strong>Large INSERTs:</strong> Bulk inserts consume memory. Consider batching (e.g., INSERT ... LIMIT 100000 OFFSET 0, then OFFSET 100000, etc.)</li>
-						<li><strong>Session tables:</strong> DDL/DML on session tables only affects memory - lost on refresh</li>
-						<li><strong>Attached databases (READ_WRITE):</strong> Changes are permanent and written to your actual files on disk. Keep backups!</li>
-						<li><strong>Test first:</strong> Always test DDL/DML operations with small samples before running on large datasets</li>
-					</ul>
-				</div>
-			</div>
-
-			{/* File Management Note */}
-			<div style={sectionStyle}>
-				<h3 style={sectionTitleStyle}>File Management</h3>
-				<div style={noteStyle}>
-					<strong>Trash / Remove:</strong> The trash button and "Remove from Workspace" do NOT delete your actual files.
-					They only clear file handles and memory references in dbxlite. Your original files on disk remain untouched.
-				</div>
-			</div>
-
+			{/* BigQuery */}
+			{activeSubTab === "bigquery" && (
+			<>
 			{/* BigQuery Connection Guide */}
 			<div style={sectionStyle}>
 				<h3 style={sectionTitleStyle}>How to Connect BigQuery</h3>
@@ -702,18 +844,17 @@ function HelpSettings() {
 							<ul style={{ margin: "4px 0", paddingLeft: 16 }}>
 								<li>Application type: <strong>Web application</strong></li>
 								<li>Name: anything (e.g., "dbxlite-client")</li>
-								<li>Authorized JavaScript origins (add both for local + production):
+								<li>Authorized JavaScript origins: paste the URL you'll be running dbxlite from. For local dev:
 									<div style={{ marginTop: 4, marginBottom: 4 }}>
-										<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3, display: "inline-block", marginBottom: 2 }}>http://localhost:5173</code><br/>
-										<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3, display: "inline-block" }}>https://dbxlite.vercel.app</code>
+										<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3, display: "inline-block" }}>{typeof window !== "undefined" ? window.location.origin : "http://localhost:5173"}</code>
 									</div>
 								</li>
-								<li>Authorized redirect URIs (add both):
+								<li>Authorized redirect URIs:
 									<div style={{ marginTop: 4, marginBottom: 4 }}>
-										<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3, display: "inline-block", marginBottom: 2 }}>http://localhost:5173/oauth-callback</code><br/>
-										<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3, display: "inline-block" }}>https://dbxlite.vercel.app/oauth-callback</code>
+										<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3, display: "inline-block" }}>{typeof window !== "undefined" ? `${window.location.origin}/oauth-callback` : "http://localhost:5173/oauth-callback"}</code>
 									</div>
 								</li>
+								<li>If you'll deploy dbxlite somewhere else later (Vercel, Netlify, your own host), add that origin + redirect URI here too.</li>
 							</ul>
 						</li>
 						<li>Click <strong>Create</strong></li>
@@ -741,11 +882,102 @@ function HelpSettings() {
 						<li><strong>Popup blocked:</strong> Allow popups for this site in your browser settings</li>
 						<li><strong>"Access blocked":</strong> If your OAuth consent screen is in "Testing" mode, add your email to "Test users" in GCP Console</li>
 						<li><strong>No datasets showing:</strong> Ensure your Google account has BigQuery access to the projects</li>
-						<li><strong>Credentials stored locally:</strong> Your credentials are stored in browser local storage only - never sent to any server</li>
+						<li><strong>Credentials stored locally:</strong> Tokens are encrypted with AES-GCM (device-bound key in IndexedDB); connection config stays in localStorage. Nothing is sent to any server except Google's BigQuery API.</li>
 					</ul>
 				</div>
 			</div>
+			</>
+			)}
 
+			{/* Snowflake */}
+			{activeSubTab === "snowflake" && (
+			<>
+			{/* Snowflake Connection Guide */}
+			<div style={sectionStyle}>
+				<h3 style={sectionTitleStyle}>How to Connect Snowflake</h3>
+				<p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 16 }}>
+					Snowflake supports two auth modes. Pick the one that matches your access:
+				</p>
+
+				<div style={{ marginBottom: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>Option A - OAuth (recommended; needs ACCOUNTADMIN once)</strong>
+					<ol style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.8 }}>
+						<li>An ACCOUNTADMIN runs <strong>CREATE SECURITY INTEGRATION</strong> with <code style={{ fontSize: 10 }}>OAUTH_CLIENT_TYPE = 'PUBLIC'</code> (PKCE-only, no client secret to store). The Snowflake setup dialog in dbxlite shows the exact SQL with your <code style={{ fontSize: 10 }}>OAUTH_REDIRECT_URI</code> pre-filled.</li>
+						<li>Run <code style={{ fontSize: 10 }}>DESCRIBE SECURITY INTEGRATION DBXLITE_LOCAL;</code> to grab the <strong>OAUTH_CLIENT_ID</strong>.</li>
+						<li>In dbxlite, paste your account identifier and the client ID. Leave Client Secret blank for public-client mode. Click <strong>Connect</strong>; a popup signs you in.</li>
+					</ol>
+				</div>
+
+				<div style={{ marginBottom: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>Option B - Personal Access Token (no admin needed)</strong>
+					<ol style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.8 }}>
+						<li>In Snowsight, go to your name (bottom-left) → <strong>My Profile → Programmatic access tokens</strong>.</li>
+						<li>Click <strong>Generate new token</strong>. Pick the role you want dbxlite to use (PATs are bound to one role; generate a new PAT to switch). Set an expiry (max 90 days). Snowflake shows the token <strong>once</strong>; copy it immediately.</li>
+						<li>Your user must have a network policy attached for PATs to work. If you hit <code style={{ fontSize: 10 }}>403 / IP not allowed</code>, an admin needs to attach one (<code style={{ fontSize: 10 }}>ALTER USER &lt;you&gt; SET NETWORK_POLICY = '&lt;policy&gt;'</code>).</li>
+						<li>In dbxlite's Snowflake setup dialog, switch to the <strong>Personal Access Token</strong> tab, paste the token + account + warehouse, set role to match the bound role, and click <strong>Connect</strong>.</li>
+					</ol>
+				</div>
+
+				<div style={{ marginBottom: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>Switching context</strong>
+					<p style={{ margin: "6px 0 0 0", fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+						Snowflake's SQL API doesn't accept <code style={{ fontSize: 10 }}>USE</code> statements. To switch role / warehouse / database / schema, use the dropdown chips in the topbar - dbxlite applies the change as per-statement session params. Or fully qualify: <code style={{ fontSize: 10 }}>SELECT * FROM db.schema.table</code>.
+					</p>
+				</div>
+
+				<div style={noteStyle}>
+					<strong>Troubleshooting:</strong>
+					<ul style={{ margin: "4px 0 0 0", paddingLeft: 16, fontSize: 11 }}>
+						<li><strong>"Object does not exist":</strong> Check the database name's case. Quoted identifiers (<code style={{ fontSize: 10 }}>"foo"</code>) match exact case; unquoted are folded to uppercase.</li>
+						<li><strong>"Command not supported by SQL API: USE":</strong> Use the topbar dropdowns to change context, not <code style={{ fontSize: 10 }}>USE</code>.</li>
+						<li><strong>"Role is not granted to this user":</strong> The role in the dialog must match what your OAuth integration / PAT was created with. With PAT, generate a new token for a different role.</li>
+						<li><strong>OAuth popup closes immediately:</strong> Verify the <code style={{ fontSize: 10 }}>OAUTH_REDIRECT_URI</code> on the security integration matches dbxlite's URL exactly (port included).</li>
+					</ul>
+				</div>
+			</div>
+			</>
+			)}
+
+			{/* AI Assistant */}
+			{activeSubTab === "ai" && (
+			<>
+			{/* AI Assistant */}
+			<div style={sectionStyle}>
+				<h3 style={sectionTitleStyle}>AI SQL Assistant</h3>
+				<p style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 16 }}>
+					Toggle with <kbd style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "2px 6px", borderRadius: 3 }}>Cmd/Ctrl+Shift+A</kbd> or the sparkles icon. Two ways to power it:
+				</p>
+
+				<div style={{ marginBottom: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>Bring your own key</strong>
+					<p style={{ margin: "6px 0 0 0", fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+						OpenAI, Anthropic, Gemini, or Groq. Add a key in <strong>Settings → AI</strong>. Gemini and Groq have free tiers (no credit card). Keys are encrypted with AES-GCM (device-bound key in IndexedDB) and only sent to the provider you pick.
+					</p>
+				</div>
+
+				<div style={{ marginBottom: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>Snowflake Cortex</strong>
+					<p style={{ margin: "6px 0 0 0", fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+						If you're connected to Snowflake, Cortex is available in the chat-panel backend picker. The query runs as <code style={{ fontSize: 10 }}>SNOWFLAKE.CORTEX.COMPLETE(...)</code> on your warehouse - no external API call, no extra key. Token cost is in your Snowflake bill.
+					</p>
+				</div>
+
+				<div style={{ marginBottom: 16 }}>
+					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>What gets sent</strong>
+					<p style={{ margin: "6px 0 0 0", fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+						The first time you send a message to a BYO provider, dbxlite shows a one-time consent dialog listing exactly what's transmitted: your message, the current editor SQL, recent chat history, and a system prompt. Query results, file contents, and credentials are never sent. Warehouse backends (Cortex) skip this since data stays in your warehouse.
+					</p>
+					<p style={{ margin: "6px 0 0 0", fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6 }}>
+						Revoke a provider's consent in <strong>Settings → AI</strong> to force the dialog again on the next send.
+					</p>
+				</div>
+			</div>
+			</>
+			)}
+
+			{/* Modes: Server vs WASM + Browser Compatibility */}
+			{activeSubTab === "modes" && (
+			<>
 			{/* Execution Modes */}
 			<div style={sectionStyle}>
 				<h3 style={sectionTitleStyle}>Execution Modes</h3>
@@ -775,7 +1007,7 @@ function HelpSettings() {
 								}}>WASM</span>
 							</td>
 							<td style={tdStyle}>
-								Visit <code style={{ fontSize: 10 }}>sql.dbxlite.com</code> directly in browser
+								Open the URL where you've deployed dbxlite (or run <code style={{ fontSize: 10 }}>pnpm dev</code> locally)
 							</td>
 							<td style={tdStyle}>
 								<ul style={{ margin: 0, paddingLeft: 16, fontSize: 11 }}>
@@ -829,10 +1061,17 @@ function HelpSettings() {
 					<strong style={{ fontSize: 12, color: "var(--text-primary)" }}>How to Use Server Mode</strong>
 					<ol style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.8 }}>
 						<li>Install DuckDB CLI: <a href="https://duckdb.org/docs/installation" target="_blank" rel="noopener noreferrer" style={linkStyle}>duckdb.org/docs/installation</a></li>
-						<li>Set the custom UI URL:
+						<li>Run dbxlite locally so DuckDB can fetch the UI:
 							<div style={{ marginTop: 4 }}>
 								<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "4px 8px", borderRadius: 3, display: "block" }}>
-									export ui_remote_url="https://sql.dbxlite.com"
+									pnpm dev
+								</code>
+							</div>
+						</li>
+						<li>Point DuckDB at your local UI:
+							<div style={{ marginTop: 4 }}>
+								<code style={{ fontSize: 10, backgroundColor: "var(--bg-tertiary)", padding: "4px 8px", borderRadius: 3, display: "block" }}>
+									export ui_remote_url="{typeof window !== "undefined" ? window.location.origin : "http://localhost:5173"}"
 								</code>
 							</div>
 						</li>
@@ -843,7 +1082,7 @@ function HelpSettings() {
 								</code>
 							</div>
 						</li>
-						<li>Open <code style={{ fontSize: 10 }}>http://localhost:4213</code> in your browser</li>
+						<li>Open <code style={{ fontSize: 10 }}>http://localhost:4213</code> in your browser. DuckDB serves the UI from there and proxies queries to itself.</li>
 					</ol>
 				</div>
 
@@ -907,7 +1146,10 @@ function HelpSettings() {
 					Firefox/Safari users can still use drag & drop, which loads files into memory.
 				</div>
 			</div>
+			</>
+			)}
 
+			</div>{/* /content area */}
 		</div>
 	);
 }

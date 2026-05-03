@@ -20,7 +20,6 @@ import {
   typeInfoToString,
   SuccessQueryResult,
   ErrorQueryResult,
-  DataChunk,
   Vector,
   TypeIdAndInfo,
   LogicalTypeId,

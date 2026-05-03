@@ -274,7 +274,9 @@ export const useDataSourceStore = create<DataSourceStore>()(
 				dataSource.attachedAs
 			) {
 				try {
-					await queryService.executeQuery(
+					// DETACH is DuckDB-specific — pin to DuckDB regardless of active connector.
+					await queryService.executeQueryOnConnector(
+						"duckdb",
 						buildDetachSQL(dataSource.attachedAs),
 					);
 				} catch (error) {

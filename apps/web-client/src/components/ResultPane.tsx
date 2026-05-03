@@ -2,10 +2,27 @@ import type React from "react";
 import { useEffect, useRef, useState } from "react";
 import { downloadRemoteFile } from "../services/file-service";
 import { formatterSettings } from "../services/formatter-settings";
+import { snowflakeCatalogProvider } from "../providers/catalog/SnowflakeCatalogProvider";
+import QueryStatsFooter from "../providers/catalog/components/QueryStatsFooter";
+import type { CatalogProvider } from "../providers/catalog/types";
 import {
+	type ConnectorType,
 	type QueryResult,
 	queryService,
 } from "../services/streaming-query-service";
+
+/**
+ * Pick the catalog provider that owns post-execution stats lookup for the
+ * connector that produced the result. Returns null when the connector has no
+ * provider yet (DuckDB) or no queryId was captured. (Backlog SF-T5.3.)
+ */
+function pickStatsProvider(
+	connectorType: ConnectorType | undefined,
+): CatalogProvider | null {
+	if (connectorType === "snowflake") return snowflakeCatalogProvider;
+	// BigQuery + DuckDB: no CatalogProvider yet (tracked as SF-21 / SF-22).
+	return null;
+}
 import type { CellValue } from "../types/table";
 import { getTypeCategory, TypeMapper } from "../utils/dataTypes";
 import { formatValue } from "../utils/formatters";
@@ -601,6 +618,18 @@ export default function ResultPane({
 							<span>
 								<strong>Time:</strong> {result.executionTime}ms
 							</span>
+
+							{/* Provider-specific stats (bytes scanned, compute, etc.) — SF-T5.3 */}
+							{result.connectorQueryId &&
+								(() => {
+									const statsProvider = pickStatsProvider(result.connectorType);
+									return statsProvider ? (
+										<QueryStatsFooter
+											provider={statsProvider}
+											queryId={result.connectorQueryId}
+										/>
+									) : null;
+								})()}
 
 							{/* Export and Schema buttons */}
 							<div className="flex-row gap-sm">

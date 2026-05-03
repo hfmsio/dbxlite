@@ -9,6 +9,7 @@ import {
 	DuckDBHttpConnector,
 	type QueryCostEstimate,
 	type SchemaInfo,
+	SnowflakeConnector,
 	type TableMetadata,
 	detectMode,
 	type DbxliteMode,
@@ -32,7 +33,7 @@ function detectAndUpdateTimezone(sql: string): void {
 	let match: RegExpExecArray | null;
 	while ((match = regex.exec(sql)) !== null) {
 		const newTimezone = match[1];
-		console.log("[Timezone Detection] SET timezone =", newTimezone);
+		logger.debug("Timezone detection: SET timezone =", newTimezone);
 		databaseTimezone.setTimezone(newTimezone);
 	}
 }
@@ -51,6 +52,37 @@ interface DuckDBConnectorExtended extends BaseConnector {
 // Extended BigQuery connector type with cache clearing
 interface BigQueryConnectorExtended extends BaseConnector {
 	clearCache(): void;
+}
+
+// Snowflake setup config (subset of SnowflakeConnectorConfig that the UI
+// provides; transport + credentialStore are wired here, not by callers).
+//
+// Two auth shapes:
+//   - OAuth (default): supply account + clientId (+ optional clientSecret).
+//     Connector runs the popup OAuth flow.
+//   - PAT: supply account + auth.token. No popup, no admin setup. Token is
+//     sent as `Authorization: Bearer <pat>` to the SQL API.
+export interface SnowflakeSetupOptions {
+	account: string;
+	/** OAuth client ID. Required when auth.mode is "oauth" (or omitted). */
+	clientId?: string;
+	/**
+	 * OAuth client secret. Optional — omit (or pass undefined) for
+	 * `OAUTH_CLIENT_TYPE = 'PUBLIC'` (PKCE-only). Recommended for browser
+	 * deployments since secrets are recoverable by any same-origin script.
+	 */
+	clientSecret?: string;
+	/**
+	 * Auth discriminator. Defaults to OAuth for backward compat with
+	 * existing call sites that pass clientId at the top level.
+	 */
+	auth?:
+		| { mode: "oauth" }
+		| { mode: "pat"; token: string };
+	warehouse: string;
+	role?: string;
+	database?: string;
+	schema?: string;
 }
 
 /**
@@ -104,6 +136,17 @@ export interface QueryResult {
 	columnTypes?: ColumnMetadata[];
 	totalRows: number;
 	executionTime: number;
+	/**
+	 * Connector-side query identifier (Snowflake's statementHandle, BigQuery's
+	 * jobId). Optional — only present for connectors that surface it. Consumed
+	 * by QueryStatsFooter for post-execution stats lookup. (Backlog SF-T5.3.)
+	 */
+	connectorQueryId?: string;
+	/**
+	 * Connector type that produced this result. Lets the UI pick the right
+	 * CatalogProvider for follow-up calls (e.g. provider.getQueryStats).
+	 */
+	connectorType?: ConnectorType;
 }
 
 export interface QueryMetadata {
@@ -713,6 +756,70 @@ class StreamingQueryService {
 				return { count, isEstimated: true };
 			}
 
+			// Snowflake: wrap in SELECT COUNT(*) FROM (sql) with a 5-second
+			// timeout. Without this, every Snowflake query falls through to the
+			// `count = -1` path below and useQueryExecution interprets that as
+			// "huge dataset, force streaming mode" — even for a 3-row SELECT.
+			// On timeout we still return -1, but at that point streaming-mode
+			// for a slow-counting query is the correct UX.
+			if (connector instanceof SnowflakeConnector) {
+				logger.debug("Snowflake: counting via SELECT COUNT(*) FROM (sql)");
+				const COUNT_TIMEOUT_MS = 5_000;
+				// Strip trailing semicolons + whitespace before wrapping —
+				// otherwise `SELECT COUNT(*) AS c FROM (SELECT * FROM t;)` is a
+				// Snowflake parse error, count fails, and useQueryExecution
+				// falls into the misleading "Very large dataset" toast for a
+				// query that's actually small.
+				const innerSql = sql.replace(/[\s;]+$/, "");
+				const countSql = `SELECT COUNT(*) AS c FROM (${innerSql})`;
+				const countCtl = new AbortController();
+				const timeout = setTimeout(
+					() => countCtl.abort(),
+					COUNT_TIMEOUT_MS,
+				);
+				try {
+					for await (const chunk of connector.query(countSql, {
+						signal: countCtl.signal,
+					})) {
+						const row = chunk.rows?.[0];
+						if (row !== undefined) {
+							const v =
+								typeof row === "object" && row !== null
+									? (Object.values(row)[0] as unknown)
+									: row;
+							const n =
+								typeof v === "number"
+									? v
+									: typeof v === "string"
+										? Number(v)
+										: -1;
+							if (Number.isFinite(n) && n >= 0) {
+								count = n;
+								break;
+							}
+						}
+					}
+				} catch (err) {
+					if (countCtl.signal.aborted) {
+						logger.debug("Snowflake count timed out — returning -1");
+					} else {
+						logger.debug("Snowflake count failed; returning -1", err);
+					}
+				} finally {
+					clearTimeout(timeout);
+				}
+
+				if (count >= 0) {
+					this.countCache.set(cacheKey, {
+						count,
+						isEstimated: false,
+						timestamp: Date.now(),
+					});
+					return { count, isEstimated: false };
+				}
+				return { count: -1, isEstimated: true };
+			}
+
 			// Fallback for other connectors: return -1 (unknown, treated as estimated)
 			logger.warn("Unknown connector type, returning -1");
 			return { count: -1, isEstimated: true };
@@ -907,13 +1014,19 @@ class StreamingQueryService {
 		const allRows: TableRow[] = [];
 		const columns: string[] = [];
 		let columnTypes: ColumnMetadata[] | undefined;
+		let connectorQueryId: string | undefined;
 
 		try {
-			for await (const chunk of connector.query(sql)) {
+			for await (const chunk of connector.query(sql, { signal })) {
 				if (signal?.aborted) {
 					const abortError = new Error("Query aborted by user");
 					abortError.name = "AbortError";
 					throw abortError;
+				}
+
+				// Capture connector-side query identifier from the first chunk that surfaces one.
+				if (!connectorQueryId && chunk.connectorQueryId) {
+					connectorQueryId = chunk.connectorQueryId;
 				}
 
 				// Extract schema information from the first chunk
@@ -958,6 +1071,8 @@ class StreamingQueryService {
 			totalRows: allRows.length,
 			executionTime: Date.now() - startTime,
 			columnTypes,
+			connectorQueryId,
+			connectorType,
 		};
 	}
 
@@ -967,6 +1082,7 @@ class StreamingQueryService {
 	async executeQuery(sql: string, signal?: AbortSignal): Promise<QueryResult> {
 		const startTime = Date.now();
 		const connector = this.getActiveConnector();
+		const connectorType = this.activeConnector;
 
 		// Detect SET timezone commands and update the database timezone store
 		detectAndUpdateTimezone(sql);
@@ -974,13 +1090,18 @@ class StreamingQueryService {
 		const allRows: TableRow[] = [];
 		const columns: string[] = [];
 		let columnTypes: ColumnMetadata[] | undefined;
+		let connectorQueryId: string | undefined;
 
 		try {
-			for await (const chunk of connector.query(sql)) {
+			for await (const chunk of connector.query(sql, { signal })) {
 				if (signal?.aborted) {
 					const abortError = new Error("Query aborted by user");
 					abortError.name = "AbortError";
 					throw abortError;
+				}
+
+				if (!connectorQueryId && chunk.connectorQueryId) {
+					connectorQueryId = chunk.connectorQueryId;
 				}
 
 				// Extract schema information from the first chunk
@@ -1015,6 +1136,8 @@ class StreamingQueryService {
 				columnTypes,
 				totalRows: allRows.length,
 				executionTime: Date.now() - startTime,
+				connectorQueryId,
+				connectorType,
 			};
 		} catch (error) {
 			logger.error("Query execution error", error);
@@ -1145,6 +1268,14 @@ class StreamingQueryService {
 
 		if (this.credentialStore) {
 			await this.credentialStore.save("bigquery-oauth-config", null);
+		}
+		// Mirror Snowflake's revoke(): also clear the auto-connect flag so
+		// the next page load doesn't try to restore a connection that the
+		// user just explicitly removed.
+		try {
+			localStorage.removeItem("bigquery-auto-connect");
+		} catch {
+			// localStorage may be unavailable in some test envs
 		}
 	}
 
@@ -1384,6 +1515,242 @@ class StreamingQueryService {
 			await connector.revoke();
 		}
 		this.connectors.delete(type);
+	}
+
+	// ============================================
+	// Snowflake-specific methods (mirrors BigQuery)
+	// ============================================
+
+	/**
+	 * Set up Snowflake connector with OAuth and persist config.
+	 * Triggers the OAuth popup flow.
+	 */
+	async setupSnowflake(opts: SnowflakeSetupOptions): Promise<void> {
+		if (!this.credentialStore) {
+			throw new Error("Credential store not initialized");
+		}
+		// Map the UI-facing options to the connector's auth discriminator.
+		// PAT mode bypasses the OAuth popup; OAuth (default) keeps the
+		// existing flow.
+		const auth =
+			opts.auth?.mode === "pat"
+				? { mode: "pat" as const, token: opts.auth.token }
+				: {
+						mode: "oauth" as const,
+						clientId: opts.clientId ?? "",
+						clientSecret: opts.clientSecret,
+					};
+		const sf = new SnowflakeConnector({
+			credentialStore: this.credentialStore,
+			account: opts.account,
+			auth,
+			warehouse: opts.warehouse,
+			role: opts.role,
+			database: opts.database,
+			schema: opts.schema,
+		});
+		await sf.connect({ options: {} });
+		this.connectors.set("snowflake", sf);
+	}
+
+	/**
+	 * Restore Snowflake connection from stored credentials.
+	 * Returns true if restored successfully, false otherwise.
+	 */
+	async restoreSnowflakeConnection(): Promise<boolean> {
+		if (!this.credentialStore) {
+			logger.debug("No credential store available for Snowflake restoration");
+			return false;
+		}
+		try {
+			const config = (await this.credentialStore.load(
+				"snowflake-config",
+			)) as
+				| (Partial<SnowflakeSetupOptions> & { authMode?: "oauth" | "pat" })
+				| null;
+			if (!config || !config.account) {
+				logger.debug("No valid Snowflake config in storage");
+				return false;
+			}
+			const storedMode = config.authMode ?? "oauth";
+
+			// Mode-specific credential presence check + connector
+			// instantiation. Legacy stored configs without authMode default
+			// to OAuth (back-compat).
+			let auth: { mode: "oauth"; clientId: string; clientSecret?: string } | { mode: "pat"; token: string };
+			if (storedMode === "pat") {
+				const pat = (await this.credentialStore.load("snowflake-pat")) as
+					| string
+					| null;
+				if (!pat) {
+					logger.debug("PAT mode but no token in storage");
+					return false;
+				}
+				auth = { mode: "pat", token: pat };
+			} else {
+				const token = await this.credentialStore.load("snowflake-token");
+				if (!token || !config.clientId) {
+					logger.debug("No valid Snowflake OAuth token/clientId in storage");
+					return false;
+				}
+				auth = {
+					mode: "oauth",
+					clientId: config.clientId,
+					clientSecret: config.clientSecret,
+				};
+			}
+
+			const sf = new SnowflakeConnector({
+				credentialStore: this.credentialStore,
+				account: config.account,
+				auth,
+				warehouse: config.warehouse ?? "",
+				role: config.role,
+				database: config.database,
+				schema: config.schema,
+			});
+			const ok = await sf.initializeFromStorage();
+			if (!ok) {
+				logger.debug("Snowflake initializeFromStorage returned false");
+				return false;
+			}
+			this.connectors.set("snowflake", sf);
+			logger.info("Snowflake connection restored from storage", {
+				authMode: storedMode,
+			});
+			return true;
+		} catch (error) {
+			logger.error("Failed to restore Snowflake connection", error);
+			return false;
+		}
+	}
+
+	/**
+	 * Update Snowflake config (warehouse/database/schema/role) without re-auth.
+	 */
+	async updateSnowflakeConfig(config: {
+		warehouse?: string;
+		database?: string;
+		schema?: string;
+		role?: string;
+	}): Promise<void> {
+		const connector = this.connectors.get("snowflake");
+		if (!connector) {
+			throw new Error("Snowflake connector not initialized");
+		}
+		if (
+			"updateConfig" in connector &&
+			typeof (connector as { updateConfig?: unknown }).updateConfig === "function"
+		) {
+			await (connector as unknown as {
+				updateConfig: (c: typeof config) => Promise<void>;
+			}).updateConfig(config);
+		}
+	}
+
+	/**
+	 * Check if Snowflake connector is available and connected.
+	 */
+	isSnowflakeConnected(): boolean {
+		const connector = this.connectors.get("snowflake");
+		if (!connector) return false;
+		if (
+			"isConnected" in connector &&
+			typeof connector.isConnected === "function"
+		) {
+			return (connector as CloudConnector).isConnected?.() ?? false;
+		}
+		return false;
+	}
+
+	/**
+	 * Disconnect from Snowflake and revoke credentials.
+	 */
+	async disconnectSnowflake(): Promise<void> {
+		const connector = this.connectors.get("snowflake");
+		if (!connector) return;
+		if ("revoke" in connector && typeof connector.revoke === "function") {
+			await (connector as CloudConnector).revoke?.();
+		}
+		this.connectors.delete("snowflake");
+	}
+
+	/**
+	 * Test Snowflake connection.
+	 */
+	async testSnowflakeConnection(): Promise<ConnectionTestResult> {
+		const connector = this.connectors.get("snowflake");
+		if (!connector) {
+			throw new Error("Snowflake connector not initialized");
+		}
+		if (
+			"testConnection" in connector &&
+			typeof connector.testConnection === "function"
+		) {
+			const result = await (connector as CloudConnector).testConnection?.();
+			if (!result) throw new Error("Connection test result not available");
+			return result;
+		}
+		throw new Error("Connection testing not supported");
+	}
+
+	/**
+	 * Get Snowflake connector instance (for direct API access in catalog UI).
+	 */
+	getSnowflakeConnector(): SnowflakeConnector | null {
+		const connector = this.connectors.get("snowflake");
+		return connector instanceof SnowflakeConnector ? connector : null;
+	}
+
+	/**
+	 * List Snowflake databases (catalogs).
+	 */
+	async getSnowflakeDatabases(): Promise<CatalogInfo[]> {
+		const sf = this.getSnowflakeConnector();
+		if (!sf) throw new Error("Snowflake connector not initialized");
+		return await sf.listProjects();
+	}
+
+	/**
+	 * List Snowflake schemas in a database.
+	 */
+	async getSnowflakeSchemas(databaseName: string): Promise<SchemaInfo[]> {
+		const sf = this.getSnowflakeConnector();
+		if (!sf) throw new Error("Snowflake connector not initialized");
+		return await sf.listDatasets(databaseName);
+	}
+
+	/**
+	 * List Snowflake tables in a schema.
+	 */
+	async getSnowflakeTables(
+		databaseName: string,
+		schemaName: string,
+	): Promise<TableMetadata[]> {
+		const sf = this.getSnowflakeConnector();
+		if (!sf) throw new Error("Snowflake connector not initialized");
+		return await sf.listTables(databaseName, schemaName);
+	}
+
+	/**
+	 * Get Snowflake table metadata.
+	 */
+	async getSnowflakeTableMetadata(
+		databaseName: string,
+		schemaName: string,
+		tableName: string,
+	): Promise<TableMetadata> {
+		const sf = this.getSnowflakeConnector();
+		if (!sf) throw new Error("Snowflake connector not initialized");
+		return await sf.getTableMetadata(databaseName, schemaName, tableName);
+	}
+
+	/**
+	 * Clear Snowflake metadata cache.
+	 */
+	clearSnowflakeCache(): void {
+		const sf = this.getSnowflakeConnector();
+		sf?.clearCache();
 	}
 }
 

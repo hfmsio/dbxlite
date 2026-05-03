@@ -8,19 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Planned
-- Snowflake connector integration
-- Encrypted credential storage
-- Native Parquet export via parquetjs
-- Advanced connection testing
+- Native Parquet export via parquetjs (currently uses JSON intermediate)
+- Advanced connection testing for cloud connectors
 - Query result caching layer
+- BigQuery → CatalogProvider migration (UX parity with Snowflake)
+- Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
+- Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
 
-## [0.2.0] - 2025-12-11
+## [0.3.0] - 2026-05-03
+
+### Added
+- **Snowflake connector**: SQL REST API v2 with two auth modes — OAuth 2.0 PKCE (public-client recommended; confidential supported) and Programmatic Access Token (no `CREATE SECURITY INTEGRATION` / ACCOUNTADMIN required). CORS proxy via Vite middleware in dev, Vercel Edge Function in production.
+- **CatalogProvider abstraction**: vendor-neutral catalog explorer with quick-switch dropdowns for role / warehouse / database / schema, compute status badge with one-click resume, query history modal with privilege-aware help, column preview / drag-drop, full-text search, pinned catalogs.
+- **AI SQL Assistant**: streaming chat panel with dialect-aware system prompts, SQL block extraction + run-in-editor, multi-provider support.
+- BYO providers: OpenAI, Anthropic, Gemini, Groq.
+- Warehouse-native AI: Snowflake Cortex (Claude, Llama 3.x, Mistral, DeepSeek, Mixtral).
+- **PII consent dialog** before the first send to any external AI service. Per-provider, persisted in localStorage. Warehouse backends skip (data stays in the warehouse).
+- Inline `<ApiKeyInlineField>` in chat WelcomeCard + Settings.
+- Backend picker grouped by kind; per-backend model picker remembering selection.
+- Topbar Snowflake context popover (clickable role / warehouse / db / schema editors, accessible without the explorer panel).
+- Privilege-aware error UX in catalog explorer (`🔒 No access — role X lacks USAGE` + copy-able GRANT, instead of raw SQL error dumps).
+- Engine auto-detection (suggest mode by default, auto mode opt-in).
+- Vendor-aware SQL formatter (Snowflake / BigQuery / DuckDB via sql-formatter@10).
+
+### Security
+- **Encrypted credential storage**: AES-GCM with 256-bit device-bound key persisted in IndexedDB. AI API keys, OAuth tokens (Snowflake + BigQuery), OAuth client secrets when used, and Snowflake PATs are all encrypted at rest.
+- **PKCE-only public OAuth client recommended for Snowflake**: setup defaults to `OAUTH_CLIENT_TYPE = 'PUBLIC'`. No client secret to store or leak.
+- BigQuery OAuth state uses `crypto.randomUUID()`.
+- Snowflake identifier interpolations hardened with `quoteSfIdent()` / `escapeSfLiteral()` helpers.
+
+### Reliability
+- **AbortSignal plumbing** through `BaseConnector.query()` for DuckDB, BigQuery, and Snowflake — cancelling a query now actually stops cloud-warehouse jobs server-side (Snowflake `cancel(handle)`, BigQuery `jobs.cancel`).
+- OAuth refresh-token race coalesced via in-flight `refreshPromise`; concurrent expired-access-token requests share one `/oauth/token-request` call.
+- Closing a tab mid-query aborts the in-flight query, stopping cloud-warehouse billing on dropped tabs.
+- Per-tab streaming snapshot cache: LRU at 50 entries with 1h TTL.
+- Snowflake row-count probe strips trailing semicolons before the `SELECT COUNT(*) FROM (sql)` wrap; previously parse-errored for any pasted query ending in `;`.
+- Toast notifications use `role="alert"` for errors and `role="status"` otherwise (screen reader announce).
+
+### Fixed
+- Snowflake OAuth callback under Cross-Origin-Opener-Policy `same-origin`: `popup.closed` polling triggered false-positive "OAuth cancelled" rejects; now relies on three-channel delivery (BroadcastChannel + postMessage + localStorage poll) plus a 5-minute hard timeout.
+- BigQuery OAuth popup callback reliable under COOP=same-origin (same fix class as above).
+- Snowflake `isConnected()` honors refresh token (explorer was collapsing every ~10 min after access-token expiry).
+- Cortex chat-array form (flat role-prefixed strings caused the model to echo `"ASSISTANT:"`).
+- INFORMATION_SCHEMA query history fully qualifies the function call (was failing for roles lacking MONITOR USAGE).
+- Aggregation regex missed `COUNT(*)` because `(` and `*` are both non-word characters.
+- Snapshot cache cross-contamination across connectors (key now includes connector type).
+- Stop Query button stuck on after cache-restore.
+- Tab horizontal jiggle, tab order rotation, and three other latent v0.2.0 bugs.
+
+## [0.2.0] - 2025-12-10
 
 ### Added
 - DuckDB WASM integration as primary query engine (v1.31.0)
-- BigQuery connector with OAuth 2.0 authentication
+- BigQuery connector with OAuth 2.0 authentication (PKCE)
 - File import from CSV, TSV, JSON, Parquet, Excel, JSONL
-- Export results to CSV, JSON, and Parquet formats
+- Export results to CSV, JSON, and Parquet formats (Parquet via JSON intermediate)
 - Monaco editor with syntax highlighting and autocomplete
 - 10 color themes (Light, Dark, Dracula, etc.)
 - Virtual scrolling for large result sets
@@ -28,19 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-tab SQL editor interface
 - Cost estimation for BigQuery queries
 - Materialization of query results to local DuckDB
-- Comprehensive test suite (unit + E2E)
-- Full TypeScript with strict mode enabled
+- Test suite (unit + E2E)
+- TypeScript strict mode
 
 ### Fixed
-- XSS vulnerability in hint rendering (DOMPurify sanitization)
-- Alert dialogs replaced with proper logging
+- XSS in hint rendering (DOMPurify sanitization)
+- Alert dialogs replaced with logging
 
 ### Documentation
-- Added comprehensive ARCHITECTURE.md
-- Added CONTRIBUTING.md with development setup
-- Added SECURITY.md for vulnerability reporting
-- Added CODE_OF_CONDUCT.md
-- Added extensive README with screenshots and badges
+- ARCHITECTURE.md
+- CONTRIBUTING.md
+- SECURITY.md
+- CODE_OF_CONDUCT.md
+- README with screenshots
 
 ## [0.1.0] - 2025-11-15
 

@@ -106,7 +106,7 @@ class ConnectionHealthChecker {
 			let queryServiceHealthy = false;
 			try {
 				const result = await Promise.race([
-					queryService.executeQuery(healthQuery),
+					queryService.executeQueryOnConnector("duckdb", healthQuery),
 					new Promise<never>((_, reject) =>
 						setTimeout(
 							() => reject(new Error("Health check timeout")),

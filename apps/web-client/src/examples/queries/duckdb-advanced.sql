@@ -478,9 +478,11 @@ SELECT
     QUANTILE_DISC(val, 0.5) AS quantile_50_discrete,
     QUANTILE_CONT(val, [0.25, 0.5, 0.75]) AS quartiles,
 
-    -- Percentiles (same as quantiles, just x100)
-    PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY val) AS p95,
-    PERCENTILE_DISC(0.95) WITHIN GROUP (ORDER BY val) AS p95_discrete,
+    -- Percentiles via quantile_*: same math, function form works on
+    -- every DuckDB version (the SQL-standard `PERCENTILE_CONT(q) WITHIN
+    -- GROUP (...)` form was added later)
+    QUANTILE_CONT(val, 0.95) AS p95,
+    QUANTILE_DISC(val, 0.95) AS p95_discrete,
 
     -- Median Absolute Deviation (robust dispersion)
     MAD(val) AS median_absolute_deviation
@@ -524,8 +526,10 @@ SELECT
     grp,
     BOOL_AND(flag) AS all_true,
     BOOL_OR(flag) AS any_true,
-    COUNT(*) FILTER (WHERE flag) AS count_true,
-    EVERY(flag) AS every_alias  -- Same as BOOL_AND
+    COUNT(*) FILTER (WHERE flag) AS count_true
+    -- (DuckDB has BOOL_AND / BOOL_OR; the SQL-standard EVERY() alias
+    -- exists in some versions but not all - stick with BOOL_AND for
+    -- portability across DuckDB versions.)
 FROM agg_demo
 GROUP BY grp;
 

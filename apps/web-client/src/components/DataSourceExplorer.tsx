@@ -18,6 +18,11 @@ import { TrashIcon, UploadIcon, ChevronsDownIcon, ChevronsUpIcon } from "./Icons
 import { DataSourceTree } from "./DataSourceTree";
 import { TableInfoModal } from "./TableInfoModal";
 import { useToast } from "./Toast";
+import CatalogExplorer from "../providers/catalog/CatalogExplorer";
+import { snowflakeCatalogProvider } from "../providers/catalog/SnowflakeCatalogProvider";
+import { OPEN_SNOWFLAKE_EDIT_EVENT } from "./SnowflakeContextButton";
+import SnowflakeSetupDialog from "./SnowflakeSetupDialog";
+import { queryService } from "../services/streaming-query-service";
 
 interface DataSourceExplorerProps {
 	isVisible: boolean;
@@ -72,6 +77,29 @@ function DataSourceExplorer({
 	const [isDragging, setIsDragging] = useState(false);
 	const [isDraggingOverTrash, setIsDraggingOverTrash] = useState(false);
 	const contentRef = useRef<HTMLDivElement>(null);
+
+	// Snowflake explorer state — visible when connected, with edit-dialog hook.
+	const [isSnowflakeConnected, setIsSnowflakeConnected] = useState(
+		queryService.isSnowflakeConnected(),
+	);
+	const [showSnowflakeEdit, setShowSnowflakeEdit] = useState(false);
+	React.useEffect(() => {
+		const id = setInterval(
+			() => setIsSnowflakeConnected(queryService.isSnowflakeConnected()),
+			2000,
+		);
+		return () => clearInterval(id);
+	}, []);
+
+	// Listen for cross-component signal from the topbar SnowflakeContextButton —
+	// opens the reconnect modal when the user picks a different role from the
+	// topbar popover. Decoupled via a window event so Header doesn't need a
+	// prop chain into local state here.
+	React.useEffect(() => {
+		const handler = () => setShowSnowflakeEdit(true);
+		window.addEventListener(OPEN_SNOWFLAKE_EDIT_EVENT, handler);
+		return () => window.removeEventListener(OPEN_SNOWFLAKE_EDIT_EVENT, handler);
+	}, []);
 
 	// Use custom hooks for state and actions
 	const actions = useDataSourceActions({
@@ -429,10 +457,28 @@ function DataSourceExplorer({
 			)}
 
 			<div className="explorer-content unified" ref={contentRef}>
+				{isSnowflakeConnected && (
+					<CatalogExplorer
+						provider={snowflakeCatalogProvider}
+						host={{
+							insertIntoEditor: (sql) => onInsertQuery(sql, "snowflake"),
+							copyToClipboard: async (text) => {
+								try {
+									await navigator.clipboard.writeText(text);
+								} catch {
+									// noop — clipboard not available in some contexts
+								}
+							},
+							showToast: (msg, type) => showToast(msg, type),
+							openConnectionEdit: () => setShowSnowflakeEdit(true),
+						}}
+					/>
+				)}
 				<DataSourceTree
 					sections={state.treeSections}
 					selectedNodeId={state.selectedNodeId}
 					isBigQueryConnected={state.isBigQueryConnected}
+					isSnowflakeConnected={isSnowflakeConnected}
 					hasDataSources={dataSources.length > 0}
 					isHttpMode={isHttpMode}
 					onSectionToggle={state.handleSectionToggle}
@@ -445,6 +491,26 @@ function DataSourceExplorer({
 					onOpenServerSettings={onOpenServerSettings}
 				/>
 			</div>
+
+			{showSnowflakeEdit && (
+				<SnowflakeSetupDialog
+					onClose={() => setShowSnowflakeEdit(false)}
+					onSuccess={() => {
+						/* connector state updates itself via polling */
+					}}
+					showToast={showToast}
+					initialConfig={{
+						account: queryService.getSnowflakeConnector()?.getAccount(),
+						clientId: "<edit-mode>",
+						warehouse: queryService.getSnowflakeConnector()?.getWarehouse(),
+						role: queryService.getSnowflakeConnector()?.getRole(),
+						database: queryService.getSnowflakeConnector()?.getDatabase(),
+						schema: queryService
+							.getSnowflakeConnector()
+							?.getDefaultSchema(),
+					}}
+				/>
+			)}
 
 			{/* Table Info Modal */}
 			{state.tableInfoModal && (

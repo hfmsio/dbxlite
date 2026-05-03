@@ -3,7 +3,7 @@
  * Settings tab for configuring AI providers, API keys, and models.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
 	type AIProviderType,
 	aiCredentialStore,
@@ -12,7 +12,9 @@ import {
 	getProvider,
 } from "../../services/ai";
 import { useAIChatStore } from "../../stores/aiChatStore";
-import { CheckIcon, KeyIcon, TrashIcon } from "../Icons";
+import { hasPiiConsent, revokePiiConsent } from "../../utils/aiPiiConsent";
+import ApiKeyInlineField from "../ai/ApiKeyInlineField";
+import { CheckIcon } from "../Icons";
 
 interface AISettingsProps {
 	showToast?: (
@@ -21,13 +23,6 @@ interface AISettingsProps {
 		duration?: number,
 	) => void;
 }
-
-const apiKeyUrls: Record<AIProviderType, string> = {
-	gemini: "https://aistudio.google.com/app/apikey",
-	groq: "https://console.groq.com/keys",
-	openai: "https://platform.openai.com/api-keys",
-	anthropic: "https://console.anthropic.com/settings/keys",
-};
 
 export default function AISettings({ showToast }: AISettingsProps) {
 	const {
@@ -39,117 +34,61 @@ export default function AISettings({ showToast }: AISettingsProps) {
 		clearMessages,
 	} = useAIChatStore();
 
-	const [apiKey, setApiKey] = useState("");
 	const [savedKeys, setSavedKeys] = useState<Record<AIProviderType, boolean>>({
 		openai: false,
 		anthropic: false,
 		gemini: false,
 		groq: false,
 	});
-	const [testing, setTesting] = useState(false);
-	const [testResult, setTestResult] = useState<"success" | "error" | null>(
-		null,
-	);
-	const testAbortRef = useRef<AbortController | null>(null);
 
-	// Abort any in-flight test on unmount
-	useEffect(() => {
-		return () => {
-			testAbortRef.current?.abort();
-		};
-	}, []);
+	// Tracks which providers have a stored PII consent grant. Used to
+	// conditionally render the "Reset PII consent" row.
+	const [consentGranted, setConsentGranted] = useState<
+		Record<AIProviderType, boolean>
+	>({
+		openai: false,
+		anthropic: false,
+		gemini: false,
+		groq: false,
+	});
 
-	// Load which providers have saved keys
-	useEffect(() => {
-		(async () => {
-			const result: Record<string, boolean> = {};
-			for (const type of getAllProviderTypes()) {
-				const key = await aiCredentialStore.load(getCredentialKey(type));
-				result[type] = !!key;
-			}
-			setSavedKeys(result as Record<AIProviderType, boolean>);
-		})();
-	}, []);
-
-	const handleSaveKey = useCallback(async () => {
-		if (!apiKey.trim()) return;
-		await aiCredentialStore.save(
-			getCredentialKey(activeProvider),
-			apiKey.trim(),
-		);
-		setSavedKeys((prev) => ({ ...prev, [activeProvider]: true }));
-		setApiKey("");
-		showToast?.("API key saved", "success", 2000);
-	}, [apiKey, activeProvider, showToast]);
-
-	const handleRemoveKey = useCallback(async () => {
-		await aiCredentialStore.save(getCredentialKey(activeProvider), null);
-		setSavedKeys((prev) => ({ ...prev, [activeProvider]: false }));
-		showToast?.("API key removed", "info", 2000);
-	}, [activeProvider, showToast]);
-
-	const handleTestKey = useCallback(async () => {
-		setTesting(true);
-		setTestResult(null);
-
-		// Abort any previous test
-		testAbortRef.current?.abort();
-		const controller = new AbortController();
-		testAbortRef.current = controller;
-
-		try {
-			const key = (await aiCredentialStore.load(
-				getCredentialKey(activeProvider),
-			)) as string | null;
-			if (!key) {
-				setTestResult("error");
-				showToast?.("No API key saved", "error", 2000);
-				return;
-			}
-
-			const provider = getProvider(activeProvider);
-			const model = selectedModels[activeProvider];
-			const testMessages = [
-				{ role: "user" as const, content: "Say 'OK' and nothing else." },
-			];
-
-			let gotResponse = false;
-			for await (const chunk of provider.streamChat(
-				testMessages,
-				{
-					apiKey: key,
-					model,
-					maxTokens: 10,
-				},
-				controller.signal,
-			)) {
-				if (chunk.type === "text") {
-					gotResponse = true;
-					break;
-				}
-				if (chunk.type === "error") {
-					throw new Error(chunk.error);
-				}
-			}
-
-			if (gotResponse) {
-				setTestResult("success");
-				showToast?.("API key is valid", "success", 2000);
-			} else {
-				setTestResult("error");
-				showToast?.("No response received", "error", 2000);
-			}
-		} catch (err) {
-			if ((err as Error).name === "AbortError") return;
-			setTestResult("error");
-			showToast?.(`Test failed: ${(err as Error).message}`, "error", 4000);
-		} finally {
-			testAbortRef.current = null;
-			setTesting(false);
+	const refreshSavedKeys = useCallback(async () => {
+		const result: Record<string, boolean> = {};
+		for (const type of getAllProviderTypes()) {
+			const key = await aiCredentialStore.load(getCredentialKey(type));
+			result[type] = !!key;
 		}
-	}, [activeProvider, selectedModels, showToast]);
+		setSavedKeys(result as Record<AIProviderType, boolean>);
+	}, []);
 
-	const provider = getProvider(activeProvider);
+	const refreshConsent = useCallback(() => {
+		const next: Record<string, boolean> = {};
+		for (const type of getAllProviderTypes()) {
+			next[type] = hasPiiConsent(type);
+		}
+		setConsentGranted(next as Record<AIProviderType, boolean>);
+	}, []);
+
+	useEffect(() => {
+		refreshSavedKeys();
+		refreshConsent();
+	}, [refreshSavedKeys, refreshConsent]);
+
+	// AISettings manages BYO providers only. When activeProvider is a warehouse
+	// backend id (e.g. "snowflake-cortex"), narrow to a sensible BYO default.
+	const BYO_TYPES: readonly AIProviderType[] = [
+		"gemini",
+		"groq",
+		"openai",
+		"anthropic",
+	];
+	const settingsProvider: AIProviderType = BYO_TYPES.includes(
+		activeProvider as AIProviderType,
+	)
+		? (activeProvider as AIProviderType)
+		: "gemini";
+
+	const provider = getProvider(settingsProvider);
 
 	const sectionStyle: React.CSSProperties = {
 		marginBottom: "24px",
@@ -174,6 +113,27 @@ export default function AISettings({ showToast }: AISettingsProps) {
 			>
 				AI Assistant
 			</h3>
+
+			{activeProvider === "snowflake-cortex" && (
+				<div
+					style={{
+						marginBottom: 16,
+						padding: "10px 12px",
+						background: "rgba(59, 130, 246, 0.08)",
+						border: "1px solid rgba(59, 130, 246, 0.25)",
+						borderRadius: 6,
+						fontSize: 12,
+						color: "var(--text-primary)",
+						lineHeight: 1.5,
+					}}
+				>
+					<strong>Snowflake Cortex is your active backend.</strong> The chat panel
+					runs <code style={{ fontSize: 11 }}>SNOWFLAKE.CORTEX.COMPLETE(...)</code> on
+					your warehouse - no external API key needed. The settings below configure
+					BYO providers (current selection: <strong>{provider.displayName}</strong>).
+					Switch backends from the chat-panel picker.
+				</div>
+			)}
 
 			{/* Provider Selection */}
 			<div style={sectionStyle}>
@@ -241,143 +201,28 @@ export default function AISettings({ showToast }: AISettingsProps) {
 
 			{/* API Key */}
 			<div style={sectionStyle}>
-				<label style={labelStyle}>
-					API Key
-					{savedKeys[activeProvider] && (
-						<span
-							style={{
-								color: "#10b981",
-								fontWeight: "normal",
-								marginLeft: "8px",
-								fontSize: "11px",
-							}}
-						>
-							Configured
-						</span>
-					)}
-				</label>
-				{savedKeys[activeProvider] ? (
-					<div style={{ display: "flex", gap: "8px" }}>
-						<button
-							onClick={handleTestKey}
-							disabled={testing}
-							style={{
-								flex: 1,
-								padding: "8px 12px",
-								background:
-									testResult === "success"
-										? "rgba(16, 185, 129, 0.1)"
-										: testResult === "error"
-											? "rgba(239, 68, 68, 0.1)"
-											: "var(--bg-tertiary)",
-								border: `1px solid ${
-									testResult === "success"
-										? "#10b981"
-										: testResult === "error"
-											? "#ef4444"
-											: "var(--border-light)"
-								}`,
-								borderRadius: "6px",
-								color: "var(--text-primary)",
-								fontSize: "13px",
-								cursor: testing ? "wait" : "pointer",
-								display: "flex",
-								alignItems: "center",
-								justifyContent: "center",
-								gap: "6px",
-							}}
-						>
-							<KeyIcon size={14} />
-							{testing
-								? "Testing..."
-								: testResult === "success"
-									? "Key is valid"
-									: testResult === "error"
-										? "Test failed"
-										: "Test Key"}
-						</button>
-						<button
-							onClick={handleRemoveKey}
-							title="Remove API key"
-							style={{
-								padding: "8px 12px",
-								background: "var(--bg-tertiary)",
-								border: "1px solid var(--border-light)",
-								borderRadius: "6px",
-								color: "#ef4444",
-								cursor: "pointer",
-								display: "flex",
-								alignItems: "center",
-								gap: "4px",
-								fontSize: "13px",
-							}}
-						>
-							<TrashIcon size={14} />
-							Remove
-						</button>
-					</div>
-				) : (
-					<div style={{ display: "flex", gap: "8px" }}>
-						<input
-							type="password"
-							value={apiKey}
-							onChange={(e) => setApiKey(e.target.value)}
-							onKeyDown={(e) => {
-								if (e.key === "Enter") handleSaveKey();
-							}}
-							placeholder="Paste your API key..."
-							style={{
-								flex: 1,
-								padding: "8px 12px",
-								background: "var(--bg-primary)",
-								color: "var(--text-primary)",
-								border: "1px solid var(--border-light)",
-								borderRadius: "6px",
-								fontSize: "13px",
-								outline: "none",
-							}}
-						/>
-						<button
-							onClick={handleSaveKey}
-							disabled={!apiKey.trim()}
-							style={{
-								padding: "8px 16px",
-								background: apiKey.trim()
-									? "var(--accent)"
-									: "var(--bg-tertiary)",
-								color: apiKey.trim() ? "white" : "var(--text-muted)",
-								border: "none",
-								borderRadius: "6px",
-								fontSize: "13px",
-								cursor: apiKey.trim() ? "pointer" : "not-allowed",
-							}}
-						>
-							Save
-						</button>
-					</div>
-				)}
-				<a
-					href={apiKeyUrls[activeProvider]}
-					target="_blank"
-					rel="noopener noreferrer"
-					style={{
-						display: "inline-block",
-						marginTop: "6px",
-						fontSize: "12px",
-						color: "var(--accent)",
-						textDecoration: "none",
+				<label style={labelStyle}>API Key</label>
+				<ApiKeyInlineField
+					provider={settingsProvider}
+					showManagement
+					variant="settings"
+					onSaved={() => {
+						void refreshSavedKeys();
+						showToast?.("API key saved", "success", 2000);
 					}}
-				>
-					Get a {provider.displayName} API key
-				</a>
+					onRemoved={() => {
+						void refreshSavedKeys();
+						showToast?.("API key removed", "info", 2000);
+					}}
+				/>
 			</div>
 
 			{/* Model Selection */}
 			<div style={sectionStyle}>
 				<label style={labelStyle}>Model</label>
 				<select
-					value={selectedModels[activeProvider]}
-					onChange={(e) => setSelectedModel(activeProvider, e.target.value)}
+					value={selectedModels[settingsProvider] ?? provider.models[0]?.id}
+					onChange={(e) => setSelectedModel(settingsProvider, e.target.value)}
 					style={{
 						width: "100%",
 						padding: "8px 12px",
@@ -432,6 +277,51 @@ export default function AISettings({ showToast }: AISettingsProps) {
 					)}
 				</div>
 			</div>
+
+			{/* PII Consent — only render the row when the current settings
+			    provider has a stored grant. Each BYO provider's first send
+			    gates on a one-time consent dialog; this is where users
+			    revoke and force the dialog to appear again on the next
+			    send. */}
+			{consentGranted[settingsProvider] && (
+				<div style={sectionStyle}>
+					<label style={labelStyle}>Data Sharing Consent</label>
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "space-between",
+						}}
+					>
+						<span style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+							You've granted permission to send messages to{" "}
+							{provider.label}.
+						</span>
+						<button
+							onClick={() => {
+								revokePiiConsent(settingsProvider);
+								refreshConsent();
+								showToast?.(
+									`Reset consent for ${provider.label}`,
+									"info",
+									2000,
+								);
+							}}
+							style={{
+								padding: "6px 12px",
+								background: "var(--bg-tertiary)",
+								border: "1px solid var(--border-light)",
+								borderRadius: "6px",
+								color: "var(--text-muted)",
+								fontSize: "12px",
+								cursor: "pointer",
+							}}
+						>
+							Reset
+						</button>
+					</div>
+				</div>
+			)}
 
 			{/* Free Tier Info */}
 			<div

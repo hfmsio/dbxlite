@@ -14,7 +14,8 @@ import {
 import type { AutocompleteMode } from "../stores/settingsStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { getMonacoTheme, getNextTheme, registerMonacoThemes } from "../themes";
-import type { DataSource } from "../types/data-source";
+import type { ConnectorType, DataSource } from "../types/data-source";
+import { useQueryContext } from "../contexts/QueryContext";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("EditorPane");
@@ -111,6 +112,8 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 		},
 		ref,
 	) => {
+		const { activeConnector } = useQueryContext();
+		const activeConnectorRef = useRef<ConnectorType>(activeConnector);
 		const containerRef = useRef<HTMLDivElement | null>(null);
 		const editorInstanceRef =
 			useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -123,6 +126,10 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 		const onFocusRef = useRef(onFocus);
 		const onBlurRef = useRef(onBlur);
 		const dataSourcesRef = useRef(dataSources);
+
+		useEffect(() => {
+			activeConnectorRef.current = activeConnector;
+		}, [activeConnector]);
 
 		// Keep refs in sync
 		useEffect(() => {
@@ -348,8 +355,18 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 
 					try {
 						const currentValue = model.getValue();
+						// Map active connector to sql-formatter dialect. Snowflake and
+						// BigQuery have dedicated dialects (preserve quoted identifiers,
+						// dialect-specific keywords); DuckDB falls back to generic 'sql'.
+						const dialectByConnector: Record<ConnectorType, string> = {
+							duckdb: "sql",
+							bigquery: "bigquery",
+							snowflake: "snowflake",
+						};
+						const language =
+							dialectByConnector[activeConnectorRef.current] ?? "sql";
 						const formatted = format(currentValue, {
-							language: "sql",
+							language: language as "sql",
 							tabWidth: 2,
 							keywordCase: "upper",
 							linesBetweenQueries: 2,

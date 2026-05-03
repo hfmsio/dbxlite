@@ -152,8 +152,85 @@ export function useTableData({
 	const [isCacheComplete, setIsCacheComplete] = useState(false);
 	const [isCaching, setIsCaching] = useState(false);
 
-	// Get active connector type
+	// Get active connector type (also used as part of the snapshot cache key
+	// so the same SQL run against different connectors doesn't cross-contaminate
+	// — e.g., a parquet-file query cached on DuckDB must NOT be served when the
+	// active connector is Snowflake).
 	const connectorType = queryService.getActiveConnectorType();
+
+	/**
+	 * Per-tab snapshot cache for streaming-mode results.
+	 * Keyed by `${connector}::${tabId}::${sql}`.
+	 *
+	 * Without this, every tab switch re-fires the streaming-mode effect (which
+	 * depends on `sql`) and re-executes the warehouse query — burning credits and
+	 * making tab navigation feel broken. With this cache, switching back to a tab
+	 * with a previously-completed streaming query just rehydrates the displayed
+	 * state from memory.
+	 *
+	 * Connector is part of the key because the streaming-mode effect can fire
+	 * after the user silently auto-switched connectors (or just changed it
+	 * manually). Without the connector segment, a parquet-flavored DuckDB
+	 * snapshot would be served for a Snowflake-active tab, looking like
+	 * Snowflake successfully ran a parquet query when in fact the result is
+	 * stale DuckDB data. Confirmed bug, now keyed-out.
+	 *
+	 * Trade-off: re-running the *exact same* SQL on the same tab + connector
+	 * won't re-execute (cache hits). To force a fresh run, edit the SQL,
+	 * switch connector and back, or close+reopen the tab. If users want
+	 * explicit "rerun identical query", we can add a runId counter.
+	 */
+	type StreamingSnapshot = {
+		pageData: RowData[];
+		columns: ColumnInfo[];
+		totalRows: number;
+		isEstimatedCount: boolean;
+		executionTime: number;
+		currentPage: number;
+		sortColumn: string | null;
+		sortDirection: SortDirection;
+		// Wall-clock at write time, used for TTL eviction.
+		savedAt: number;
+	};
+	// Bounded snapshot cache. Without bounds, long sessions with many distinct
+	// SQL edits accumulate one snapshot per (tabId, sql) — each holding a full
+	// page of row data. LRU caps the count; TTL guards multi-day sessions
+	// where a snapshot may have gone stale relative to upstream warehouse data.
+	const SNAPSHOT_CACHE_MAX = 50;
+	const SNAPSHOT_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+	const streamingSnapshotsRef = useRef<Map<string, StreamingSnapshot>>(
+		new Map(),
+	);
+	const snapshotKey = (
+		conn: string | undefined,
+		id: string | undefined,
+		q: string | undefined,
+	) => `${conn ?? ""}::${id ?? ""}::${q ?? ""}`;
+	// Map preserves insertion order, so re-setting moves an entry to the
+	// "most recently used" position. Drop the oldest when over capacity.
+	const setSnapshot = (key: string, snap: Omit<StreamingSnapshot, "savedAt">) => {
+		const m = streamingSnapshotsRef.current;
+		m.delete(key);
+		m.set(key, { ...snap, savedAt: Date.now() });
+		while (m.size > SNAPSHOT_CACHE_MAX) {
+			const oldest = m.keys().next().value;
+			if (oldest === undefined) break;
+			m.delete(oldest);
+		}
+	};
+	const getSnapshot = (key: string): StreamingSnapshot | undefined => {
+		const m = streamingSnapshotsRef.current;
+		const snap = m.get(key);
+		if (!snap) return undefined;
+		if (Date.now() - snap.savedAt > SNAPSHOT_CACHE_TTL_MS) {
+			m.delete(key);
+			return undefined;
+		}
+		// Re-insert to bump LRU position.
+		m.delete(key);
+		m.set(key, snap);
+		return snap;
+	};
 
 	// Pre-compute formatted cell values once when data changes
 	// This prevents expensive formatCellValue calls on every render/keystroke
@@ -599,10 +676,39 @@ export function useTableData({
 		],
 	);
 
-	// Effect for streaming mode (SQL-based)
+	// Effect for streaming mode (SQL-based).
+	//
+	// Cache-aware: on tab switch back to an already-executed (tabId, sql),
+	// restore from snapshot instead of re-executing. The streaming-mode hook
+	// is shared across tabs, so without per-tab caching, switching tabs would
+	// re-run the warehouse query every time — unacceptable for credit-burning
+	// backends like Snowflake.
 	useEffect(() => {
 		if (!isStreamingMode || !sql) return;
 
+		const key = snapshotKey(connectorType, tabId, sql);
+		const snap = getSnapshot(key);
+		if (snap) {
+			// Tab switch back to a cached run — restore display state, no execute.
+			// Important: clear loading state too. useQueryExecution sets
+			// tab.loading=true expecting executeQuery to eventually flip it. When
+			// we short-circuit via snapshot, we own that flip — otherwise the
+			// Stop Query button stays on after a cache-hit restore.
+			setError(null);
+			setPageData(snap.pageData);
+			setColumns(snap.columns);
+			setTotalRows(snap.totalRows);
+			setIsEstimatedCount(snap.isEstimatedCount);
+			setExecutionTime(snap.executionTime);
+			setCurrentPage(snap.currentPage);
+			setSortColumn(snap.sortColumn);
+			setSortDirection(snap.sortDirection);
+			setLoading(false);
+			onLoadingChangeRef.current?.(false, tabId);
+			return;
+		}
+
+		// First-time execution for this (tabId, sql).
 		setError(null);
 		setPageData([]);
 		setColumns([]);
@@ -611,7 +717,43 @@ export function useTableData({
 		return () => {
 			// Cleanup handled by abort signal
 		};
-	}, [sql, isStreamingMode, executeQuery]);
+	}, [sql, tabId, connectorType, isStreamingMode, executeQuery]);
+
+	// Save snapshot whenever displayed streaming-mode state stabilizes.
+	// Guard against partial writes during loading: only snapshot when we have
+	// real data and aren't mid-fetch.
+	useEffect(() => {
+		if (!isStreamingMode || !sql || !tabId) return;
+		if (loading || loadingPage) return;
+		if (pageData.length === 0 || columns.length === 0) return;
+
+		const key = snapshotKey(connectorType, tabId, sql);
+		setSnapshot(key, {
+			pageData,
+			columns,
+			totalRows,
+			isEstimatedCount,
+			executionTime,
+			currentPage,
+			sortColumn,
+			sortDirection,
+		});
+	}, [
+		isStreamingMode,
+		sql,
+		tabId,
+		connectorType,
+		loading,
+		loadingPage,
+		pageData,
+		columns,
+		totalRows,
+		isEstimatedCount,
+		executionTime,
+		currentPage,
+		sortColumn,
+		sortDirection,
+	]);
 
 	// Effect to clear state when neither sql nor result is provided
 	useEffect(() => {

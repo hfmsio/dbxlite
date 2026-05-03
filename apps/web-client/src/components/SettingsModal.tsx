@@ -10,6 +10,7 @@ import {
 	HelpSettings,
 	ServerSettings,
 } from "./settings";
+import type { HelpSubTab } from "./settings/HelpSettings";
 
 export type SettingsTab = "appearance" | "connections" | "formatting" | "help" | "about" | "server" | "ai";
 
@@ -39,6 +40,12 @@ interface SettingsModalProps {
 	onClearBigQueryCache?: () => void;
 	onReloadBigQueryData?: () => Promise<void>;
 	initialTab?: SettingsTab;
+	/**
+	 * When the Help tab is opened, pre-select this sub-tab. Lets callers
+	 * deep-link from elsewhere in the app (e.g. an error toast pointing
+	 * users at the Snowflake setup walkthrough).
+	 */
+	initialHelpSubTab?: HelpSubTab;
 }
 
 export default function SettingsModal({
@@ -63,6 +70,7 @@ export default function SettingsModal({
 	onClearBigQueryCache,
 	onReloadBigQueryData,
 	initialTab,
+	initialHelpSubTab,
 }: SettingsModalProps) {
 	const { isHttpMode } = useMode();
 	// Default to "server" tab in HTTP mode, "appearance" otherwise
@@ -375,7 +383,7 @@ export default function SettingsModal({
 				)}
 
 				{/* Help Tab */}
-				{activeTab === "help" && <HelpSettings />}
+				{activeTab === "help" && <HelpSettings initialSubTab={initialHelpSubTab} />}
 
 				{/* About Tab */}
 				{activeTab === "about" && <AboutSettings />}

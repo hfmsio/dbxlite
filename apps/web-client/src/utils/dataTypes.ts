@@ -404,6 +404,86 @@ export class TypeMapper {
 	}
 
 	/**
+	 * Normalize a Snowflake type to our DataType enum.
+	 * Snowflake's resultSetMetaData.rowType uses these wire-level type names:
+	 *   FIXED, REAL, TEXT, BOOLEAN, DATE, TIME, TIMESTAMP_LTZ/NTZ/TZ,
+	 *   VARIANT, OBJECT, ARRAY, BINARY
+	 * SHOW COLUMNS data_type JSON parses to these (plus aliases like NUMBER).
+	 */
+	static normalizeSnowflakeType(sfType: string): DataType {
+		const normalized = sfType.toUpperCase().trim();
+
+		// Numeric — FIXED is the wire type for NUMBER/INT family
+		if (
+			normalized === "FIXED" ||
+			normalized === "NUMBER" ||
+			normalized === "DECIMAL" ||
+			normalized === "NUMERIC"
+		)
+			return DataType.DECIMAL;
+		if (
+			normalized === "INT" ||
+			normalized === "INTEGER" ||
+			normalized === "BIGINT" ||
+			normalized === "SMALLINT" ||
+			normalized === "TINYINT" ||
+			normalized === "BYTEINT"
+		)
+			return DataType.BIGINT;
+		if (
+			normalized === "REAL" ||
+			normalized === "FLOAT" ||
+			normalized === "FLOAT4"
+		)
+			return DataType.FLOAT;
+		if (
+			normalized === "FLOAT8" ||
+			normalized === "DOUBLE" ||
+			normalized === "DOUBLE PRECISION"
+		)
+			return DataType.DOUBLE;
+
+		// String / text
+		if (
+			normalized === "TEXT" ||
+			normalized === "VARCHAR" ||
+			normalized === "CHAR" ||
+			normalized === "CHARACTER" ||
+			normalized === "STRING"
+		)
+			return DataType.VARCHAR;
+
+		// Boolean
+		if (normalized === "BOOLEAN" || normalized === "BOOL")
+			return DataType.BOOLEAN;
+
+		// Temporal
+		if (normalized === "DATE") return DataType.DATE;
+		if (normalized === "TIME") return DataType.TIME;
+		if (normalized === "DATETIME") return DataType.DATETIME;
+		if (normalized === "TIMESTAMP" || normalized === "TIMESTAMP_NTZ")
+			return DataType.TIMESTAMP;
+		if (normalized === "TIMESTAMP_LTZ" || normalized === "TIMESTAMP_TZ")
+			return DataType.TIMESTAMPTZ;
+
+		// Binary
+		if (normalized === "BINARY" || normalized === "VARBINARY")
+			return DataType.BLOB;
+
+		// Semi-structured — these become COMPLEX category, formatted as JSON
+		if (normalized === "VARIANT") return DataType.JSON;
+		if (normalized === "OBJECT") return DataType.STRUCT;
+		if (normalized === "ARRAY") return DataType.ARRAY;
+
+		// Spatial
+		if (normalized === "GEOGRAPHY") return DataType.GEOGRAPHY;
+		if (normalized === "GEOMETRY") return DataType.GEOGRAPHY;
+
+		logger.warn(`Unknown Snowflake type: ${sfType}`);
+		return DataType.UNKNOWN;
+	}
+
+	/**
 	 * Normalize any connector type to our DataType enum
 	 */
 	static normalizeType(
@@ -414,6 +494,8 @@ export class TypeMapper {
 			return TypeMapper.normalizeDuckDBType(connectorType);
 		} else if (connector === "bigquery") {
 			return TypeMapper.normalizeBigQueryType(connectorType);
+		} else if (connector === "snowflake") {
+			return TypeMapper.normalizeSnowflakeType(connectorType);
 		}
 		return DataType.UNKNOWN;
 	}

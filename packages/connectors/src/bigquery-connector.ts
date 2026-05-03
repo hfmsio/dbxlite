@@ -1,5 +1,4 @@
-import {
-  BaseConnector,
+import type {
   CloudConnector,
   ConnectionConfig,
   QueryOptions,
@@ -13,7 +12,7 @@ import {
   QueryCostEstimate,
   ConnectionTestResult
 } from './base'
-import { CredentialStore, EncryptionManager } from '@ide/storage'
+import { type CredentialStoreLike, EncryptionManager } from '@ide/storage'
 import { createLogger } from './logger'
 
 const logger = createLogger('BigQuery')
@@ -102,6 +101,13 @@ class MetadataCache {
 export class BigQueryConnector implements CloudConnector {
   readonly id = 'bigquery'
   private token: OAuthToken | null = null
+  /**
+   * In-flight refresh promise. Coalesces concurrent refresh attempts so we
+   * don't fire multiple parallel `/token` calls — Google rotates refresh
+   * tokens infrequently but rate-limits this endpoint, and parallel refresh
+   * is wasteful even when it doesn't fail.
+   */
+  private refreshPromise: Promise<OAuthToken> | null = null
   private credsKey = 'bigquery-token'
   private defaultProjectKey = 'bigquery-default-project'
   private cache = new MetadataCache()
@@ -109,7 +115,7 @@ export class BigQueryConnector implements CloudConnector {
   private defaultProject: string | null = null
 
   constructor(
-    private creds: CredentialStore,
+    private creds: CredentialStoreLike,
     private clientId: string,
     private clientSecret?: string
   ) {
@@ -158,7 +164,10 @@ export class BigQueryConnector implements CloudConnector {
       .join('')
     const challengeBuf = await sha256(codeVerifier)
     const codeChallenge = base64url(challengeBuf)
-    const state = Math.random().toString(36).slice(2)
+    // Use crypto-strong randomness for OAuth state (CSRF protection).
+    // Math.random() is predictable; matches snowflake-connector's
+    // crypto.randomUUID() pattern.
+    const state = crypto.randomUUID()
 
     // Request appropriate scopes for all APIs
     const params = new URLSearchParams({
@@ -182,64 +191,117 @@ export class BigQueryConnector implements CloudConnector {
 
     const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + params.toString()
     const w = window.open(url, 'oauth', 'width=600,height=700')
+    if (!w) {
+      throw new Error('Failed to open OAuth popup. Please allow popups and try again.')
+    }
 
     // Clear any previous OAuth data
-    localStorage.removeItem('bigquery_oauth_response')
-    localStorage.removeItem('bigquery_oauth_error')
+    try {
+      localStorage.removeItem('bigquery_oauth_response')
+      localStorage.removeItem('bigquery_oauth_error')
+    } catch {
+      // localStorage unavailable in some test envs
+    }
 
+    // Wait for the OAuth callback to deliver a code via any of:
+    //   1. postMessage from the popup (preferred when window.opener survives)
+    //   2. storage event (fires synchronously when callback writes localStorage
+    //      from another document — works across the cross-origin redirect)
+    //   3. localStorage poll (covers browser quirks where storage events drop)
+    //
+    // We deliberately do NOT poll `popup.closed` to detect cancellation:
+    // under Cross-Origin-Opener-Policy: same-origin (set by the dev server
+    // for DuckDB threading), the parent's popup reference becomes a
+    // browsing-context-less Window once the popup navigates cross-origin —
+    // `popup.closed` then reports `true` even while Google's consent screen
+    // is still live, producing false-positive "cancelled by user" rejects.
+    //
+    // 5-minute hard ceiling bounds the wait. If the user genuinely
+    // X's the popup, they'll see the timeout error after 5 minutes — the
+    // trade-off vs unreliable cancel detection.
     const code = await new Promise<string>((resolve, reject) => {
-      // Method 1: Listen for postMessage (preferred)
-      const messageHandler = (ev: MessageEvent) => {
-        if (ev.origin !== window.location.origin) return
-        const data = ev.data
-        if (data && data.type === 'oauth_code' && data.state === state) {
-          cleanup()
-          resolve(data.code)
-          try { w?.close() } catch (e) {}
+      let resolved = false
+
+      const settle = (codeOrError: { code: string } | { error: string }) => {
+        if (resolved) return
+        resolved = true
+        cleanup()
+        try { w.close() } catch { /* may already be gone */ }
+        if ('error' in codeOrError) {
+          reject(new Error(codeOrError.error))
+        } else {
+          resolve(codeOrError.code)
         }
       }
 
-      // Method 2: Poll localStorage as fallback (for when popup navigates)
-      const storageCheckInterval = setInterval(() => {
-        const oauthResponse = localStorage.getItem('bigquery_oauth_response')
-        const oauthError = localStorage.getItem('bigquery_oauth_error')
-
-        if (oauthError) {
-          cleanup()
-          localStorage.removeItem('bigquery_oauth_error')
-          reject(new Error(`OAuth failed: ${oauthError}`))
-          try { w?.close() } catch (e) {}
-          return
+      const checkLocalStorage = (): boolean => {
+        let oauthError: string | null = null
+        let oauthResponse: string | null = null
+        try {
+          oauthError = localStorage.getItem('bigquery_oauth_error')
+          oauthResponse = localStorage.getItem('bigquery_oauth_response')
+        } catch {
+          return false
         }
-
+        if (oauthError) {
+          try { localStorage.removeItem('bigquery_oauth_error') } catch {}
+          settle({ error: `OAuth failed: ${oauthError}` })
+          return true
+        }
         if (oauthResponse) {
           try {
             const data = JSON.parse(oauthResponse)
             if (data.state === state) {
-              cleanup()
-              localStorage.removeItem('bigquery_oauth_response')
-              resolve(data.code)
-              try { w?.close() } catch (e) {}
+              try { localStorage.removeItem('bigquery_oauth_response') } catch {}
+              settle({ code: data.code })
+              return true
             }
           } catch (e) {
             logger.error('Error parsing OAuth response from localStorage', e)
           }
         }
-      }, 500)
-
-      const timeoutId = setTimeout(() => {
-        cleanup()
-        reject(new Error('OAuth timeout'))
-        try { w?.close() } catch (e) {}
-      }, 120000)
-
-      const cleanup = () => {
-        window.removeEventListener('message', messageHandler)
-        clearInterval(storageCheckInterval)
-        clearTimeout(timeoutId)
+        return false
       }
 
-      window.addEventListener('message', messageHandler)
+      const handleMessage = (ev: MessageEvent) => {
+        if (ev.origin !== window.location.origin) return
+        const data = ev.data
+        if (data && data.type === 'oauth_code' && data.state === state) {
+          settle({ code: data.code })
+        } else if (data && data.type === 'oauth_error') {
+          settle({ error: `OAuth error: ${data.error}` })
+        }
+      }
+
+      const handleStorage = (ev: StorageEvent) => {
+        if (ev.key === 'bigquery_oauth_response' || ev.key === 'bigquery_oauth_error') {
+          checkLocalStorage()
+        }
+      }
+
+      const cleanup = () => {
+        clearTimeout(timeout)
+        clearInterval(pollInterval)
+        window.removeEventListener('message', handleMessage)
+        window.removeEventListener('storage', handleStorage)
+      }
+
+      window.addEventListener('message', handleMessage)
+      window.addEventListener('storage', handleStorage)
+
+      const timeout = setTimeout(() => {
+        settle({ error: 'OAuth timeout — no response after 5 minutes. Try again.' })
+      }, 300000)
+
+      // Belt-and-suspenders 500ms localStorage poll for browsers where the
+      // `storage` event drops or fires unreliably.
+      const pollInterval = setInterval(() => {
+        if (resolved) return
+        checkLocalStorage()
+      }, 500)
+
+      // Initial check in case the callback already wrote before listeners attached.
+      checkLocalStorage()
     })
 
     // Exchange code for tokens
@@ -315,7 +377,8 @@ export class BigQueryConnector implements CloudConnector {
   }
 
   /**
-   * Ensure token is fresh, refresh if needed
+   * Ensure token is fresh, refresh if needed.
+   * Concurrent calls share a single in-flight refresh via refreshPromise.
    */
   private async ensureFreshToken(): Promise<OAuthToken> {
     const tk = await this.loadToken()
@@ -330,10 +393,20 @@ export class BigQueryConnector implements CloudConnector {
       throw new Error('No refresh token available. Please reconnect.')
     }
 
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.refreshTokenInternal(tk).finally(() => {
+        this.refreshPromise = null
+      })
+    }
+    return this.refreshPromise
+  }
+
+  /** Actual refresh roundtrip; only called from ensureFreshToken's coalescer. */
+  private async refreshTokenInternal(tk: OAuthToken): Promise<OAuthToken> {
     const refreshParams: Record<string, string> = {
       client_id: this.clientId,
       grant_type: 'refresh_token',
-      refresh_token: tk.refresh_token
+      refresh_token: tk.refresh_token!
     }
 
     // Add client secret if provided (required for Web application type)
@@ -479,7 +552,7 @@ export class BigQueryConnector implements CloudConnector {
         logger.warn('No projects found. This could mean: 1) You have no Google Cloud projects, 2) Cloud Resource Manager API is not enabled, 3) Your account lacks permission to list projects. Attempting fallback to use BigQuery API directly...')
 
         // Try to get project from token or use a direct BigQuery API call
-        const tk = await this.loadToken()
+        await this.loadToken()
 
         // Try listing datasets without specifying a project to see if we can discover the project
         try {
@@ -668,7 +741,7 @@ export class BigQueryConnector implements CloudConnector {
    * Get complete schema for a project
    */
   async getSchema(projectId?: string): Promise<Schema> {
-    const tk = await this.loadToken()
+    await this.loadToken()
     // Prioritize: explicit projectId > defaultProject (never use token's project_id - it's the OAuth app)
     let project = projectId
     if (!project) {
@@ -719,7 +792,7 @@ export class BigQueryConnector implements CloudConnector {
    * Estimate query cost using dry run
    */
   async estimateQueryCost(sql: string, projectId?: string): Promise<QueryCostEstimate> {
-    const tk = await this.ensureFreshToken()
+    await this.ensureFreshToken()
     // Prioritize: explicit projectId > defaultProject (never use token's project_id - it's the OAuth app)
     let project = projectId
     if (!project) {
@@ -763,7 +836,7 @@ export class BigQueryConnector implements CloudConnector {
     const startTime = Date.now()
 
     try {
-      const tk = await this.ensureFreshToken()
+      await this.ensureFreshToken()
       // Use defaultProject only (never use token's project_id - it's the OAuth app)
       if (!this.defaultProject) await this.loadDefaultProject()
       const project = this.defaultProject
@@ -850,7 +923,11 @@ export class BigQueryConnector implements CloudConnector {
    * Execute SQL query with pagination support
    */
   async *query(sql: string, opts?: QueryOptions): AsyncGenerator<QueryChunk> {
-    const tk = await this.ensureFreshToken()
+    const signal = opts?.signal
+    if (signal?.aborted) {
+      throw new DOMException('Query aborted before start', 'AbortError')
+    }
+    await this.ensureFreshToken()
 
     // Determine project ID with priority:
     // 1. Explicit opts.projectId
@@ -907,7 +984,8 @@ export class BigQueryConnector implements CloudConnector {
           useLegacySql: false,
           maxResults: Math.min(maxRows, 10000), // BigQuery max per page is 10000
           timeoutMs: timeout
-        })
+        }),
+        signal,
       }
     )
 
@@ -938,7 +1016,8 @@ export class BigQueryConnector implements CloudConnector {
         `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries/${encodeURIComponent(initialData.jobReference.jobId)}?` +
         new URLSearchParams({
           maxResults: Math.min(maxRows, 10000).toString()
-        })
+        }),
+        { signal }
       )
       const resultsData = await resultsResponse.json()
       logger.debug('Results fetched', {
@@ -993,7 +1072,8 @@ export class BigQueryConnector implements CloudConnector {
       rows,
       done: !initialData.pageToken,
       schema,
-      totalRows: initialData.totalRows ? parseInt(initialData.totalRows) : undefined
+      totalRows: initialData.totalRows ? parseInt(initialData.totalRows) : undefined,
+      connectorQueryId: initialData.jobReference?.jobId
     }
 
     // Handle pagination if there are more results
@@ -1212,7 +1292,7 @@ export class BigQueryConnector implements CloudConnector {
     const jobId = this.activeJobs.get(queryId)
     if (!jobId) return
 
-    const tk = await this.ensureFreshToken()
+    await this.ensureFreshToken()
     // Use defaultProject only (never use token's project_id - it's the OAuth app)
     if (!this.defaultProject) await this.loadDefaultProject()
     const project = this.defaultProject

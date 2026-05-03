@@ -100,7 +100,7 @@ export function TableInfoModal({
 		setTabState((prev) => ({ ...prev, indexesLoading: true, indexesError: null }));
 
 		try {
-			const result = await queryService.executeQuery(`
+			const result = await queryService.executeQueryOnConnector("duckdb", `
 				SELECT index_name, table_name, is_unique, is_primary, sql
 				FROM duckdb_indexes()
 				WHERE database_name = '${databaseName}'
@@ -144,7 +144,7 @@ export function TableInfoModal({
 		setTabState((prev) => ({ ...prev, constraintsLoading: true, constraintsError: null }));
 
 		try {
-			const result = await queryService.executeQuery(`
+			const result = await queryService.executeQueryOnConnector("duckdb", `
 				SELECT constraint_type, constraint_column_names, constraint_column_indexes, expression
 				FROM duckdb_constraints()
 				WHERE database_name = '${databaseName}'

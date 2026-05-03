@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
 import SettingsModal, { type SettingsTab } from "./SettingsModal";
+import type { HelpSubTab } from "./settings/HelpSettings";
 
 interface SettingsModalWrapperProps {
 	isOpen: boolean;
 	onClose: () => void;
 	initialTab?: SettingsTab;
+	initialHelpSubTab?: HelpSubTab;
 
 	// Settings values
 	fontSize: number;
@@ -41,6 +43,7 @@ export default function SettingsModalWrapper({
 	isOpen,
 	onClose,
 	initialTab,
+	initialHelpSubTab,
 	fontSize,
 	fontFamily,
 	gridFontSize,
@@ -157,6 +160,7 @@ export default function SettingsModalWrapper({
 						onClearBigQueryCache={onClearBigQueryCache}
 						onReloadBigQueryData={onReloadBigQueryData}
 						initialTab={initialTab}
+						initialHelpSubTab={initialHelpSubTab}
 					/>
 				</div>
 			</div>

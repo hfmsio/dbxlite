@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { wireWarehouseBackends } from "./services/ai/wire-warehouse-backends";
+import { queryService } from "./services/streaming-query-service";
+
+// Register warehouse-AI backends with the chat backend registry.
+// Done at app startup so the registry is populated before any chat panel renders.
+wireWarehouseBackends();
 import DataSourceExplorer from "./components/DataSourceExplorer";
 import { CostWarningDialog } from "./components/CostWarningDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -58,6 +64,7 @@ function AppContent() {
 		showSettings,
 		setShowSettings,
 		settingsInitialTab,
+		settingsInitialHelpSubTab,
 		openSettings,
 		closeSettings,
 		showToastHistory,
@@ -78,10 +85,31 @@ function AppContent() {
 	const {
 		activeConnector,
 		isBigQueryConnected,
+		isSnowflakeConnected,
 		handleConnectorChange,
 		switchConnector,
 		isConnectorAvailable,
 	} = useQueryContext();
+
+	// Derive Snowflake context for the header chip; polled to stay in sync
+	// with edits made via the settings dialog.
+	const [snowflakeContext, setSnowflakeContext] = useState<{
+		role: string;
+		warehouse: string;
+	} | null>(null);
+	useEffect(() => {
+		const update = () => {
+			const sf = queryService.getSnowflakeConnector();
+			if (sf && isSnowflakeConnected) {
+				setSnowflakeContext({ role: sf.getRole(), warehouse: sf.getWarehouse() });
+			} else {
+				setSnowflakeContext(null);
+			}
+		};
+		update();
+		const id = setInterval(update, 3000);
+		return () => clearInterval(id);
+	}, [isSnowflakeConnected]);
 
 	const {
 		tabs,
@@ -175,12 +203,31 @@ function AppContent() {
 		setUploadProgress,
 	} = useUploadProgress();
 
+	// Stable ref to handleStopQuery so closeTab can abort an in-flight query
+	// without forcing useQueryExecution to be initialized before
+	// useUnsavedChangesDialog (it depends on more state declared later).
+	const handleStopQueryRef = useRef<(() => void) | null>(null);
+
+	// Wrap closeTab so closing a tab mid-query also cancels the query —
+	// otherwise cloud-warehouse queries (BigQuery, Snowflake) keep billing
+	// after the user has dropped the tab.
+	const closeTabWithAbort = useCallback(
+		(tabId: string) => {
+			const tab = tabs.find((t) => t.id === tabId);
+			if (tab?.loading) {
+				handleStopQueryRef.current?.();
+			}
+			closeTab(tabId);
+		},
+		[tabs, closeTab],
+	);
+
 	const {
 		unsavedChangesDialog,
 		handleTabClose,
 		handleConfirmCloseTab,
 		handleCancelCloseTab,
-	} = useUnsavedChangesDialog({ tabs, closeTab });
+	} = useUnsavedChangesDialog({ tabs, closeTab: closeTabWithAbort });
 
 	const [lastUploadedType, setLastUploadedType] = useState<
 		"file" | "database" | null
@@ -305,6 +352,12 @@ function AppContent() {
 			}
 		},
 	});
+
+	// Keep the ref aligned with the latest handleStopQuery so closeTabWithAbort
+	// can call it without depending on hook init order.
+	useEffect(() => {
+		handleStopQueryRef.current = handleStopQuery;
+	}, [handleStopQuery]);
 
 	const { showLongRunningOverlay, queryElapsedSeconds } =
 		useQueryOverlay(isQueryExecuting);
@@ -579,7 +632,10 @@ function AppContent() {
 				onStopQuery={handleStopQuery}
 				activeConnector={activeConnector}
 				isBigQueryConnected={isBigQueryConnected}
+				isSnowflakeConnected={isSnowflakeConnected}
+				snowflakeContext={snowflakeContext ?? undefined}
 				onConnectorChange={handleConnectorChange}
+				showToast={showToast}
 				showSettings={showSettings}
 				onToggleSettings={() => setShowSettings(!showSettings)}
 				onOpenServerSettings={() => openSettings("server")}
@@ -719,6 +775,7 @@ function AppContent() {
 				isOpen={showSettings}
 				onClose={closeSettings}
 				initialTab={settingsInitialTab}
+				initialHelpSubTab={settingsInitialHelpSubTab}
 				fontSize={editorFontSize}
 				fontFamily={editorFontFamily}
 				gridFontSize={gridFontSize}

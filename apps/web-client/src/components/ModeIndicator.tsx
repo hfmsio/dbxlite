@@ -216,23 +216,7 @@ export function ModeIndicator({ onOpenServerSettings }: ModeIndicatorProps) {
 							</div>
 
 							<div style={{ fontSize: 11, color: "var(--text-primary)", marginBottom: 12 }}>
-								<div style={{ fontWeight: 500, marginBottom: 4 }}>Quick Start (Hosted UI)</div>
-								<code style={{
-									display: "block",
-									fontSize: 10,
-									backgroundColor: "var(--bg-tertiary)",
-									padding: "8px",
-									borderRadius: 4,
-									wordBreak: "break-all",
-									lineHeight: 1.5,
-								}}>
-									ui_remote_url="https://sql.dbxlite.com" \<br />
-									duckdb -unsigned -ui
-								</code>
-							</div>
-
-							<div style={{ fontSize: 11, color: "var(--text-primary)", marginBottom: 12 }}>
-								<div style={{ fontWeight: 500, marginBottom: 4 }}>Local Development</div>
+								<div style={{ fontWeight: 500, marginBottom: 4 }}>Run dbxlite locally</div>
 								<code style={{
 									display: "block",
 									fontSize: 10,
@@ -241,8 +225,7 @@ export function ModeIndicator({ onOpenServerSettings }: ModeIndicatorProps) {
 									borderRadius: 4,
 									lineHeight: 1.5,
 								}}>
-									git clone https://github.com/jaspeen/dbxlite<br />
-									cd dbxlite && pnpm install && pnpm dev
+									pnpm install && pnpm dev
 								</code>
 								<div style={{ fontWeight: 500, marginTop: 10, marginBottom: 4 }}>Then connect DuckDB</div>
 								<code style={{
@@ -254,7 +237,7 @@ export function ModeIndicator({ onOpenServerSettings }: ModeIndicatorProps) {
 									lineHeight: 1.5,
 									wordBreak: "break-all",
 								}}>
-									ui_remote_url="http://localhost:5173" \<br />
+									ui_remote_url="{typeof window !== "undefined" ? window.location.origin : "http://localhost:5173"}" \<br />
 									duckdb -unsigned -ui
 								</code>
 							</div>
@@ -288,14 +271,8 @@ export function ModeIndicator({ onOpenServerSettings }: ModeIndicatorProps) {
 						>
 							<div style={{ fontSize: 11, color: "var(--text-muted)" }}>
 								<p style={{ margin: 0 }}>
-									To use WASM mode, visit{" "}
-									<a
-										href="https://sql.dbxlite.com"
-										style={{ color: "var(--accent)" }}
-									>
-										sql.dbxlite.com
-									</a>{" "}
-									directly.
+									To use WASM mode, open this URL in your browser
+									without going through the DuckDB CLI.
 								</p>
 							</div>
 						</div>

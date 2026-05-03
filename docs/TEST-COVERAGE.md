@@ -31,18 +31,25 @@ packages/
 
 ## Coverage Summary
 
-**Total: 615 unit tests across 30 test files**
+**Total: 998 passing + 10 documented skips across 45 test files** (last verified 2026-05).
 
-| File | Tests |
-|------|-------|
-| formatters.vitest.ts | 63 |
-| sqlSanitizer.test.ts | 55 |
-| dataTypes.vitest.ts | 52 |
-| sortUtils.vitest.ts | 42 |
-| useTabManager.vitest.ts | 28 |
-| urlParams.vitest.ts | 27 |
-| queryExtractor.vitest.ts | 27 |
-| Others (20+ files) | 321 |
+Highlight test suites:
+
+| File | Tests | Notes |
+|------|-------|-------|
+| `chat-backend.contract.vitest.ts` | 81 | ChatBackend contract — parameterized over 4 BYO + 1 mocked Cortex backend. |
+| `formatters.vitest.ts` | 63 | Cell rendering across all type variants. |
+| `sortUtils.vitest.ts` | 42 | Column sort comparators. |
+| `dataTypes.vitest.ts` | 52 | Vendor-neutral type normalization (DuckDB / BigQuery / Snowflake). |
+| `useTabManager.vitest.ts` | 28 | Tab state, persistence, cross-window sync. |
+| `urlParams.vitest.ts` | 27 | URL-shareable query parameters. |
+| `queryExtractor.vitest.ts` | 27 | SQL extraction from AI chat responses. |
+| `BaseConnector contract.test.ts` | 17 | Connector contract — parameterized over BigQuery + Snowflake (DuckDB skipped, jsdom limitation). |
+| Others (~38 files) | ~660 | Hooks, components, utilities, state management. |
+
+Documented skips (10 total): BigQuery OAuth event-loop tests that didn't translate cleanly from jest to vitest+jsdom — diagnostic-led un-skip pending.
+
+Run `pnpm --filter @ide/web-client test` from the repo root to verify counts. Vitest 2.1 (since 2026-04-27) runs the full suite in ~6 seconds.
 
 ## Writing Tests
 

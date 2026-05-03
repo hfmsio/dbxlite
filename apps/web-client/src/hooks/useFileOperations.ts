@@ -249,8 +249,13 @@ export function useFileOperations({
 				// Switch to the appropriate connector if specified (from explorer buttons)
 				if (connectorType && connectorType !== activeConnector) {
 					handleConnectorChange(connectorType);
+					const labels: Record<ConnectorType, string> = {
+						duckdb: "DuckDB",
+						bigquery: "BigQuery",
+						snowflake: "Snowflake",
+					};
 					showToast(
-						`Switched to ${connectorType === "bigquery" ? "BigQuery" : "DuckDB"} connector`,
+						`Switched to ${labels[connectorType]} connector`,
 						"info",
 						2000,
 					);

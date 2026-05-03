@@ -27,7 +27,7 @@ export async function introspectDuckDBSchema(
 		const dbAlias = generateDatabaseAlias(dataSource.filePath);
 
 		try {
-			await queryService.executeQuery(
+			await queryService.executeQueryOnConnector("duckdb", 
 				buildAttachSQL(dataSource.filePath, dbAlias, false),
 			);
 			isAttached = true;
@@ -63,7 +63,7 @@ export async function introspectDuckDBSchema(
        WHERE schema_name NOT IN ('information_schema', 'pg_catalog', 'temp')
        ORDER BY schema_name`;
 
-	const schemasResult = await queryService.executeQuery(schemasQuery);
+	const schemasResult = await queryService.executeQueryOnConnector("duckdb", schemasQuery);
 	const schemas: Schema[] = [];
 
 	for (const row of schemasResult.rows) {
@@ -100,7 +100,7 @@ async function introspectTables(
        WHERE table_schema = ${escapedSchema}
        ORDER BY table_name`;
 
-	const tablesResult = await queryService.executeQuery(tablesQuery);
+	const tablesResult = await queryService.executeQueryOnConnector("duckdb", tablesQuery);
 	const tables: Table[] = [];
 
 	for (const tableRow of tablesResult.rows) {
@@ -150,7 +150,7 @@ async function introspectColumns(
          AND table_name = ${escapedTableName}
        ORDER BY ordinal_position`;
 
-	const columnsResult = await queryService.executeQuery(columnsQuery);
+	const columnsResult = await queryService.executeQueryOnConnector("duckdb", columnsQuery);
 	const columns: Column[] = [];
 
 	for (const colRow of columnsResult.rows) {
@@ -177,7 +177,7 @@ async function getTableRowCount(
 			? `${attachedAs}."${schemaName}"."${tableName}"`
 			: `"${schemaName}"."${tableName}"`;
 
-		const countResult = await queryService.executeQuery(
+		const countResult = await queryService.executeQueryOnConnector("duckdb", 
 			`SELECT COUNT(*) as cnt FROM ${fullTableName}`,
 		);
 

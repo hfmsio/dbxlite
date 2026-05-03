@@ -13,6 +13,7 @@ export interface DataSourceTreeProps {
 	sections: TreeSection[];
 	selectedNodeId?: string;
 	isBigQueryConnected: boolean;
+	isSnowflakeConnected?: boolean;
 	hasDataSources: boolean;
 	/** Whether running in HTTP/Server mode */
 	isHttpMode?: boolean;
@@ -30,6 +31,7 @@ export function DataSourceTree({
 	sections,
 	selectedNodeId,
 	isBigQueryConnected,
+	isSnowflakeConnected = false,
 	hasDataSources,
 	isHttpMode = false,
 	onSectionToggle,
@@ -41,8 +43,13 @@ export function DataSourceTree({
 	onAddProject,
 	onOpenServerSettings,
 }: DataSourceTreeProps) {
-	// Check if there's any content to show (data sources, BigQuery, or session tables in sections)
-	const hasContent = hasDataSources || isBigQueryConnected || sections.length > 0;
+	// Check if there's any content to show (files, attached DBs, BigQuery,
+	// Snowflake, or sections from any source).
+	const hasContent =
+		hasDataSources ||
+		isBigQueryConnected ||
+		isSnowflakeConnected ||
+		sections.length > 0;
 
 	// Empty state - different content for WASM vs Server mode
 	if (!hasContent) {

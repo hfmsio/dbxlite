@@ -51,7 +51,12 @@ const mockOnSchemaChange = vi.fn((_cb: unknown) => vi.fn());
 
 vi.mock("../../services/streaming-query-service", () => ({
 	queryService: {
+		// useLocalDatabase now calls executeQueryOnConnector("duckdb", sql) so
+		// it always hits DuckDB regardless of the active connector. Mock both
+		// for back-compat with any other callers, but route to the same fn.
 		executeQuery: (sql: string) => mockExecuteQuery(sql),
+		executeQueryOnConnector: (_connector: string, sql: string) =>
+			mockExecuteQuery(sql),
 		isConnectorReady: () => mockIsConnectorReady(),
 		onSchemaChange: (cb: unknown) => mockOnSchemaChange(cb),
 	},

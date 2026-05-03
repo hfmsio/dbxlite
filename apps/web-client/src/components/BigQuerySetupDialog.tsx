@@ -45,7 +45,7 @@ export default function BigQuerySetupDialog({
 			await queryService.setupBigQuery(clientId.trim(), clientSecret.trim());
 			// Enable auto-reconnect so connection persists across page reloads
 			localStorage.setItem("bigquery-auto-connect", "true");
-			showToast?.("Successfully connected to BigQuery!", "success", 4000);
+			showToast?.("Connected to BigQuery", "success", 3000);
 			onSuccess();
 			onClose();
 		} catch (err) {

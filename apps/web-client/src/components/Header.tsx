@@ -1,21 +1,61 @@
 import type { ConnectorType } from "../services/streaming-query-service";
 import { useMode } from "../hooks/useMode";
 import {
-	CheckCircleIcon,
 	ChevronLeftIcon,
 	ChevronRightIcon,
-	ClockIcon,
 	FolderOpenIcon,
 	PlayIcon,
 	SaveIcon,
 	SettingsIcon,
 	SparklesIcon,
 	StopIcon,
-	XCircleIcon,
 } from "./Icons";
 import { Logo, Wordmark } from "./Logo";
 import ModeIndicator from "./ModeIndicator";
+import SnowflakeContextButton from "./SnowflakeContextButton";
 import ThemeToggle from "./ThemeToggle";
+
+// Connector accent colors — match CatalogProvider.accentColor where applicable
+// and the docs. These render through CSS custom properties so they stay
+// theme-aware (themes can override --connector-accent-* if needed).
+function connectorAccent(c: ConnectorType): string {
+	switch (c) {
+		case "duckdb":
+			return "var(--connector-color-duckdb, #FFD700)"; // DuckDB yellow
+		case "bigquery":
+			return "var(--connector-color-bigquery, #4285F4)"; // Google blue
+		case "snowflake":
+			return "var(--connector-color-snowflake, #29B5E8)"; // Snowflake cyan
+		default:
+			return "var(--accent)";
+	}
+}
+
+function connectorIcon(c: ConnectorType): string {
+	switch (c) {
+		case "duckdb":
+			return "🦆";
+		case "bigquery":
+			return "🔵";
+		case "snowflake":
+			return "❄️";
+		default:
+			return "•";
+	}
+}
+
+function connectorLabel(c: ConnectorType, isHttpMode: boolean): string {
+	switch (c) {
+		case "duckdb":
+			return isHttpMode ? "DuckDB Server" : "DuckDB WASM";
+		case "bigquery":
+			return "BigQuery";
+		case "snowflake":
+			return "Snowflake";
+		default:
+			return c;
+	}
+}
 
 interface HeaderProps {
 	// Status
@@ -45,7 +85,13 @@ interface HeaderProps {
 	// Connector
 	activeConnector: ConnectorType;
 	isBigQueryConnected: boolean;
+	isSnowflakeConnected?: boolean;
+	snowflakeContext?: { role: string; warehouse: string };
 	onConnectorChange: (type: ConnectorType) => void;
+	showToast?: (
+		message: string,
+		type?: "success" | "error" | "info" | "warning",
+	) => void;
 
 	// Settings
 	showSettings: boolean;
@@ -76,7 +122,10 @@ export default function Header({
 	onStopQuery,
 	activeConnector,
 	isBigQueryConnected,
+	isSnowflakeConnected,
+	snowflakeContext,
 	onConnectorChange,
+	showToast,
 	showSettings: _showSettings,
 	onToggleSettings,
 	onOpenServerSettings,
@@ -107,44 +156,64 @@ export default function Header({
 					</span>
 				</h1>
 				<div className="status-indicator" style={{ position: "relative", top: "2px" }}>
-					{initializing && (
-						<span
-							className="status-initializing"
-							style={{ display: "flex", alignItems: "center", gap: "6px" }}
-						>
-							<ClockIcon size={14} />
-							Initializing database...
-						</span>
-					)}
-					{!initializing && reloadingFiles && (
-						<span
-							className="status-initializing"
-							style={{ display: "flex", alignItems: "center", gap: "6px" }}
-						>
-							<ClockIcon size={14} />
-							{filesTotal > 0
-								? `Loading ${filesCompleted}/${filesTotal} files${currentLoadingFile ? ` - ${currentLoadingFile}` : ""}`
-								: "Restoring files..."}
-						</span>
-					)}
-					{initError && (
-						<span
-							className="status-error"
-							style={{ display: "flex", alignItems: "center", gap: "6px" }}
-						>
-							<XCircleIcon size={14} />
-							{initError}
-						</span>
-					)}
-					{!initializing && !reloadingFiles && !initError && (
-						<span
-							className="status-ready"
-							style={{ display: "flex", alignItems: "center", gap: "6px" }}
-						>
-							<CheckCircleIcon size={14} />
-							Ready to query
-						</span>
-					)}
+					{(() => {
+						// Single status dot — VSCode/IDE pattern. Steady state shows
+						// just the dot (green); transient/error states show dot +
+						// label. Tooltip always carries the human-readable status.
+						const state: "ready" | "loading" | "error" = initError
+							? "error"
+							: initializing || reloadingFiles
+								? "loading"
+								: "ready"
+						const label =
+							state === "error"
+								? initError ?? "Error"
+								: initializing
+									? "Initializing database…"
+									: reloadingFiles
+										? filesTotal > 0
+											? `Loading ${filesCompleted}/${filesTotal} files${currentLoadingFile ? ` — ${currentLoadingFile}` : ""}`
+											: "Restoring files…"
+										: "Ready to query"
+						const color =
+							state === "error"
+								? "#ef4444"
+								: state === "loading"
+									? "#f59e0b"
+									: "#10b981"
+						return (
+							<span
+								title={label}
+								aria-label={label}
+								style={{
+									display: "inline-flex",
+									alignItems: "center",
+									gap: 6,
+									color: state === "error" ? color : "var(--text-muted)",
+									fontSize: 12,
+								}}
+							>
+								<span
+									style={{
+										width: 8,
+										height: 8,
+										borderRadius: "50%",
+										background: color,
+										boxShadow:
+											state === "loading"
+												? `0 0 6px ${color}`
+												: undefined,
+										animation:
+											state === "loading"
+												? "pulse 1.2s ease-in-out infinite"
+												: undefined,
+										flexShrink: 0,
+									}}
+								/>
+								{state !== "ready" && <span>{label}</span>}
+							</span>
+						)
+					})()}
 				</div>
 			</div>
 
@@ -223,7 +292,16 @@ export default function Header({
 						Run (⌘↵)
 					</button>
 				) : null}
-				<div className="connector-selector">
+				<div
+					className="connector-selector"
+					data-connector={activeConnector}
+					style={{
+						// CSS custom property the select reads for its accent.
+						// One source of truth for connector colors — matches the
+						// CatalogProvider.accentColor and the docs.
+						["--connector-accent" as string]: connectorAccent(activeConnector),
+					}}
+				>
 					<label htmlFor="connector-select">Connector:</label>
 					<select
 						id="connector-select"
@@ -231,15 +309,34 @@ export default function Header({
 						onChange={(e) => onConnectorChange(e.target.value as ConnectorType)}
 						disabled={isDisabled}
 						aria-label="Select database connector"
+						title={`Active connector: ${connectorLabel(activeConnector, isHttpMode)}`}
+						style={{
+							borderLeft: "3px solid var(--connector-accent)",
+							boxShadow:
+								"inset 2px 0 0 0 color-mix(in srgb, var(--connector-accent) 30%, transparent)",
+						}}
 					>
 						<option value="duckdb">
+							{connectorIcon("duckdb")}{" "}
 							{isHttpMode ? "DuckDB Server" : "DuckDB WASM"}
 						</option>
 						<option value="bigquery" disabled={!isBigQueryConnected}>
-							BigQuery {!isBigQueryConnected ? "(not connected)" : ""}
+							{connectorIcon("bigquery")} BigQuery
+							{!isBigQueryConnected ? " (not connected)" : ""}
+						</option>
+						<option value="snowflake" disabled={!isSnowflakeConnected}>
+							{connectorIcon("snowflake")} Snowflake
+							{!isSnowflakeConnected ? " (not connected)" : ""}
 						</option>
 					</select>
 				</div>
+				{activeConnector === "snowflake" && snowflakeContext && (
+					<SnowflakeContextButton
+						role={snowflakeContext.role}
+						warehouse={snowflakeContext.warehouse}
+						showToast={showToast}
+					/>
+				)}
 				{onToggleAIChat && (
 					<button
 						onClick={onToggleAIChat}

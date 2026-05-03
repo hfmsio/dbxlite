@@ -1,6 +1,11 @@
 import type React from "react";
 import { Logo, Wordmark } from "../Logo";
 
+// Hard-coded to match the workspace package.json. Kept here rather than
+// imported because the package.json import path differs across vite/test.
+const VERSION = "0.3.0";
+const REPO_URL = "https://github.com/hfmsio/dbxlite";
+
 const linkStyle: React.CSSProperties = {
 	color: "var(--accent)",
 	textDecoration: "none",
@@ -46,8 +51,11 @@ function AboutSettings() {
 				<div style={{ display: "flex", alignItems: "center", gap: 16, minWidth: 280 }}>
 					<Logo size={48} />
 					<div>
-						<h1 style={{ fontSize: 28, color: "var(--text-primary)", margin: 0, display: "flex", alignItems: "center" }}>
+						<h1 style={{ fontSize: 28, color: "var(--text-primary)", margin: 0, display: "flex", alignItems: "center", gap: 10 }}>
 							<Wordmark size="lg" style={{ fontSize: "28px" }} />
+							<span style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 400 }}>
+								v{VERSION}
+							</span>
 						</h1>
 						<p style={{ fontSize: 11, color: "var(--text-muted)", margin: "4px 0 0 0" }}>
 							Browser-based SQL workbench
@@ -72,15 +80,14 @@ function AboutSettings() {
 			<div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr", gap: 12, flex: 1 }}>
 				{/* Features Card */}
 				<div style={cardStyle}>
-					<div style={cardTitleStyle}>
-						<span>✨</span> Features
-					</div>
+					<div style={cardTitleStyle}>Features</div>
 					<ul style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, margin: 0, paddingLeft: 16 }}>
 						<li>Query CSV, Parquet, JSON, Excel, DuckDB files</li>
 						<li>Files of any size via OPFS (Chrome)</li>
 						<li>Multi-tab SQL editor with Monaco</li>
-						<li>Connect to BigQuery for cloud analysis</li>
-						<li>8 color themes · Export to CSV, JSON, Parquet</li>
+						<li>Connect to BigQuery and Snowflake</li>
+						<li>AI SQL assistant - BYO key or Snowflake Cortex</li>
+						<li>10 color themes · Export to CSV, JSON, Parquet</li>
 						<li>No backend - runs entirely in browser</li>
 					</ul>
 				</div>
@@ -174,16 +181,16 @@ function AboutSettings() {
 
 				{/* Roadmap Card */}
 				<div style={cardStyle}>
-					<div style={cardTitleStyle}>
-						<span>🗺️</span> Roadmap
-					</div>
+					<div style={cardTitleStyle}>Roadmap</div>
 					<ul style={{ fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, margin: 0, paddingLeft: 16 }}>
-						<li>Snowflake connector</li>
+						<li>Supabase connector (PostgREST)</li>
 						<li>Databricks connector</li>
+						<li>Native Parquet export</li>
+						<li>Query result caching layer</li>
 					</ul>
 					<p style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 10, marginBottom: 0 }}>
 						Feature request?{" "}
-						<a href="https://github.com" style={linkStyle} target="_blank" rel="noopener noreferrer">
+						<a href={`${REPO_URL}/issues`} style={linkStyle} target="_blank" rel="noopener noreferrer">
 							Open an issue on GitHub
 						</a>
 					</p>
@@ -191,10 +198,14 @@ function AboutSettings() {
 
 				{/* Links & Resources Card */}
 				<div style={cardStyle}>
-					<div style={cardTitleStyle}>
-						<span>🔗</span> Resources
-					</div>
+					<div style={cardTitleStyle}>Resources</div>
 					<div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+						<a href="https://sql.dbxlite.com" style={{ ...linkStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }} target="_blank" rel="noopener noreferrer">
+							<span style={{ opacity: 0.7 }}>🌐</span> Hosted version (no install)
+						</a>
+						<a href={REPO_URL} style={{ ...linkStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }} target="_blank" rel="noopener noreferrer">
+							<span style={{ opacity: 0.7 }}>📦</span> Source on GitHub
+						</a>
 						<a href="/examples" style={{ ...linkStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
 							<span style={{ opacity: 0.7 }}>📝</span> SQL Examples
 						</a>
@@ -203,9 +214,6 @@ function AboutSettings() {
 						</a>
 						<a href="https://duckdb.org/docs" style={{ ...linkStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }} target="_blank" rel="noopener noreferrer">
 							<span style={{ opacity: 0.7 }}>🦆</span> DuckDB Docs
-						</a>
-						<a href="https://cloud.google.com/bigquery/docs" style={{ ...linkStyle, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }} target="_blank" rel="noopener noreferrer">
-							<span style={{ opacity: 0.7 }}>☁️</span> BigQuery Docs
 						</a>
 					</div>
 				</div>
@@ -225,10 +233,7 @@ function AboutSettings() {
 					MIT License · Provided "as is" without warranty
 				</div>
 				<div>
-					<span style={{ fontWeight: 600 }}>dbx</span>
-					<span style={{ color: "var(--accent)" }}>·</span>
-					<span>lite</span>
-					{" "}© {currentYear} · Made with DuckDB WASM & Claude Code
+					dbxlite © {currentYear}
 				</div>
 			</div>
 		</div>

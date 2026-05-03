@@ -6,7 +6,7 @@ export class DuckDBConnector implements BaseConnector {
   private adapter: DuckDBWorkerAdapter | null = null
   private queryCounter = 0
 
-  async connect(config: ConnectionConfig): Promise<void> {
+  async connect(_config: ConnectionConfig): Promise<void> {
     if (!this.adapter) {
       this.adapter = new DuckDBWorkerAdapter()
       await this.adapter.init()
@@ -66,7 +66,22 @@ export class DuckDBConnector implements BaseConnector {
       await this.connect({ options: {} })
     }
 
+    const signal = opts?.signal
+    if (signal?.aborted) {
+      throw new DOMException('Query aborted before start', 'AbortError')
+    }
+
     const queryId = `query-${++this.queryCounter}`
+
+    // Cancel via worker on abort. The DuckDB WASM worker accepts a cancel
+    // signal which interrupts the running query (best-effort; the worker
+    // checks between row callbacks).
+    const handleAbort = () => {
+      this.adapter?.cancel(queryId).catch(() => {
+        // best-effort
+      })
+    }
+    signal?.addEventListener('abort', handleAbort)
     const chunkSize = opts?.chunkSize || 1000  // Default 1000 rows per chunk
     let buffer: Row[] = []
     let error: unknown = null
@@ -74,12 +89,10 @@ export class DuckDBConnector implements BaseConnector {
     let schema: Schema | undefined
     let queryStats: QueryStats | undefined
     let resolveChunk: ((rows: Row[]) => void) | null = null
-    let rejectQuery: ((e: unknown) => void) | null = null
 
     // Create a promise-based wrapper around the callback-based API
     // This promise tracks query completion, not individual chunks
-    const queryComplete = new Promise<void>((resolve, reject) => {
-      rejectQuery = reject
+    const queryComplete = new Promise<void>((resolve) => {
 
       this.adapter!.runQuery(
         queryId,
@@ -185,6 +198,8 @@ export class DuckDBConnector implements BaseConnector {
         throw error
       }
       throw e
+    } finally {
+      signal?.removeEventListener('abort', handleAbort)
     }
   }
 
@@ -270,6 +285,16 @@ export class DuckDBConnector implements BaseConnector {
         const estimate = parseInt(ecMatch[1])
         // Found SEQ_SCAN pattern
         return estimate
+      }
+
+      // Strategy 6: DUMMY_SCAN — DuckDB's marker for a query with no real
+      // source (e.g. SELECT 1, SELECT 'x', SELECT current_date, version()).
+      // Each DUMMY_SCAN produces exactly one row by construction. Without
+      // this strategy, callers see -1 and route to virtual-table streaming
+      // mode for a 1-row result, surfacing a misleading "very large dataset"
+      // toast.
+      if (/DUMMY_SCAN/i.test(explainOutput)) {
+        return 1
       }
 
       // If no EC found, return -1 to indicate unknown

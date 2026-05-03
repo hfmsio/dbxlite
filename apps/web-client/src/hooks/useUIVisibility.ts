@@ -6,12 +6,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { createLogger } from "../utils/logger";
 import type { SettingsTab } from "../components/SettingsModal";
+import type { HelpSubTab } from "../components/settings/HelpSettings";
 
 const logger = createLogger("UIVisibility");
 
 export function useUIVisibility() {
 	const [showSettings, setShowSettings] = useState(false);
 	const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
+	const [settingsInitialHelpSubTab, setSettingsInitialHelpSubTab] = useState<HelpSubTab | undefined>(undefined);
 	const [showToastHistory, setShowToastHistory] = useState(false);
 	const [showExamples, setShowExamples] = useState(false);
 	const [showAIChat, setShowAIChat] = useState(false);
@@ -40,22 +42,30 @@ export function useUIVisibility() {
 		setShowExplorer((prev: boolean) => !prev);
 	}, []);
 
-	// Open settings modal, optionally to a specific tab
-	const openSettings = useCallback((tab?: SettingsTab) => {
-		setSettingsInitialTab(tab);
-		setShowSettings(true);
-	}, []);
+	// Open settings modal, optionally to a specific tab. When opening Help,
+	// callers can also deep-link to a specific sub-tab (e.g. an error toast
+	// pointing users at the Snowflake setup walkthrough).
+	const openSettings = useCallback(
+		(tab?: SettingsTab, helpSubTab?: HelpSubTab) => {
+			setSettingsInitialTab(tab);
+			setSettingsInitialHelpSubTab(helpSubTab);
+			setShowSettings(true);
+		},
+		[],
+	);
 
 	// Close settings and reset initial tab
 	const closeSettings = useCallback(() => {
 		setShowSettings(false);
 		setSettingsInitialTab(undefined);
+		setSettingsInitialHelpSubTab(undefined);
 	}, []);
 
 	return {
 		showSettings,
 		setShowSettings,
 		settingsInitialTab,
+		settingsInitialHelpSubTab,
 		openSettings,
 		closeSettings,
 		showToastHistory,

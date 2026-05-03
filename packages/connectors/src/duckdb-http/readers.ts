@@ -207,10 +207,6 @@ function readDataList(d: BinaryDeserializer): DataView[] {
   return d.readList(() => readData(d))
 }
 
-function readVarIntList(d: BinaryDeserializer): number[] {
-  return d.readList(() => d.readVarInt())
-}
-
 // ============================================================================
 // Type Readers
 // ============================================================================

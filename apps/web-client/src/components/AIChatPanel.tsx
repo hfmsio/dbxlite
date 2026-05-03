@@ -5,22 +5,30 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import {
-	type AIProviderType,
-	aiCredentialStore,
-	getAllProviderTypes,
-	getCredentialKey,
-	getProvider,
-} from "../services/ai";
+import { type AIProviderType, backendRegistry } from "../services/ai";
 import { useAIChatStore } from "../stores/aiChatStore";
+import { grantPiiConsent, hasPiiConsent } from "../utils/aiPiiConsent";
 import { AIChatMessage } from "./AIChatMessage";
+import ApiKeyInlineField from "./ai/ApiKeyInlineField";
 import { SendIcon, SparklesIcon, StopIcon, TrashIcon, XIcon } from "./Icons";
+import PiiConsentDialog from "./PiiConsentDialog";
 
 interface AIChatPanelProps {
 	onClose: () => void;
 	onInsertSQL?: (sql: string) => void;
 	getEditorContent?: () => string;
 }
+
+const iconButtonStyle: React.CSSProperties = {
+	background: "transparent",
+	border: "none",
+	color: "var(--text-muted)",
+	cursor: "pointer",
+	padding: "4px",
+	borderRadius: "4px",
+	display: "flex",
+	alignItems: "center",
+};
 
 export function AIChatPanel({
 	onClose,
@@ -43,17 +51,22 @@ export function AIChatPanel({
 		stopStreaming,
 		clearMessages,
 		setActiveProvider,
+		setSelectedModel,
 		setError,
 	} = useAIChatStore();
 
-	// Check if API key is configured for active provider
+	// Track availability of the active backend (BYO: has key; warehouse:
+	// connector active + connected). Re-checks when the user switches.
 	useEffect(() => {
 		let cancelled = false;
 		(async () => {
-			const key = await aiCredentialStore.load(
-				getCredentialKey(activeProvider),
-			);
-			if (!cancelled) setHasApiKey(!!key);
+			const backend = backendRegistry.get(activeProvider);
+			if (!backend) {
+				if (!cancelled) setHasApiKey(false);
+				return;
+			}
+			const available = await backend.isAvailable();
+			if (!cancelled) setHasApiKey(available);
 		})();
 		return () => {
 			cancelled = true;
@@ -79,12 +92,62 @@ export function AIChatPanel({
 		messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
 	}, [messages]);
 
+	// PII consent gate. BYO backends send editor + chat content to a third
+	// party; warehouse backends keep data inside the user's warehouse and
+	// don't need this. Once granted per-provider, never re-prompted.
+	// pendingSendRef holds the (content, editorContent) to dispatch after
+	// the dialog confirms — keeps the consent flow generic across handleSend
+	// and handleQuickAction.
+	const [consentDialogFor, setConsentDialogFor] = useState<{
+		providerId: string;
+		providerLabel: string;
+	} | null>(null);
+	const pendingSendRef = useRef<{
+		content: string;
+		editorContent: string | undefined;
+	} | null>(null);
+
+	const dispatchSend = useCallback(
+		(content: string, editorContent: string | undefined) => {
+			const activeBackend = backendRegistry.get(activeProvider);
+			if (
+				activeBackend?.kind === "byo" &&
+				!hasPiiConsent(activeProvider)
+			) {
+				pendingSendRef.current = { content, editorContent };
+				setConsentDialogFor({
+					providerId: activeProvider,
+					providerLabel: activeBackend.label,
+				});
+				return;
+			}
+			sendMessage(content, editorContent);
+		},
+		[activeProvider, sendMessage],
+	);
+
+	const handleConsentConfirm = useCallback(() => {
+		if (!consentDialogFor) return;
+		grantPiiConsent(consentDialogFor.providerId);
+		const pending = pendingSendRef.current;
+		pendingSendRef.current = null;
+		setConsentDialogFor(null);
+		if (pending) {
+			sendMessage(pending.content, pending.editorContent);
+		}
+	}, [consentDialogFor, sendMessage]);
+
+	const handleConsentCancel = useCallback(() => {
+		pendingSendRef.current = null;
+		setConsentDialogFor(null);
+	}, []);
+
 	const handleSend = useCallback(() => {
 		const trimmed = input.trim();
 		if (!trimmed || isStreaming) return;
 		setInput("");
-		sendMessage(trimmed, getEditorContent?.());
-	}, [input, isStreaming, sendMessage, getEditorContent]);
+		dispatchSend(trimmed, getEditorContent?.());
+	}, [input, isStreaming, dispatchSend, getEditorContent]);
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
 		if (e.key === "Enter" && !e.shiftKey) {
@@ -95,10 +158,10 @@ export function AIChatPanel({
 
 	const handleQuickAction = (prompt: string) => {
 		if (isStreaming) return;
-		sendMessage(prompt, getEditorContent?.());
+		dispatchSend(prompt, getEditorContent?.());
 	};
 
-	const provider = getProvider(activeProvider);
+	const backend = backendRegistry.get(activeProvider);
 
 	return (
 		<div
@@ -117,71 +180,81 @@ export function AIChatPanel({
 				flexDirection: "column",
 			}}
 		>
-			{/* Header */}
+			{/* Header — two rows so the title never competes with the pickers for
+			    horizontal space. Row 1: title + tools. Row 2: backend + model. */}
 			<div
 				style={{
-					padding: "12px 16px",
+					padding: "10px 14px",
 					borderBottom: "1px solid var(--border-light)",
-					display: "flex",
-					alignItems: "center",
-					justifyContent: "space-between",
 					background: "var(--bg-secondary)",
+					display: "flex",
+					flexDirection: "column",
+					gap: "8px",
 				}}
 			>
-				<div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-					<SparklesIcon size={18} />
-					<h3
+				{/* Row 1: title + tools */}
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "space-between",
+						gap: 8,
+					}}
+				>
+					<div
 						style={{
-							margin: 0,
-							fontSize: "15px",
-							fontWeight: 600,
+							display: "flex",
+							alignItems: "center",
+							gap: "8px",
+							minWidth: 0,
 						}}
 					>
-						SQL Assistant
-					</h3>
-				</div>
-				<div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-					{/* Provider selector */}
-					<select
-						value={activeProvider}
-						onChange={(e) => {
-							setActiveProvider(e.target.value as AIProviderType);
-							setError(null);
-						}}
-						style={{
-							background: "var(--bg-tertiary)",
-							color: "var(--text-primary)",
-							border: "1px solid var(--border-light)",
-							borderRadius: "4px",
-							padding: "4px 6px",
-							fontSize: "12px",
-							cursor: "pointer",
-						}}
-					>
-						{getAllProviderTypes().map((t) => {
-							const p = getProvider(t);
-							return (
-								<option key={t} value={t}>
-									{p.displayName}
-								</option>
-							);
-						})}
-					</select>
-					{messages.length > 0 && (
-						<button
-							onClick={clearMessages}
-							title="Clear chat"
-							aria-label="Clear chat history"
+						<SparklesIcon size={16} style={{ color: "var(--accent)" }} />
+						<h3
 							style={{
-								background: "transparent",
-								border: "none",
-								color: "var(--text-muted)",
-								cursor: "pointer",
-								padding: "4px",
-								borderRadius: "4px",
-								display: "flex",
-								alignItems: "center",
+								margin: 0,
+								fontSize: "13px",
+								fontWeight: 600,
+								letterSpacing: "0.2px",
+								color: "var(--text-primary)",
+								whiteSpace: "nowrap",
+								overflow: "hidden",
+								textOverflow: "ellipsis",
 							}}
+						>
+							AI SQL Assistant
+						</h3>
+					</div>
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: "2px",
+							flexShrink: 0,
+						}}
+					>
+						{messages.length > 0 && (
+							<button
+								onClick={clearMessages}
+								title="Clear chat"
+								aria-label="Clear chat history"
+								style={iconButtonStyle}
+								onMouseEnter={(e) => {
+									e.currentTarget.style.background =
+										"var(--bg-tertiary)";
+								}}
+								onMouseLeave={(e) => {
+									e.currentTarget.style.background = "transparent";
+								}}
+							>
+								<TrashIcon size={14} />
+							</button>
+						)}
+						<button
+							onClick={onClose}
+							title="Close AI assistant"
+							aria-label="Close AI assistant panel"
+							style={iconButtonStyle}
 							onMouseEnter={(e) => {
 								e.currentTarget.style.background = "var(--bg-tertiary)";
 							}}
@@ -189,32 +262,35 @@ export function AIChatPanel({
 								e.currentTarget.style.background = "transparent";
 							}}
 						>
-							<TrashIcon size={14} />
+							<XIcon size={16} />
 						</button>
-					)}
-					<button
-						onClick={onClose}
-						title="Close AI assistant"
-						aria-label="Close AI assistant panel"
-						style={{
-							background: "transparent",
-							border: "none",
-							color: "var(--text-muted)",
-							cursor: "pointer",
-							padding: "4px",
-							borderRadius: "4px",
-							display: "flex",
-							alignItems: "center",
+					</div>
+				</div>
+
+				{/* Row 2: backend + model pickers. Always visible, side-by-side,
+				    flex-1 so they share the row evenly without forcing wrap. */}
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: "6px",
+					}}
+				>
+					<BackendPicker
+						activeId={activeProvider}
+						onChange={(id) => {
+							setActiveProvider(id);
+							setError(null);
 						}}
-						onMouseEnter={(e) => {
-							e.currentTarget.style.background = "var(--bg-tertiary)";
+					/>
+					<ModelPicker
+						backendId={activeProvider}
+						selectedModels={selectedModels}
+						onChange={(modelId) => {
+							setSelectedModel(activeProvider, modelId);
+							setError(null);
 						}}
-						onMouseLeave={(e) => {
-							e.currentTarget.style.background = "transparent";
-						}}
-					>
-						<XIcon size={16} />
-					</button>
+					/>
 				</div>
 			</div>
 
@@ -230,6 +306,7 @@ export function AIChatPanel({
 					<WelcomeCard
 						activeProvider={activeProvider}
 						onSelectProvider={(p) => setActiveProvider(p)}
+						onKeySaved={() => setHasApiKey(true)}
 					/>
 				) : messages.length === 0 ? (
 					<EmptyState />
@@ -424,7 +501,10 @@ export function AIChatPanel({
 						textAlign: "right",
 					}}
 				>
-					{provider.displayName} - {selectedModels[activeProvider]}
+					{backend?.label ?? activeProvider}
+					{selectedModels[activeProvider]
+						? ` · ${selectedModels[activeProvider]}`
+						: ""}
 				</div>
 			</div>
 
@@ -434,6 +514,14 @@ export function AIChatPanel({
 					50% { opacity: 0; }
 				}
 			`}</style>
+
+			{consentDialogFor && (
+				<PiiConsentDialog
+					providerLabel={consentDialogFor.providerLabel}
+					onConfirm={handleConsentConfirm}
+					onCancel={handleConsentCancel}
+				/>
+			)}
 		</div>
 	);
 }
@@ -441,10 +529,18 @@ export function AIChatPanel({
 function WelcomeCard({
 	activeProvider,
 	onSelectProvider,
+	onKeySaved,
 }: {
-	activeProvider: AIProviderType;
-	onSelectProvider: (p: AIProviderType) => void;
+	activeProvider: string; // backend id; only BYO ids surface in the WelcomeCard rows
+	onSelectProvider: (p: string) => void;
+	onKeySaved: () => void;
 }) {
+	// Narrow incoming string to AIProviderType for the BYO grid; default to gemini if it's a warehouse id.
+	const initialBYO: AIProviderType = (
+		["gemini", "groq", "openai", "anthropic"] as const
+	).includes(activeProvider as AIProviderType)
+		? (activeProvider as AIProviderType)
+		: "gemini";
 	const providers: {
 		type: AIProviderType;
 		name: string;
@@ -467,42 +563,42 @@ function WelcomeCard({
 		},
 	];
 
-	const apiKeyUrls: Record<AIProviderType, string> = {
-		gemini: "https://aistudio.google.com/app/apikey",
-		groq: "https://console.groq.com/keys",
-		openai: "https://platform.openai.com/api-keys",
-		anthropic: "https://console.anthropic.com/settings/keys",
+	// Free providers expand by default; one expanded at a time.
+	const [expanded, setExpanded] = useState<AIProviderType>(initialBYO);
+
+	const handleToggle = (p: AIProviderType) => {
+		if (expanded === p) {
+			setExpanded((cur) => cur); // no-op; clicking expanded row keeps it open
+			return;
+		}
+		setExpanded(p);
+		onSelectProvider(p);
 	};
 
 	return (
-		<div
-			style={{
-				textAlign: "center",
-				padding: "32px 16px",
-			}}
-		>
-			<SparklesIcon size={40} style={{ marginBottom: "16px", opacity: 0.4 }} />
-			<h4
-				style={{
-					margin: "0 0 8px",
-					fontSize: "16px",
-					fontWeight: 600,
-				}}
-			>
-				Get Started with AI SQL Assistant
-			</h4>
-			<p
-				style={{
-					color: "var(--text-muted)",
-					fontSize: "13px",
-					margin: "0 0 20px",
-					lineHeight: "1.5",
-				}}
-			>
-				Choose a provider and add your API key.
-				<br />
-				Gemini and Groq offer free tiers.
-			</p>
+		<div style={{ padding: "16px 8px" }}>
+			<div style={{ textAlign: "center", marginBottom: "20px" }}>
+				<SparklesIcon size={40} style={{ marginBottom: "12px", opacity: 0.4 }} />
+				<h4
+					style={{
+						margin: "0 0 6px",
+						fontSize: "16px",
+						fontWeight: 600,
+					}}
+				>
+					Get Started with AI SQL Assistant
+				</h4>
+				<p
+					style={{
+						color: "var(--text-muted)",
+						fontSize: "12px",
+						margin: 0,
+						lineHeight: "1.5",
+					}}
+				>
+					Pick a provider, paste a key. Gemini and Groq are free.
+				</p>
+			</div>
 
 			<div
 				style={{
@@ -512,57 +608,72 @@ function WelcomeCard({
 					textAlign: "left",
 				}}
 			>
-				{providers.map((p) => (
-					<button
-						key={p.type}
-						onClick={() => onSelectProvider(p.type)}
-						style={{
-							display: "flex",
-							alignItems: "center",
-							justifyContent: "space-between",
-							padding: "10px 14px",
-							background:
-								activeProvider === p.type
+				{providers.map((p) => {
+					const isExpanded = expanded === p.type;
+					return (
+						<div
+							key={p.type}
+							style={{
+								background: isExpanded
 									? "var(--bg-quaternary)"
 									: "var(--bg-secondary)",
-							border:
-								activeProvider === p.type
+								border: isExpanded
 									? "1px solid var(--accent)"
 									: "1px solid var(--border-light)",
-							borderRadius: "8px",
-							cursor: "pointer",
-							color: "var(--text-primary)",
-							fontSize: "13px",
-							transition: "all 0.2s",
-						}}
-					>
-						<div>
-							<div style={{ fontWeight: 500 }}>{p.name}</div>
-							<div
-								style={{
-									fontSize: "11px",
-									color: p.free ? "#10b981" : "var(--text-muted)",
-									marginTop: "2px",
-								}}
-							>
-								{p.desc}
-							</div>
-						</div>
-						<a
-							href={apiKeyUrls[p.type]}
-							target="_blank"
-							rel="noopener noreferrer"
-							onClick={(e) => e.stopPropagation()}
-							style={{
-								fontSize: "11px",
-								color: "var(--accent)",
-								textDecoration: "none",
+								borderRadius: "8px",
+								transition: "background 0.15s, border 0.15s",
 							}}
 						>
-							Get Key
-						</a>
-					</button>
-				))}
+							<button
+								type="button"
+								onClick={() => handleToggle(p.type)}
+								style={{
+									display: "flex",
+									alignItems: "center",
+									justifyContent: "space-between",
+									width: "100%",
+									padding: "10px 14px",
+									background: "transparent",
+									border: "none",
+									cursor: "pointer",
+									color: "var(--text-primary)",
+									fontSize: "13px",
+									textAlign: "left",
+								}}
+							>
+								<div>
+									<div style={{ fontWeight: 500 }}>{p.name}</div>
+									<div
+										style={{
+											fontSize: "11px",
+											color: p.free ? "#10b981" : "var(--text-muted)",
+											marginTop: "2px",
+										}}
+									>
+										{p.desc}
+									</div>
+								</div>
+								<span
+									style={{
+										fontSize: "11px",
+										color: "var(--text-muted)",
+									}}
+								>
+									{isExpanded ? "▾" : "▸"}
+								</span>
+							</button>
+							{isExpanded && (
+								<div style={{ padding: "0 14px 12px" }}>
+									<ApiKeyInlineField
+										provider={p.type}
+										onSaved={onKeySaved}
+										variant="compact"
+									/>
+								</div>
+							)}
+						</div>
+					);
+				})}
 			</div>
 
 			<p
@@ -570,11 +681,126 @@ function WelcomeCard({
 					color: "var(--text-muted)",
 					fontSize: "11px",
 					margin: "16px 0 0",
+					textAlign: "center",
 				}}
 			>
-				Add your API key in Settings &gt; AI tab
+				Manage all keys in Settings → AI tab.
 			</p>
 		</div>
+	);
+}
+
+/**
+ * Backend picker — grouped by kind (BYO providers / Connected warehouse).
+ * Warehouse rows are disabled until the matching connector is connected.
+ * (Backlog AI-5.)
+ */
+function BackendPicker({
+	activeId,
+	onChange,
+}: {
+	activeId: string;
+	onChange: (id: string) => void;
+}) {
+	const [available, setAvailable] = useState<Set<string>>(new Set());
+
+	// Poll availability on mount + every 5s to react to connector activate/deactivate.
+	useEffect(() => {
+		let cancelled = false;
+		const update = async () => {
+			const list = await backendRegistry.listAvailable();
+			if (cancelled) return;
+			setAvailable(new Set(list.map((b) => b.id)));
+		};
+		update();
+		const t = setInterval(update, 5000);
+		return () => {
+			cancelled = true;
+			clearInterval(t);
+		};
+	}, []);
+
+	const all = backendRegistry.list();
+	const byo = all.filter((b) => b.kind === "byo");
+	const warehouse = all.filter((b) => b.kind === "warehouse");
+
+	return (
+		<select
+			value={activeId}
+			onChange={(e) => onChange(e.target.value)}
+			style={{
+				background: "var(--bg-tertiary)",
+				color: "var(--text-primary)",
+				border: "1px solid var(--border-light)",
+				borderRadius: "4px",
+				padding: "4px 6px",
+				fontSize: "12px",
+				cursor: "pointer",
+				maxWidth: 180,
+			}}
+		>
+			<optgroup label="BYO providers">
+				{byo.map((b) => (
+					<option key={b.id} value={b.id} disabled={!available.has(b.id)}>
+						{b.label}
+						{available.has(b.id) ? "" : " (no key)"}
+					</option>
+				))}
+			</optgroup>
+			{warehouse.length > 0 && (
+				<optgroup label="Connected warehouse">
+					{warehouse.map((b) => (
+						<option key={b.id} value={b.id} disabled={!available.has(b.id)}>
+							{b.label}
+							{available.has(b.id) ? "" : " (not connected)"}
+						</option>
+					))}
+				</optgroup>
+			)}
+		</select>
+	);
+}
+
+/**
+ * ModelPicker — small dropdown next to BackendPicker. Shown only when the
+ * active backend exposes more than one model. Default selection (when the
+ * store doesn't yet have one for this backend) is the backend's first model.
+ */
+function ModelPicker({
+	backendId,
+	selectedModels,
+	onChange,
+}: {
+	backendId: string;
+	selectedModels: Record<string, string>;
+	onChange: (modelId: string) => void;
+}) {
+	const backend = backendRegistry.get(backendId);
+	if (!backend || backend.models.length <= 1) return null;
+	const current = selectedModels[backendId] ?? backend.models[0]?.id;
+	return (
+		<select
+			value={current}
+			onChange={(e) => onChange(e.target.value)}
+			title={`Model for ${backend.label}`}
+			aria-label={`Select model for ${backend.label}`}
+			style={{
+				background: "var(--bg-tertiary)",
+				color: "var(--text-primary)",
+				border: "1px solid var(--border-light)",
+				borderRadius: "4px",
+				padding: "4px 6px",
+				fontSize: "12px",
+				cursor: "pointer",
+				maxWidth: 180,
+			}}
+		>
+			{backend.models.map((m) => (
+				<option key={m.id} value={m.id}>
+					{m.name}
+				</option>
+			))}
+		</select>
 	);
 }
 

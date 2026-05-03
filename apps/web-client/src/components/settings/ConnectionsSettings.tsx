@@ -1,8 +1,10 @@
 import { useState, useEffect } from "react";
 import { queryService } from "../../services/streaming-query-service";
 import BigQuerySetupDialog from "../BigQuerySetupDialog";
+import SnowflakeSetupDialog from "../SnowflakeSetupDialog";
 import { BigQueryCostSettings } from "./BigQueryCostSettings";
 import { CloudIcon, DatabaseIcon } from "../Icons";
+import { SNOWFLAKE_OAUTH_AUTO_CONNECT_KEY } from "../../utils/oauth-constants";
 
 interface ConnectionsSettingsProps {
 	showToast?: (
@@ -22,11 +24,19 @@ export default function ConnectionsSettings({
 	onReloadBigQueryData,
 }: ConnectionsSettingsProps) {
 	const [showBigQuerySetup, setShowBigQuerySetup] = useState(false);
+	const [showSnowflakeSetup, setShowSnowflakeSetup] = useState(false);
+	const [editSnowflake, setEditSnowflake] = useState(false);
 	const [isBigQueryConnected, setIsBigQueryConnected] = useState(
 		queryService.isBigQueryConnected(),
 	);
+	const [isSnowflakeConnected, setIsSnowflakeConnected] = useState(
+		queryService.isSnowflakeConnected(),
+	);
 	const [bigQueryAutoConnect, setBigQueryAutoConnect] = useState(() => {
 		return localStorage.getItem("bigquery-auto-connect") === "true";
+	});
+	const [snowflakeAutoConnect, setSnowflakeAutoConnect] = useState(() => {
+		return localStorage.getItem(SNOWFLAKE_OAUTH_AUTO_CONNECT_KEY) === "true";
 	});
 	const [billingProject, setBillingProject] = useState<string>("");
 	const [availableProjects, setAvailableProjects] = useState<Array<{ id: string; name: string }>>([]);
@@ -56,11 +66,11 @@ export default function ConnectionsSettings({
 	return (
 		<>
 			<div style={{ padding: "8px 0" }}>
-				{/* Two-column layout for connections */}
+				{/* Adaptive grid for connection cards (DuckDB / BigQuery / Snowflake / …) */}
 				<div
 					style={{
 						display: "grid",
-						gridTemplateColumns: "1fr 1fr",
+						gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
 						gap: "12px",
 					}}
 				>
@@ -329,6 +339,196 @@ export default function ConnectionsSettings({
 							</>
 						)}
 					</div>
+
+					{/* Snowflake Card */}
+					<div
+						style={{
+							padding: 14,
+							background: "var(--bg-secondary)",
+							border: "1px solid var(--border)",
+							borderRadius: 8,
+						}}
+					>
+						<div
+							style={{
+								display: "flex",
+								alignItems: "center",
+								gap: 10,
+								marginBottom: 12,
+							}}
+						>
+							<CloudIcon size={24} color="#29b5e8" />
+							<div>
+								<div
+									style={{
+										fontWeight: 600,
+										color: "var(--text-primary)",
+										fontSize: 13,
+									}}
+								>
+									Snowflake
+								</div>
+								<div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+									Cloud data warehouse
+								</div>
+							</div>
+						</div>
+
+						{isSnowflakeConnected ? (
+							<>
+								<div
+									style={{
+										display: "flex",
+										alignItems: "center",
+										justifyContent: "center",
+										gap: 6,
+										padding: "6px 10px",
+										background: "var(--success)",
+										color: "white",
+										borderRadius: 4,
+										fontSize: 11,
+										fontWeight: 500,
+										marginBottom: 10,
+									}}
+								>
+									<span>Connected</span>
+									{(() => {
+										const mode = queryService
+											.getSnowflakeConnector()
+											?.getAuthMode?.();
+										if (!mode) return null;
+										return (
+											<span
+												style={{
+													padding: "1px 6px",
+													borderRadius: 3,
+													background: "rgba(255,255,255,0.2)",
+													fontSize: 10,
+													fontWeight: 600,
+													letterSpacing: "0.03em",
+												}}
+												title={
+													mode === "pat"
+														? "Authenticated with a Personal Access Token (bound to one role; generate a new PAT to switch)"
+														: "Authenticated with OAuth 2.0 PKCE"
+												}
+											>
+												{mode === "pat" ? "PAT" : "OAUTH"}
+											</span>
+										);
+									})()}
+								</div>
+								<div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+									<button
+										onClick={() => {
+											setEditSnowflake(true);
+											setShowSnowflakeSetup(true);
+										}}
+										style={{
+											flex: 1,
+											padding: "5px 8px",
+											background: "var(--bg-tertiary)",
+											color: "var(--text-primary)",
+											border: "1px solid var(--border)",
+											borderRadius: 4,
+											cursor: "pointer",
+											fontSize: 11,
+										}}
+									>
+										Edit
+									</button>
+									<button
+										onClick={() => {
+											if (
+												window.confirm(
+													"Clear Snowflake cache? This will reload fresh metadata.",
+												)
+											) {
+												queryService.clearSnowflakeCache();
+												showToast?.("Snowflake cache cleared", "success", 3000);
+											}
+										}}
+										style={{
+											flex: 1,
+											padding: "5px 8px",
+											background: "var(--bg-tertiary)",
+											color: "var(--text-primary)",
+											border: "1px solid var(--border)",
+											borderRadius: 4,
+											cursor: "pointer",
+											fontSize: 11,
+										}}
+									>
+										Clear Cache
+									</button>
+								</div>
+								<button
+									onClick={async () => {
+										if (window.confirm("Disconnect from Snowflake?")) {
+											try {
+												await queryService.disconnectSnowflake();
+												setIsSnowflakeConnected(false);
+												onConnectionChange?.();
+												showToast?.("Disconnected", "info", 3000);
+											} catch (err) {
+												showToast?.(
+													`Failed: ${err instanceof Error ? err.message : String(err)}`,
+													"error",
+													5000,
+												);
+											}
+										}
+									}}
+									style={{
+										width: "100%",
+										padding: "5px 8px",
+										background: "var(--error)",
+										color: "white",
+										border: "none",
+										borderRadius: 4,
+										cursor: "pointer",
+										fontSize: 11,
+									}}
+								>
+									Disconnect
+								</button>
+							</>
+						) : (
+							<>
+								<button
+									onClick={() => {
+										setEditSnowflake(false);
+										setShowSnowflakeSetup(true);
+									}}
+									style={{
+										width: "100%",
+										padding: "6px 10px",
+										background: "var(--accent)",
+										color: "white",
+										border: "none",
+										borderRadius: 4,
+										cursor: "pointer",
+										fontSize: 11,
+										fontWeight: 500,
+									}}
+								>
+									Configure
+								</button>
+								<p
+									style={{
+										fontSize: 11,
+										color: "var(--text-muted)",
+										marginTop: 10,
+										marginBottom: 0,
+										lineHeight: 1.4,
+									}}
+								>
+									Snowflake OAuth Security Integration (ACCOUNTADMIN)
+									or a Programmatic Access Token (no admin needed).
+								</p>
+							</>
+						)}
+					</div>
 				</div>
 
 				{/* BigQuery Auto-Connect Toggle */}
@@ -425,6 +625,98 @@ export default function ConnectionsSettings({
 					</div>
 				)}
 
+				{/* Snowflake Auto-Connect Toggle */}
+				{isSnowflakeConnected && (
+					<div
+						style={{
+							marginTop: 12,
+							padding: 12,
+							background: "var(--bg-secondary)",
+							border: "1px solid var(--border)",
+							borderRadius: 8,
+						}}
+					>
+						<div
+							style={{
+								display: "flex",
+								alignItems: "center",
+								justifyContent: "space-between",
+							}}
+						>
+							<div>
+								<div
+									style={{
+										fontWeight: 500,
+										color: "var(--text-primary)",
+										fontSize: 12,
+									}}
+								>
+									Auto-connect to Snowflake
+								</div>
+								<div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+									Reconnect automatically when app loads
+								</div>
+							</div>
+							<label
+								style={{
+									position: "relative",
+									display: "inline-block",
+									width: 40,
+									height: 20,
+									cursor: "pointer",
+								}}
+							>
+								<input
+									type="checkbox"
+									checked={snowflakeAutoConnect}
+									onChange={(e) => {
+										const enabled = e.target.checked;
+										setSnowflakeAutoConnect(enabled);
+										localStorage.setItem(
+											SNOWFLAKE_OAUTH_AUTO_CONNECT_KEY,
+											enabled ? "true" : "false",
+										);
+										showToast?.(
+											enabled ? "Auto-connect enabled" : "Auto-connect disabled",
+											"success",
+											3000,
+										);
+									}}
+									style={{ opacity: 0, width: 0, height: 0 }}
+								/>
+								<span
+									style={{
+										position: "absolute",
+										cursor: "pointer",
+										top: 0,
+										left: 0,
+										right: 0,
+										bottom: 0,
+										backgroundColor: snowflakeAutoConnect
+											? "var(--accent)"
+											: "var(--border)",
+										transition: "0.3s",
+										borderRadius: 20,
+									}}
+								>
+									<span
+										style={{
+											position: "absolute",
+											height: 14,
+											width: 14,
+											left: snowflakeAutoConnect ? 22 : 3,
+											bottom: 3,
+											backgroundColor: "white",
+											transition: "0.3s",
+											borderRadius: "50%",
+										}}
+									></span>
+								</span>
+							</label>
+						</div>
+					</div>
+				)}
+
 				{/* Info Box */}
 				<div
 					style={{
@@ -439,9 +731,11 @@ export default function ConnectionsSettings({
 					}}
 				>
 					<strong style={{ color: "var(--text-secondary)" }}>Note:</strong>{" "}
-					DuckDB is embedded and always available. BigQuery requires a Google
-					Cloud OAuth Client ID from your GCP project. Credentials are stored
-					securely in browser local storage.
+					DuckDB is embedded and always available. BigQuery uses OAuth;
+					Snowflake supports OAuth or Personal Access Token. Tokens are
+					encrypted with AES-GCM (device-bound key in IndexedDB).
+					Connection config — account, warehouse, project ID — is stored in
+					localStorage.
 				</div>
 			</div>
 
@@ -454,6 +748,38 @@ export default function ConnectionsSettings({
 						onConnectionChange?.();
 					}}
 					showToast={showToast}
+				/>
+			)}
+
+			{/* Snowflake Setup Dialog */}
+			{showSnowflakeSetup && (
+				<SnowflakeSetupDialog
+					onClose={() => setShowSnowflakeSetup(false)}
+					onSuccess={() => {
+						setIsSnowflakeConnected(true);
+						onConnectionChange?.();
+					}}
+					showToast={showToast}
+					initialConfig={
+						editSnowflake
+							? {
+									account: queryService.getSnowflakeConnector()?.getAccount(),
+									warehouse:
+										queryService.getSnowflakeConnector()?.getWarehouse(),
+									role: queryService.getSnowflakeConnector()?.getRole(),
+									database:
+										queryService.getSnowflakeConnector()?.getDatabase(),
+									schema:
+										queryService
+											.getSnowflakeConnector()
+											?.getDefaultSchema(),
+									// clientId is locked-in via initialConfig presence;
+									// pass placeholder so isEditing trips even though we
+									// don't display it.
+									clientId: "<edit-mode>",
+								}
+							: undefined
+					}
 				/>
 			)}
 		</>

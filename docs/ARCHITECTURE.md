@@ -1,445 +1,129 @@
-# dbxlite - System Architecture
+# Architecture
 
-> Technical documentation for the dbxlite application architecture
+dbxlite runs DuckDB either in your browser (WebAssembly in a Web Worker) or against a local DuckDB CLI process over HTTP, with the same UI on top. Mode is auto-detected by probing `/status` on localhost. BigQuery and Snowflake are supported as cloud connectors that talk to their REST APIs from the browser; BigQuery directly because Google APIs serve CORS, Snowflake through a thin proxy because it doesn't.
 
----
-
-## Overview
-
-dbxlite is a browser-native SQL analytics application with two execution modes:
-
-| Mode | How to Use | Architecture | Best For |
-|------|------------|--------------|----------|
-| **Server** | `duckdb -ui` | HTTP to local DuckDB | Full power, native extensions, filesystem access |
-| **WASM** | Visit sql.dbxlite.com | Browser-only WASM | Zero install, works offline, portable |
-
-**Supported Connectors:**
-
-| Connector | Status | Architecture | Notes |
-|-----------|--------|--------------|-------|
-| **DuckDB** | Implemented | WASM or HTTP | Mode auto-detected |
-| **BigQuery** | Implemented | Direct to GCP | CORS natively supported |
-| **Snowflake** | Planned | Via CORS proxy | Future release |
-
-**Key Technical Highlights:**
-- **Server mode**: Full native DuckDB via HTTP connector with binary protocol
-- **WASM mode**: DuckDB runs entirely in-browser using WebAssembly (~105MB bundle)
-- **File handle persistence** - local file references survive browser restarts (no re-upload)
-- BigQuery connects directly to Google APIs
-- Type normalization unifies data types across connectors
-- Memory-safe streaming with backpressure mechanisms
+This doc covers how the pieces fit, the wire formats, and the parts that took non-obvious work to get right. For Quick Start and the user-facing mode comparison, see the [README](../README.md).
 
 ---
 
-## Execution Modes
+## HTTP mode (Server)
 
-dbxlite operates in two distinct modes, auto-detected based on how you access it:
-
-```mermaid
-flowchart TB
-    subgraph ServerMode["Server Mode (Recommended)"]
-        CLI["duckdb -ui"]
-        Server["DuckDB Server<br/>localhost:4213"]
-        UI1["dbxlite UI<br/>(Browser)"]
-        FS["Local Filesystem"]
-        Ext["All Extensions"]
-
-        CLI --> Server
-        Server <-->|HTTP| UI1
-        Server --> FS
-        Server --> Ext
-    end
-
-    subgraph WASMMode["WASM Mode"]
-        Browser["Browser"]
-        WASM["DuckDB WASM<br/>(Web Worker)"]
-        Memory["In-Memory DB"]
-        UI2["dbxlite UI"]
-
-        Browser --> UI2
-        UI2 --> WASM
-        WASM --> Memory
-    end
-
-    User["User"] -->|"duckdb -ui"| CLI
-    User -->|"sql.dbxlite.com"| Browser
-```
-
-### Mode Comparison
-
-| Capability | Server Mode | WASM Mode |
-|------------|-------------|-----------|
-| **Memory** | Unlimited (system RAM) | ~2-4GB browser limit |
-| **Extensions** | All (httpfs, spatial, iceberg, etc.) | Limited subset |
-| **Filesystem** | Direct access | File handles only |
-| **Performance** | Native speed | Near-native (WASM overhead) |
-| **BigQuery** | Via DuckDB extension | Browser OAuth connector |
-| **Offline** | Requires DuckDB CLI | Works after first load |
-| **Install** | DuckDB CLI required | Zero install |
-
-### How to Use Server Mode
-
-```bash
-# Start local asset server
-npx dbxlite-ui                              # Serves UI on port 8080
-
-# In another terminal, launch DuckDB with the local UI
-export ui_remote_url="http://localhost:8080"
-duckdb -unsigned -ui
-
-# With an existing database
-duckdb mydata.duckdb -unsigned -ui
-
-# Alternative: Use hosted assets (no npm required)
-export ui_remote_url="https://sql.dbxlite.com"
-duckdb -unsigned -ui
-```
-
-Open http://localhost:4213 in your browser. The `-unsigned` flag is required for custom UI URLs.
-
-> **Note:** The hosted URL only serves static UI assets (similar to the default DuckDB UI hosted by MotherDuck). All data and query execution stays local: DuckDB on your machine talks directly to your browser via localhost:4213. Nothing is sent to external servers.
-
----
-
-## HTTP Mode Architecture
-
-When running in Server mode, dbxlite communicates with a local DuckDB instance via HTTP:
+In Server mode dbxlite talks to a local DuckDB instance over HTTP. DuckDB CLI launches a tiny HTTP server (`duckdb -unsigned -ui`) that serves Arrow IPC results and an SSE catalog stream.
 
 ```mermaid
 sequenceDiagram
-    participant UI as dbxlite UI<br/>(Browser)
-    participant Server as DuckDB Server<br/>(localhost:4213)
+    participant UI as dbxlite (Browser)
+    participant Server as DuckDB Server (localhost:4213)
     participant DB as DuckDB Engine
 
-    Note over UI,Server: Mode Detection
     UI->>Server: GET /status
-    Server-->>UI: 200 OK (server available)
+    Server-->>UI: 200 OK
     UI->>UI: Set mode = "http"
 
-    Note over UI,Server: Query Execution
-    UI->>Server: POST /query<br/>Content-Type: application/json
+    UI->>Server: POST /query
     Server->>DB: Execute SQL
-    DB-->>Server: Arrow IPC result
-    Server-->>UI: Binary response<br/>(Arrow format)
-    UI->>UI: Deserialize binary to rows
+    DB-->>Server: Arrow IPC
+    Server-->>UI: Binary response
+    UI->>UI: Deserialize to rows
 
-    Note over UI,Server: Catalog Subscription
     UI->>Server: GET /catalog (SSE)
-    loop Schema Changes
+    loop Schema changes
         DB-->>Server: Table created/dropped
         Server-->>UI: SSE event: catalog_changed
         UI->>UI: Refresh explorer
     end
 ```
 
-### HTTP Connector Components
-
-```mermaid
-flowchart LR
-    subgraph Browser["Browser (dbxlite)"]
-        useMode["useMode()<br/>Mode detection"]
-        httpConn["DuckDBHttpConnector"]
-        queryService["streaming-query-service"]
-        deserialize["Binary deserializer"]
-        SSE["SSE client"]
-
-        useMode -->|isHttpMode| httpConn
-        httpConn --> queryService
-        queryService --> deserialize
-        httpConn --> SSE
-    end
-
-    subgraph Server["DuckDB Server"]
-        HTTP["/query endpoint"]
-        Catalog["/catalog SSE"]
-        Engine["DuckDB Engine"]
-
-        HTTP --> Engine
-        Catalog --> Engine
-    end
-
-    queryService <-->|POST /query| HTTP
-    SSE <-->|GET /catalog| Catalog
-    deserialize -->|"rows, columns"| Grid["Results Grid"]
-```
-
-### Key Implementation Files
+Key files:
 
 | File | Purpose |
 |------|---------|
-| `src/hooks/useMode.ts` | Mode detection (checks /status endpoint) |
-| `src/hooks/useServerDatabases.ts` | Discovers databases/schemas via duckdb_databases() |
-| `src/services/streaming-query-service.ts` | HTTP query execution with binary deserialization |
+| `apps/web-client/src/hooks/useMode.ts` | Mode detection via `/status` probe |
+| `apps/web-client/src/hooks/useServerDatabases.ts` | Discovers databases/schemas via `duckdb_databases()` |
 | `packages/connectors/src/duckdb-http-connector.ts` | HTTP connector implementation |
 
-### Binary Protocol
+Binary protocol: requests are JSON (`POST /query`); responses are raw Arrow IPC (schema + record batches). The connector deserializes into a `QueryResult` shape with `rows`, `columns`, `totalRows`, `executionTime`.
 
-DuckDB's HTTP server returns query results in Arrow IPC format for efficiency:
-
-```
-Request:  POST /query { "query": "SELECT * FROM users" }
-Response: Binary (Arrow IPC)
-          - Schema: column names + types
-          - Record batches: row data
-```
-
-The `streaming-query-service.ts` deserializes this binary format into JavaScript objects:
-
-```typescript
-interface QueryResult {
-  rows: TableRow[];      // Deserialized data
-  columns: string[];     // Column names
-  totalRows: number;     // Row count
-  executionTime: number; // Query duration (ms)
-}
-```
-
-### SSE Catalog Notifications
-
-The `/catalog` endpoint uses Server-Sent Events to push schema changes:
-
-```
-GET /catalog
-Connection: keep-alive
-
-event: catalog_changed
-data: {"type": "table_created", "name": "users"}
-
-event: catalog_changed
-data: {"type": "table_dropped", "name": "temp_data"}
-```
-
-This enables real-time explorer updates when tables are created/dropped via SQL.
+The SSE `/catalog` endpoint pushes `table_created` / `table_dropped` events so the explorer refreshes without polling.
 
 ---
 
-## Local Storage Architecture
+## Local storage
 
-dbxlite uses multiple storage mechanisms to handle different file types and user preferences:
+dbxlite uses browser storage to balance persistence and isolation:
 
-### Storage Overview
-
-| Storage Type | Persists? | Location | Purpose |
-|--------------|-----------|----------|---------|
-| **File handles** | Yes | IndexedDB: `dbxlite-file-handles` | References to local files via File System Access API - enables zero-copy access without re-upload |
-| **User settings** | Yes | localStorage: `dbxlite-settings` | Theme, formatting, editor preferences (Zustand persist middleware) |
-| **DuckDB database** | No | Browser RAM (`:memory:`) | Query execution engine - tables lost on refresh |
-| **Uploaded file buffers** | No | DuckDB virtual FS | Files copied to memory during session - lost on refresh |
-| **Remote file URLs** | Yes* | localStorage: `dbxlite-settings` | File URLs only, files accessed via httpfs extension |
-
-*URL references persist; actual files fetched on-demand
-
-### Browser Storage Diagram
+| Storage | Persists? | Location | Purpose |
+|---------|-----------|----------|---------|
+| File handles | Yes | IndexedDB `dbxlite-file-handles` | File System Access API references; zero-copy access without re-upload |
+| User settings | Yes | localStorage `dbxlite-settings` | Theme, formatter prefs (Zustand persist) |
+| Remote URLs | Yes | localStorage `dbxlite-settings` | URL strings only; files fetched via httpfs on demand |
+| DuckDB database | No | RAM (`:memory:`) | Tables lost on refresh |
+| Uploaded buffers | No | DuckDB virtual FS | In-memory during session |
 
 ```mermaid
 flowchart LR
-    subgraph Persistent["Persistent (Survives Refresh)"]
-        Handles["File Handles<br/>(IndexedDB)"]
-        LocalStore["User Settings<br/>(localStorage)"]
-        RemoteURLs["Remote URLs<br/>(localStorage)"]
+    subgraph Persistent["Persistent"]
+        Handles["File handles<br/>(IndexedDB)"]
+        Settings["User settings<br/>(localStorage)"]
+        URLs["Remote URLs<br/>(localStorage)"]
     end
-
-    subgraph SessionOnly["Session-Only (Lost on Refresh)"]
-        RAM["DuckDB :memory:<br/>Database"]
-        Buffers["Uploaded File<br/>Buffers"]
+    subgraph Session["Session-only"]
+        RAM["DuckDB :memory:"]
+        Buffers["File buffers"]
     end
-
-    subgraph LocalDisk["Local Disk (User's Computer)"]
-        ButtonFiles["Button-uploaded files"]
-        DragFiles["Drag-drop files"]
-        ExternalDBs["External .duckdb files"]
+    subgraph Disk["Local disk"]
+        Files["Files (button + drag)"]
+        DBs["External .duckdb files"]
     end
-
-    ButtonFiles -->|"Large files"| Handles
-    ButtonFiles -->|"Small files"| Buffers
-    DragFiles -->|"Always"| Buffers
-    ExternalDBs -->|"Button & drag"| Handles
-    RemoteURLs -->|"HTTP/HTTPS"| LocalStore
-
-    Handles -->|"Re-auth on reload"| LocalDisk
-    LocalStore -->|"httpfs extension"| RemoteURLs
-    Buffers -->|"Queries in session"| RAM
+    Files -->|large| Handles
+    Files -->|small| Buffers
+    DBs -->|button| Handles
+    DBs -->|drag| Buffers
+    Buffers --> RAM
+    Handles -->|re-auth on reload| Disk
 ```
 
-### File Handling Patterns
+### File handling
 
-DuckDB handles files in five distinct ways depending on upload method and file type:
+Files are handled five different ways depending on how they enter the app:
 
-#### 1. Persistent File References (Button Upload - Large Files)
-- **How it works**: File System Access API creates a persistent reference stored in IndexedDB
-- **Storage location**: File handle in IndexedDB (`dbxlite-file-handles`)
-- **Query method**: DuckDB accesses file directly via file handle (zero-copy)
-- **Across sessions**: File handle restored from IndexedDB on reload; browser requests permission re-auth
-- **Re-upload needed**: No - file reference persists
-- **Use case**: Large CSV/Parquet files, external data sources
+1. **Button-uploaded large files** — File System Access API creates a persistent handle (IndexedDB). Browser re-prompts permission on reload, but the file reference survives. Implementation: `file-handle-store.ts`.
+2. **Button-uploaded small files** — Copied into DuckDB's virtual FS. Lost on refresh.
+3. **Drag-drop** — Always volatile. Tables created from the buffer; no handle stored.
+4. **Attached `.duckdb` files** — `ATTACH DATABASE` with either a persistent handle (button) or a volatile buffer (drag).
+5. **Remote URLs** — URL string in localStorage; httpfs fetches on demand. The file never leaves the remote server.
 
-**Implementation**: `file-handle-store.ts` - `storeHandle(id, name, handle)`
+### DuckDB in-memory
 
-#### 2. Session-Only Buffers (Button Upload - Small Files)
-- **How it works**: File copied into DuckDB's virtual filesystem during session
-- **Storage location**: DuckDB virtual FS (in RAM)
-- **Query method**: Tables created or imported into DuckDB
-- **Across sessions**: Lost on page refresh
-- **Re-upload needed**: Yes - entire file must be re-uploaded
-- **Use case**: Small test files, temporary data imports
+DuckDB runs `:memory:` in WASM mode. OPFS-backed persistence is blocked by [duckdb-wasm#1322](https://github.com/duckdb/duckdb-wasm/discussions/1322) and related issues. Implications: `CREATE TABLE` results are session-only; export anything you need to keep.
 
-#### 3. Volatile Drag-Drop Files
-- **How it works**: Files dragged directly into app are always buffered (no file handle creation)
-- **Storage location**: DuckDB virtual FS (in RAM), marked `volatile: true`
-- **Query method**: Tables created immediately without disk access
-- **Across sessions**: Lost on page refresh
-- **Re-upload needed**: Yes - always requires re-upload
-- **Use case**: Quick exploratory analysis, temporary datasets
+### Browser requirements
 
-#### 4. Attached External Databases
-- **How it works**: External .duckdb files attached via `ATTACH DATABASE` SQL command
-- **Storage location**: File handle (persistent) or RAM buffer (volatile)
-- **Button upload**: Uses file handle, persistent reference
-- **Drag-drop**: Always volatile, lost on refresh
-- **Query method**: `ATTACH DATABASE <filename> AS db_alias`
-- **Use case**: Working with multiple DuckDB databases, data federation
-
-#### 5. Remote Files (HTTP/HTTPS URLs)
-- **How it works**: httpfs extension loads data directly from remote URLs without upload
-- **Storage location**: URL string in localStorage (no data stored locally)
-- **Query method**: DuckDB queries URL directly: `SELECT * FROM 'https://example.com/data.csv'`
-- **Across sessions**: URL reference persists (file stays on remote server)
-- **Network**: Files fetched on-demand when queries execute
-- **Use case**: Cloud data sources, public datasets, shared file links
-
-**Implementation**: `dataSourceStore/store.ts` - `addRemoteURL(url)` - httpfs extension auto-loads on first use
-
-### DuckDB In-Memory Configuration
-
-DuckDB runs in-memory (`:memory:` path) for reliability:
-
-```javascript
-// worker.ts
-await db.open({
-  path: ':memory:',
-  accessMode: duckdb.DuckDBAccessMode.READ_WRITE
-});
-```
-
-**Why no OPFS (file-system persistence)?**
-- Issue #1576: DuckDB WASM temp_directory filesystem problems
-- Issue #2096: COI worker OPFS causes crashes
-- See: https://github.com/duckdb/duckdb-wasm/discussions/1322
-
-**Implications**:
-- All `CREATE TABLE` results are session-only
-- Large analytical results should be exported before closing
-- File-based queries re-execute from persisted file handles on reload
-
-### Browser Requirements
-
-| Browser | Minimum Version | Notes |
-|---------|-----------------|-------|
-| Chrome/Edge | 86+ | Full support |
-| Firefox | 113+ | Partial File System Access API support |
-| Safari | 15.2+ | No `showOpenFilePicker` - uses fallback |
-
-> Requires HTTPS or localhost for File System Access API
-> DuckDB WASM auto-selects optimal build variant at runtime
+Chrome/Edge 86+, Firefox 113+, Safari 15.2+ (no `showOpenFilePicker`, falls back to `<input type="file">`). HTTPS or localhost required for File System Access API.
 
 ---
 
-## System Architecture
+## DuckDB WASM bundle
 
-```mermaid
-flowchart TB
-    subgraph UI["User Interface"]
-        Editor["Monaco Editor<br/>(SQL Input)"]
-        Grid["Results Grid<br/>(PaginatedTable)"]
-        Explorer["Data Explorer<br/>(TreeView)"]
-    end
+The Web Worker loads the **EH (Exception Handling)** bundle for compatibility:
 
-    Router["Query Router<br/>(useQueryExecution.ts)"]
+| Bundle | Tradeoff |
+|--------|----------|
+| **EH** (selected) | Works everywhere, single-threaded |
+| MVP | Smallest, limited features |
+| COI | Multi-threaded, requires COOP/COEP headers |
 
-    subgraph DuckDB["DuckDB Path (Browser-Only)"]
-        DuckConn["DuckDBConnector"]
-        Adapter["DuckDBWorkerAdapter"]
-        Worker["Web Worker<br/>(worker.ts)"]
-        WASM["DuckDB WASM<br/>(@duckdb/wasm)"]
-        Memory["In-Memory<br/>(:memory:)"]
-    end
-
-    subgraph BigQuery["BigQuery Path (Direct to GCP)"]
-        BQConn["BigQueryConnector"]
-        OAuth["Google OAuth"]
-        BQAPI["BigQuery REST API"]
-    end
-
-    subgraph Transform["Data Transformation Layer"]
-        Types["Type Normalization<br/>(dataTypes.ts)"]
-        Format["Value Formatting<br/>(formatters.ts)"]
-        BigInt["BigInt Conversion"]
-    end
-
-    Editor --> Router
-    Router --> DuckConn
-    Router --> BQConn
-
-    DuckConn --> Adapter
-    Adapter --> Worker
-    Worker --> WASM
-    WASM --> Memory
-
-    BQConn --> OAuth
-    OAuth --> BQAPI
-
-    DuckConn --> Types
-    BQConn --> Types
-    Types --> Format
-    Format --> BigInt
-    BigInt --> Grid
-    BigInt --> Explorer
-```
+Selection happens at runtime in `worker.ts` via `selectedBundles.eh ?? duckdb.selectBundle(...)`.
 
 ---
 
-## DuckDB + WebAssembly
+## Worker architecture
 
-### What is WebAssembly (WASM)?
-
-WebAssembly is a binary instruction format enabling near-native performance in browsers:
-
-| Aspect | Traditional JS | WebAssembly |
-|--------|---------------|-------------|
-| Format | Text (parsed) | Binary (decoded) |
-| Speed | JIT compilation | Pre-compiled |
-| Performance | Variable (GC pauses) | Predictable |
-
-**DuckDB WASM Specifics:**
-- Full DuckDB database engine compiled to WASM
-- ~105MB binary with all features
-- Runs entirely in browser (no server)
-- Uses browser's memory model
-
-### WASM Bundle Selection
-
-dbxlite uses the **EH (Exception Handling)** bundle for maximum compatibility:
-
-| Bundle | Pros | Cons |
-|--------|------|------|
-| **EH** (Selected) | Works everywhere, no special headers | Single-threaded |
-| MVP | Smallest size | Limited features |
-| COI | Multi-threaded, fastest | Requires COOP/COEP headers |
-
-```javascript
-// Bundle selection in worker.ts
-const bundle = selectedBundles.eh || await duckdb.selectBundle(selectedBundles);
-```
-
----
-
-## Worker Architecture
-
-### Message Protocol
+DuckDB WASM runs in a Web Worker; the main thread streams chunks over `postMessage` with explicit ack-based backpressure.
 
 ```mermaid
 sequenceDiagram
-    participant Main as Main Thread
+    participant Main as Main thread
     participant Worker as Web Worker
     participant DB as DuckDB WASM
 
@@ -449,72 +133,51 @@ sequenceDiagram
 
     Main->>Worker: run (query)
     Worker->>DB: Execute SQL
-
-    loop Streaming Results
+    loop streaming
         DB-->>Worker: Data chunk
         Worker-->>Main: arrow/json chunk
         Main-->>Worker: ack
     end
-
     Worker-->>Main: done
 ```
 
-**Worker → Main Thread Messages:**
-| Type | Payload | Purpose |
-|------|---------|---------|
-| `inited` | Worker version | Worker initialized and ready |
-| `error` | Error details | Error occurred during operation |
-| `json-schema` | Column metadata | Result schema information |
-| `json` | Data rows | JSON format result chunk |
-| `arrow` | Arrow IPC buffer | Arrow IPC format result chunk |
-| `file_registered` | File info | File registration completed |
-| `file_buffer` | Buffer metadata | File buffer copy completed |
-| `cancelled` | Query ID | Query cancellation confirmed |
-| `query-stats` | Execution stats | Query statistics (rows, execution time) |
-| `done` | Query ID | Query execution complete |
+Worker → main: `inited`, `error`, `json-schema`, `json`, `arrow`, `file_registered`, `file_buffer`, `cancelled`, `query-stats`, `done`.
 
-**Main Thread → Worker Messages:**
-| Type | Payload | Purpose |
-|------|---------|---------|
-| `init` | Bundle URLs | Initialize with DuckDB WASM bundle paths |
-| `run` | SQL + options | Execute query with streaming options |
-| `register_file` | File data | Register uploaded file buffer |
-| `copy_file_to_buffer` | File handle | Copy file to DuckDB virtual filesystem |
-| `register_file_handle` | File handle | Register File System Access API handle |
-| `cancel` | Query ID | Cancel running query |
-| `ack` | Chunk ID | Acknowledge chunk receipt (backpressure control) |
+Main → worker: `init`, `run`, `register_file`, `copy_file_to_buffer`, `register_file_handle`, `cancel`, `ack`.
+
+`MAX_OUTSTANDING = 2` and `MAX_CHUNK_BYTES = 5MB` cap memory while the grid catches up.
 
 ---
 
-## Memory Management
+## Memory and grid caching
 
-### Configuration
-
-| Setting | Value | Purpose |
-|---------|-------|---------|
-| `memory_limit` | -1 | Unlimited (browser limits) |
-| `threads` | 1 | Reduce fragmentation |
-| `MAX_OUTSTANDING` | 2 | Backpressure limit |
+| Setting | Value | Why |
+|---------|-------|-----|
+| `memory_limit` | -1 | Unlimited; browser caps |
+| `threads` | 1 | Reduces fragmentation under WASM |
+| `MAX_OUTSTANDING` | 2 | Backpressure |
 | `MAX_CHUNK_BYTES` | 5MB | JSON chunk size |
 | `GC_INTERVAL` | 15s | Periodic cleanup |
 
-### Grid Caching Strategy
+Result-set caching strategy in the grid:
 
 ```mermaid
 flowchart TD
-    Start["Query Executed"] --> Load["Load First Page (100 rows)"]
-    Load --> Check1{"All results<br/>in first page?"}
-    Check1 -->|Yes| CacheAll["Cache ALL rows<br/>Enable in-memory sorting"]
-    Check1 -->|No| Check2{"Row count < 10K?"}
-    Check2 -->|Yes| Background["Fetch all pages in background<br/>Cache complete"]
-    Check2 -->|No| Stream["Streaming mode only<br/>Use LIMIT/OFFSET per page<br/>Must use ORDER BY for sorting"]
+    Q["Query executed"] --> P1["Load first page (100 rows)"]
+    P1 --> AllOnPage{"All rows<br/>in page 1?"}
+    AllOnPage -->|Yes| CacheAll["Cache all rows<br/>Enable in-memory sort"]
+    AllOnPage -->|No| Small{"Row count < 10K?"}
+    Small -->|Yes| Bg["Fetch all pages in background"]
+    Small -->|No| Stream["Streaming mode<br/>LIMIT/OFFSET per page<br/>Server-side ORDER BY"]
 ```
+
+A streaming-mode snapshot cache (`apps/web-client/src/components/table/hooks/useTableData.ts`) keeps per-tab `(connector, tabId, sql)` entries with LRU+TTL eviction, so switching back to a tab restores results without re-running the warehouse query.
 
 ---
 
-## BigQuery Integration
+## BigQuery integration
 
-### OAuth Flow (No Proxy Required)
+Google APIs support CORS, so no proxy is needed. The connector talks directly to GCP from the browser.
 
 ```mermaid
 sequenceDiagram
@@ -523,235 +186,185 @@ sequenceDiagram
     participant API as googleapis.com
 
     Browser->>Browser: Generate PKCE challenge
-    Browser->>Google: Open popup (authorization)
-    Google-->>Browser: User authenticates
+    Browser->>Google: Open popup (authorize)
     Google-->>Browser: Auth code callback
     Browser->>API: Exchange code for tokens
     API-->>Browser: Access + refresh tokens
-    Browser->>Browser: Store tokens securely
 ```
 
-**Google APIs support CORS natively** - no proxy needed.
+| Endpoint | Purpose |
+|----------|---------|
+| `accounts.google.com/o/oauth2/v2/auth` | Authorization |
+| `oauth2.googleapis.com/token` | Token exchange |
+| `cloudresourcemanager.googleapis.com/v1/projects` | List projects |
+| `bigquery.googleapis.com/.../datasets` | List datasets |
+| `bigquery.googleapis.com/.../queries` | Execute query |
 
-### API Endpoints
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/o/oauth2/v2/auth` | GET | Authorization |
-| `oauth2.googleapis.com/token` | POST | Token exchange |
-| `cloudresourcemanager.googleapis.com/v1/projects` | GET | List projects |
-| `bigquery.googleapis.com/.../datasets` | GET | List datasets |
-| `bigquery.googleapis.com/.../queries` | POST | Execute query |
+OAuth refresh-token races are coalesced via an in-flight `refreshPromise` lock; concurrent expired-access-token requests share a single token-exchange call.
 
 ---
 
-## Data Type Normalization
+## Data type normalization
 
-Types from different sources are normalized to a unified schema for consistent display and querying:
+Types from each source are normalized to a unified schema for consistent display and query semantics.
 
 ```mermaid
 flowchart TB
-    subgraph Sources["Source Types"]
+    subgraph Sources["Source types"]
         DuckDB["DuckDB (Arrow)<br/>Timestamp, Int64, Utf8, Struct, Dictionary"]
-        BQ["BigQuery SQL<br/>TIMESTAMP, INTEGER, STRING, STRUCT, ARRAY"]
+        BQ["BigQuery<br/>TIMESTAMP, INTEGER, STRING, STRUCT, ARRAY"]
+        SF["Snowflake (jsonv2)<br/>FIXED, TIMESTAMP_LTZ/NTZ/TZ, VARIANT, OBJECT, ARRAY, GEOGRAPHY"]
     end
-
-    Mapper["TypeMapper.normalizeType()<br/>(apps/web-client/src/utils/dataTypes.ts)"]
-
-    subgraph Unified["Unified Schema"]
-        DataType["DataType<br/>TIMESTAMP, BIGINT, VARCHAR, STRUCT, ARRAY"]
-        Category["TypeCategory<br/>TEMPORAL, NUMERIC, STRING, COMPLEX"]
-        Formatters["Formatters<br/>(apps/web-client/src/utils/formatters.ts)"]
+    Mapper["TypeMapper.normalizeType()<br/>(utils/dataTypes.ts)"]
+    subgraph Unified["Unified schema"]
+        DataType["TIMESTAMP, BIGINT, VARCHAR, STRUCT, ARRAY, JSON"]
+        Fmt["Formatters (utils/formatters.ts)"]
     end
-
     DuckDB --> Mapper
     BQ --> Mapper
-    Mapper --> DataType
-    DataType --> Category
-    Category --> Formatters
-
-    Details["TypeMapper Methods<br/>normalizeType(), normalizeDuckDBType(), normalizeBigQueryType()"]
-    Mapper -.-> Details
+    SF --> Mapper
+    Mapper --> DataType --> Fmt
 ```
 
-**Type System Implementation:**
-- **DuckDB types**: Mapped from Arrow IPC schema in worker results
-- **BigQuery types**: Mapped from BigQuery API responses
-- **Unified schema**: Consistent types across all connectors
-- **Formatting**: Display layer converts unified types to human-readable strings
+Key normalization rules:
+
+- DuckDB types come from the Arrow IPC schema in worker results.
+- BigQuery types come from the API response.
+- Snowflake types come from the `jsonv2` rowtype metadata: `FIXED` honors scale, `TIMESTAMP_*` parses epoch strings, `VARIANT/OBJECT/ARRAY` decode from JSON.
 
 ---
 
-## Future: Snowflake Integration
+## Snowflake integration
 
-> **Status: Planned for future release**
-
-Snowflake integration will require a CORS proxy due to Snowflake's API restrictions:
+Snowflake's `*.snowflakecomputing.com` endpoints don't return CORS headers, so requests route through a thin proxy. The proxy never sees credentials beyond the access or PAT bearer the user already holds. See [SNOWFLAKE.md](SNOWFLAKE.md) for the full design.
 
 ```mermaid
 flowchart LR
-    Browser["Browser"] --> Proxy["CORS Proxy<br/>(Cloudflare Worker)"]
-    Proxy --> Snowflake["Snowflake API"]
+    Browser["Browser<br/>(SnowflakeConnector)"] --> Transport["RequestTransport<br/>(BrowserTransport)"]
+    Transport -->|localhost| Vite["Vite middleware<br/>/api/snowflake/&lt;acct&gt;/*"]
+    Transport -->|production| Edge["Vercel Edge Function<br/>(dbxlite-cloud)"]
+    Vite --> SF["Snowflake REST API<br/>/api/v2/statements, /oauth/token-request"]
+    Edge --> SF
 ```
 
-- Vite dev plugin for local development
-- Cloudflare Worker for production
-- OAuth flow via proxy
-- SQL REST API access
+Components:
+
+- `packages/connectors/src/snowflake-connector.ts` — `SnowflakeConnector implements CloudConnector`. OAuth 2.0 PKCE + state CSRF, retry with exponential backoff on 408/429/503, partition iteration, `parseSnowflakeValue` (FIXED scale, all three TIMESTAMP variants).
+- `packages/connectors/src/transport.ts` — `BrowserTransport` rewrites `*.snowflakecomputing.com` to `/api/snowflake/<acct>/*` on localhost.
+- `apps/web-client/vite.config.ts` — `snowflakeProxyPlugin` (the built-in proxy can't take a per-request dynamic target).
+- `apps/web-client/src/providers/catalog/SnowflakeCatalogProvider.ts` — implements `CatalogProvider` (compute lifecycle, session-context switching, query history, query stats).
+- `dbxlite-cloud/api/snowflake/[...path].ts` — production Vercel Edge Function. Validates account regex, sanitizes request and response headers, injects `Cross-Origin-Resource-Policy: cross-origin`.
+
+OAuth callback uses three independent channels (BroadcastChannel, postMessage, localStorage poll) with a 5-minute hard timeout. `popup.closed` is deliberately not polled because Cross-Origin-Opener-Policy `same-origin` makes it report `true` while the consent screen is still live.
+
+Two auth modes are supported:
+
+- **OAuth** — popup + PKCE against a Snowflake Security Integration. Requires ACCOUNTADMIN to create the integration.
+- **PAT** — Programmatic Access Token (Snowsight → My Profile → Programmatic Access Tokens). No admin needed; token is sent as `Authorization: Bearer <pat>` plus `X-Snowflake-Authorization-Token-Type: PROGRAMMATIC_ACCESS_TOKEN`. Bound to a single role at creation.
 
 ---
 
-## React Application Architecture
+## Provider abstraction
 
-### Component Hierarchy
+The catalog explorer is generic across cloud warehouses. `CatalogProvider` (`apps/web-client/src/providers/catalog/types.ts`) is the interface; one `CatalogExplorer` component renders any implementation. Snowflake has the real provider today (`SnowflakeCatalogProvider.ts`); BigQuery still has a `.sketch.ts` file that validates the interface fits but the real BQ explorer is unmigrated, and DuckDB-attached databases haven't been adapted at all yet.
+
+The interface covers vendor-neutral methods (`setComputeContext`, `getComputeStatus`, `resumeCompute`, `setDataContext`, `listAvailable*`, `getQueryHistory`, `getQueryStats`), capability flags like `requiresReconnectForRoleSwitch`, and a `catalogTerm` `{singular, plural}` so Snowflake can call them "databases" while BigQuery calls them "projects" without the UI caring.
+
+---
+
+## AI SQL assistant
+
+The chat panel connects to either a BYO API key (OpenAI / Anthropic / Gemini / Groq) or a warehouse-native LLM (Snowflake Cortex). Two layers of indirection keep the UI vendor-agnostic.
+
+```mermaid
+graph LR
+    UI["AIChatPanel"] --> Store["aiChatStore (Zustand)"]
+    Store --> Registry["BackendRegistry"]
+    Registry --> BYO["ByoChatBackend<br/>(wraps AIProvider)"]
+    Registry --> WH["WarehouseChatBackend<br/>(wraps WarehouseAICapabilities)"]
+    BYO --> Providers["OpenAI / Anthropic / Gemini / Groq"]
+    WH --> Caps["WarehouseAICapabilities<br/>(snowflakeAICapabilities)"]
+    Caps --> QS["queryService (warehouse SQL)"]
+```
+
+`ChatBackend` is the unified UI-facing interface. Each backend declares `id`, `kind: "byo" | "warehouse"`, `label`, `models[]`, `isAvailable()`, `streamChat(messages, opts)`, optional `estimateCost()`. Switching providers is a backend-id swap.
+
+The bridge for warehouse backends is `WarehouseChatBackend` (`services/ai/warehouse-backend.ts`), which accepts any `WarehouseAICapabilities` and never imports `streaming-query-service` directly. Execution goes through the capability's own `execute()` method. Only `services/ai/wire-warehouse-backends.ts` imports `streaming-query-service`.
+
+### Streaming error contract
+
+All backends honor a single contract, enforced by `services/ai/__tests__/chat-backend.contract.vitest.ts` (81 parameterized tests over 4 BYO backends + a mocked Cortex):
+
+| Phase | Behavior | Codes |
+|---|---|---|
+| Pre-handshake | Throws synchronously, zero chunks yielded | `MISSING_API_KEY`, `INVALID_MODEL`, `PROMPT_TOO_LARGE`, `BACKEND_NOT_AVAILABLE` |
+| In-stream | Yields one `{type:"error",...}` + one `{type:"done"}`. Never throws post-handshake. | `WAREHOUSE_TIMEOUT`, `WAREHOUSE_SUSPENDED`, `EXECUTE_FAILED`, `PARSE_FAILED`, `PERMISSION_DENIED`, `RATE_LIMITED`, `ABORTED` |
+
+Boundary: "after `capabilities.execute()`" (warehouse) or "after `fetch` fires" (BYO).
+
+### Snowflake Cortex
+
+`providers/catalog/snowflake-ai-capabilities.ts` factories a `WarehouseAICapabilities` that emits `SELECT SNOWFLAKE.CORTEX.COMPLETE(model, PARSE_JSON('[{role,content}]'), PARSE_JSON('{}'))`. The chat-array form is required; flat role-prefixed strings caused the model to echo `"ASSISTANT:"` in early prototypes. Cortex models are curated against Snowflake's published list (a hosted-manifest auto-refresh path is on the backlog).
+
+### PII consent
+
+BYO backends transmit the user's editor SQL plus chat history to a third-party service. A one-time consent dialog (`components/PiiConsentDialog.tsx`) gates the first send to each BYO provider; warehouse backends skip it (data stays in the warehouse).
+
+---
+
+## Credential storage
+
+All secrets (AI provider API keys, Snowflake/BigQuery OAuth tokens, OAuth client secrets when used, Snowflake PATs) are stored in `localStorage` encrypted with AES-GCM using a 256-bit device-bound key persisted in IndexedDB.
+
+| Component | File |
+|---|---|
+| `EncryptedCredentialStore` | `packages/storage/src/index.ts` |
+| AI key singleton | `services/ai/index.ts` (`aiCredentialStore`) |
+| Connector singleton | constructed in `hooks/useAppInitialization.ts` |
+
+The device key is generated on first use, stored at `dbxlite-keys/dbxlite-device-key`, and never leaves the browser. Encryption defends against casual `localStorage` reads and extensions without IndexedDB access. It does not protect against same-origin XSS. See [SECURITY.md](../SECURITY.md) for the full threat model.
+
+For Snowflake OAuth, `OAUTH_CLIENT_TYPE = 'PUBLIC'` (PKCE-only, RFC 8252 §8.5) is preferred. There's no client secret to store. `'CONFIDENTIAL'` mode is supported for backward compatibility; the secret is encrypted at rest but a public client is still safer.
+
+Legacy plaintext entries from before the wrapper existed pass through unchanged on read (decode failure returns the raw value), so existing sessions don't break on upgrade.
+
+---
+
+## React app shape
+
+The web client is a single-page React app built with Vite. Provider-context-hook layering, Zustand for state, Monaco for the editor.
 
 ```mermaid
 flowchart TB
-    subgraph Providers["Provider Layer"]
-        Error["ErrorBoundary"]
-        Toast["ToastProvider"]
-        Settings["SettingsProvider"]
-        Tab["TabProvider"]
-        Query["QueryProvider"]
-    end
-
-    subgraph App["App.tsx (Orchestrator)"]
-        AppContent["AppContent"]
-    end
-
-    subgraph UI["UI Components"]
-        Header["Header"]
-        TabBar["TabBar"]
-        Explorer["DataSourceExplorer"]
-        Main["MainContent"]
-        Dialogs["DialogsContainer<br/>(includes ExamplesPanel)"]
-        SettingsModal["SettingsModalWrapper"]
-    end
-
-    Error --> Toast --> Settings --> Tab --> Query --> AppContent
-    AppContent --> Header
-    AppContent --> TabBar
-    AppContent --> Explorer
-    AppContent --> Main
-    AppContent --> Dialogs
-    AppContent --> SettingsModal
+    Error["ErrorBoundary"] --> Toast["ToastProvider"]
+    Toast --> Settings["SettingsProvider"]
+    Settings --> Tab["TabProvider"]
+    Tab --> Query["QueryProvider"]
+    Query --> App["AppContent"]
+    App --> Header
+    App --> TabBar
+    App --> Explorer["DataSourceExplorer"]
+    App --> Main["MainContent<br/>(EditorPane + ResultPane)"]
+    App --> Dialogs["DialogsContainer"]
 ```
 
-### State Management
+State lives in three places by intent:
 
-| Context/Store | Purpose | Location |
-|--------------|---------|----------|
-| **ErrorBoundary** | Global error handling | `src/App.tsx` |
-| **TabContext** | Tab state, editor/grid refs | `src/contexts/TabContext.tsx` |
-| **QueryContext** | Active connector, BigQuery status | `src/contexts/QueryContext.tsx` |
-| **SettingsProvider** | Settings store wrapper (deprecated) | `src/services/settings-store.tsx` |
-| **settingsStore** | Zustand store for UI settings | `src/stores/settingsStore.ts` |
-| **DataSourceStore** | Loaded files, databases (Zustand) | `src/stores/dataSourceStore/store.ts` |
-| **ToastProvider** | Notifications | `src/components/Toast.tsx` |
-
-**Note**: SettingsProvider is a compatibility wrapper. The actual settings implementation is the Zustand store in `settingsStore.ts` which uses localStorage for persistence.
-
-### Custom Hooks
-
-| Hook | Purpose |
-|------|---------|
-| `useTabManager` | Tab CRUD operations and persistence |
-| `useConnector` | Connector switching and BigQuery authentication |
-| `useQueryExecution` | Query execution, streaming, and cancellation |
-| `useFileOperations` | File open, save, and SQL insert operations |
-| `useFileConflict` | File conflict resolution dialog handling |
-| `useFileReload` | Restore file handles from IndexedDB on app load |
-| `useAutoSave` | 3-second debounced auto-save functionality |
-| `useKeyboardShortcuts` | Global keyboard bindings and shortcuts |
-| `useEditorLayout` | Resizable editor pane state management |
-| `useQueryOverlay` | Long-running query indicator with elapsed time |
-| `useUIVisibility` | Explorer and settings panel visibility toggles |
-
-### Container Components
-
-| Component | Contains | Purpose |
-|-----------|----------|---------|
-| `DialogsContainer` | ToastHistory, ConfirmDialog, FileConflictDialog | Groups modal dialogs |
-| `MainContent` | EditorPane, ResultPane, ResizeSplitter | Main editor/results area |
-| `ResizableExplorer` | DataSourceExplorer | Collapsible sidebar |
-
-### Data Flow
-
-```mermaid
-flowchart LR
-    subgraph User["User Actions"]
-        Type["Type SQL"]
-        Run["Run Query"]
-        Upload["Upload File"]
-    end
-
-    subgraph Hooks["Custom Hooks"]
-        QE["useQueryExecution"]
-        FU["useFileUpload"]
-        TM["useTabManager"]
-    end
-
-    subgraph Contexts["React Contexts & Stores"]
-        TC["TabContext"]
-        QC["QueryContext"]
-        DS["DataSourceStore<br/>(Zustand)"]
-    end
-
-    subgraph Connectors["Connector Layer"]
-        Duck["DuckDBConnector"]
-        BQ["BigQueryConnector"]
-    end
-
-    Type --> TM --> TC
-    Run --> QE --> QC --> Duck
-    Run --> QE --> QC --> BQ
-    Upload --> FU --> DS --> Duck
-```
+- **React contexts** for per-render-tree state with stable refs: `TabContext` (tab list + editor/grid refs), `QueryContext` (active connector, BigQuery auth status).
+- **Zustand stores** for app-wide state with persistence: `settingsStore`, `dataSourceStore`, `aiChatStore`, `onboardingStore`.
+- **`AbortController` refs** for query lifecycle: created in `useQueryExecution`, threaded through `connector.query(sql, { signal })` so cancel actually stops cloud-warehouse jobs server-side.
 
 ---
 
-## Code References
+## Key files
 
-### Core Packages
-
-| Package | File | Purpose |
-|---------|------|---------|
-| `packages/connectors/src/` | `duckdb-connector.ts` | DuckDB query execution |
-| `packages/connectors/src/` | `bigquery-connector.ts` | BigQuery OAuth & queries |
-| `packages/connectors/src/` | `streaming-duckdb-connector.ts` | Streaming result handling for DuckDB |
-| `packages/duckdb-wasm-adapter/src/` | `worker.ts` | Web Worker implementation |
-| `packages/duckdb-wasm-adapter/src/` | `index.ts` | Worker adapter interface |
-
-### Data Types and Formatting
-
-| Location | File | Purpose |
-|----------|------|---------|
-| `apps/web-client/src/utils/` | `dataTypes.ts` | Type normalization (DuckDB ↔ BigQuery ↔ unified schema) |
-| `apps/web-client/src/utils/` | `formatters.ts` | Value formatting for display (temporal, numeric, complex types) |
-
-### React Application Files
-
-| Directory | File | Purpose |
-|-----------|------|---------|
-| `apps/web-client/src/contexts/` | `TabContext.tsx` | Tab state + editor/grid refs |
-| `apps/web-client/src/contexts/` | `QueryContext.tsx` | Active connector and BigQuery auth state |
-| `apps/web-client/src/hooks/` | `useTabManager.ts` | Tab CRUD operations and persistence |
-| `apps/web-client/src/hooks/` | `useQueryExecution.ts` | Query lifecycle (execute, stream, cancel) |
-| `apps/web-client/src/hooks/` | `useConnector.ts` | Connector switching and authentication |
-| `apps/web-client/src/hooks/` | `useFileOperations.ts` | File open, save, insert SQL operations |
-| `apps/web-client/src/hooks/` | `useFileConflict.ts` | File conflict resolution dialogs |
-| `apps/web-client/src/hooks/` | `useFileReload.ts` | Restore file handles from IndexedDB |
-| `apps/web-client/src/hooks/` | `useAutoSave.ts` | Debounced auto-save functionality |
-| `apps/web-client/src/hooks/` | `useKeyboardShortcuts.ts` | Global keyboard binding handler |
-| `apps/web-client/src/hooks/` | `useEditorLayout.ts` | Resizable editor pane state |
-| `apps/web-client/src/hooks/` | `useQueryOverlay.ts` | Long-running query indicator |
-| `apps/web-client/src/hooks/` | `useUIVisibility.ts` | Explorer/settings visibility toggles |
-| `apps/web-client/src/containers/` | `DialogsContainer.tsx` | Groups modal dialogs and overlays |
-| `apps/web-client/src/components/` | `ExamplesPanel.tsx` | Sample queries UI (inside DialogsContainer) |
-| `apps/web-client/src/services/` | `file-handle-store.ts` | File handle persistence via IndexedDB |
-| `apps/web-client/src/stores/` | `dataSourceStore/store.ts` | Data source state management (Zustand) |
-| `apps/web-client/src/stores/` | `settingsStore.ts` | UI settings persistence (Zustand + localStorage) |
-
----
-
-*Last updated: December 2025*
+| Surface | Files |
+|---|---|
+| Connector base + DuckDB | `packages/connectors/src/{base,duckdb-connector,duckdb-http-connector}.ts` |
+| Cloud connectors | `packages/connectors/src/{bigquery-connector,snowflake-connector,transport}.ts` |
+| DuckDB WASM bridge | `packages/duckdb-wasm-adapter/src/{worker,index}.ts` |
+| Encrypted storage | `packages/storage/src/index.ts` |
+| Query lifecycle | `apps/web-client/src/{services/streaming-query-service.ts,hooks/useQueryExecution.ts}` |
+| Type normalization | `apps/web-client/src/utils/{dataTypes,formatters}.ts` |
+| Catalog explorer | `apps/web-client/src/providers/catalog/` |
+| AI bridge | `apps/web-client/src/services/ai/` |

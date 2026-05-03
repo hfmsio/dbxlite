@@ -181,11 +181,20 @@ export function useTabManager(
 							}
 						}
 
-						// Cap at MAX_TABS to prevent exceeding limit during cross-window sync
-						// Sort by lastModified (descending) to keep most recent tabs
-						const cappedTabs = mergedTabs
-							.sort((a, b) => (b.lastModified || 0) - (a.lastModified || 0))
-							.slice(0, MAX_TABS);
+						// Cap at MAX_TABS but preserve user-visible order.
+						//
+						// Earlier code sorted by lastModified descending here, which made
+						// the most-recently-edited tab jump to position 0 on every sync.
+						// Symptom: clicking any tab updated lastModified (via editor
+						// sync → Monaco onChange → handleEditorChange), and a same-origin
+						// storage event would then reorder tabs into a rotating sequence
+                                                // — visually unacceptable.
+						//
+						// allTabIds is a Set built from currentTabs first then incomingTabs;
+						// JS Sets preserve insertion order, so the for-loop above already
+						// produced mergedTabs in [current-tabs-in-order, then new
+						// incoming-only tabs] order. Just slice; do not sort.
+						const cappedTabs = mergedTabs.slice(0, MAX_TABS);
 
 						return cappedTabs.length > 0 ? cappedTabs : currentTabs;
 					});

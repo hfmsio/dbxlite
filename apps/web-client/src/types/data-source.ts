@@ -23,11 +23,11 @@ export type DataSourceType =
  */
 export type ConnectorType =
 	| "duckdb" // DuckDB (local WASM database)
-	| "bigquery"; // Google BigQuery (cloud data warehouse)
+	| "bigquery" // Google BigQuery (cloud data warehouse)
+	| "snowflake"; // Snowflake (cloud data warehouse)
 // Future connectors to be added:
 // | 'postgres'  // PostgreSQL
 // | 'mysql'     // MySQL
-// | 'snowflake' // Snowflake
 // | 'redshift'  // Amazon Redshift
 
 export interface Column {

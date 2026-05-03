@@ -17,7 +17,6 @@ import {
 import { ClockIcon, CloudIcon, ColumnsIcon, DatabaseIcon, EyeIcon, FileIcon, FolderIcon, RefreshIcon, TableIcon } from "../components/Icons";
 import { useLocalDatabase } from "./useLocalDatabase";
 import { useServerDatabases } from "./useServerDatabases";
-import type React from "react";
 import type { CatalogInfo, SchemaInfo } from "@ide/connectors";
 
 const logger = createLogger("useDataSourceState");

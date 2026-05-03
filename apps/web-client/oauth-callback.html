@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Authenticating…</title>
+		<style>
+			body {
+				font-family:
+					-apple-system,
+					BlinkMacSystemFont,
+					"Segoe UI",
+					sans-serif;
+				background: #1a1a1a;
+				color: #fff;
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				min-height: 100vh;
+				margin: 0;
+				padding: 24px;
+				text-align: center;
+			}
+			.box {
+				max-width: 360px;
+			}
+			#spinner {
+				width: 40px;
+				height: 40px;
+				border: 3px solid #444;
+				border-top-color: #29b5e8;
+				border-radius: 50%;
+				animation: spin 0.8s linear infinite;
+				margin: 0 auto 16px;
+			}
+			@keyframes spin {
+				to {
+					transform: rotate(360deg);
+				}
+			}
+			.success {
+				color: #29b5e8;
+			}
+			.error {
+				color: #ff6b6b;
+			}
+		</style>
+	</head>
+	<body>
+		<div class="box">
+			<div id="spinner"></div>
+			<p id="status">Completing authentication…</p>
+		</div>
+		<script type="module" src="/src/oauth-callback/oauth-callback.ts"></script>
+	</body>
+</html>

@@ -15,8 +15,8 @@ const providers: Record<AIProviderType, () => AIProvider> = {
 			displayName: "OpenAI",
 			baseUrl: "https://api.openai.com/v1",
 			models: [
-				{ id: "gpt-4o-mini", name: "GPT-4o Mini", contextWindow: 128000 },
-				{ id: "gpt-4o", name: "GPT-4o", contextWindow: 128000 },
+				{ id: "gpt-5.5", name: "GPT-5.5", contextWindow: 1050000 },
+				{ id: "gpt-5.4-mini", name: "GPT-5.4 Mini", contextWindow: 400000 },
 				{ id: "gpt-4.1-mini", name: "GPT-4.1 Mini", contextWindow: 1047576 },
 			],
 		}),
@@ -34,7 +34,13 @@ const providers: Record<AIProviderType, () => AIProvider> = {
 				{
 					id: "llama-3.3-70b-versatile",
 					name: "Llama 3.3 70B",
-					contextWindow: 128000,
+					contextWindow: 131072,
+					isFree: true,
+				},
+				{
+					id: "llama-3.1-8b-instant",
+					name: "Llama 3.1 8B (Instant)",
+					contextWindow: 131072,
 					isFree: true,
 				},
 			],

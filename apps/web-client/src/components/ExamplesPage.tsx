@@ -1,570 +1,412 @@
 /**
- * SQL Examples Page
+ * SQL Examples Page (/examples)
  *
- * Static page with SQL examples for DuckDB, BigQuery, and Snowflake.
- * Access via /examples route.
+ * Browseable index of every example query bundled with dbxlite, driven
+ * by the same `sampleQueries` registry the in-app ExamplesPanel uses.
+ * Search filter + dialect chips on top, expandable section accordions
+ * below, click-to-open in the main app.
+ *
+ * The in-app panel stays the quick-load surface ("I want this query in
+ * a tab right now"). This page is the browse / learn surface.
  */
 
 import type React from "react";
-import { useState } from "react";
-import { createLogger } from "../utils/logger";
+import { useMemo, useState } from "react";
+import { exampleGroups, type SampleQuery } from "../examples/sampleQueries";
+import { generateExampleURL } from "../utils/urlParams";
 
-const logger = createLogger("ExamplesPage");
+type DialectFilter = "all" | "duckdb" | "bigquery" | "snowflake";
 
 const containerStyle: React.CSSProperties = {
 	minHeight: "100vh",
 	backgroundColor: "var(--bg-primary)",
 	color: "var(--text-primary)",
-	padding: 40,
+	padding: "32px 40px",
 };
 
 const headerStyle: React.CSSProperties = {
 	display: "flex",
 	justifyContent: "space-between",
-	alignItems: "center",
-	marginBottom: 40,
+	alignItems: "flex-start",
+	marginBottom: 24,
+	gap: 16,
+	flexWrap: "wrap",
 };
 
 const titleStyle: React.CSSProperties = {
-	fontSize: 32,
+	fontSize: 28,
 	fontWeight: 700,
 	color: "var(--text-primary)",
-};
-
-const backLinkStyle: React.CSSProperties = {
-	padding: "10px 20px",
-	backgroundColor: "var(--accent)",
-	color: "white",
-	textDecoration: "none",
-	borderRadius: 8,
-	fontSize: 14,
-	fontWeight: 500,
-};
-
-const sectionStyle: React.CSSProperties = {
-	marginBottom: 48,
-};
-
-const sectionTitleStyle: React.CSSProperties = {
-	fontSize: 20,
-	fontWeight: 600,
-	color: "var(--text-primary)",
-	marginBottom: 16,
-	paddingBottom: 8,
-	borderBottom: "2px solid var(--accent)",
-	display: "flex",
-	alignItems: "center",
-	gap: 12,
-};
-
-const descriptionStyle: React.CSSProperties = {
-	fontSize: 14,
-	color: "var(--text-secondary)",
-	marginBottom: 16,
-	lineHeight: 1.6,
-};
-
-const codeBlockStyle: React.CSSProperties = {
-	backgroundColor: "var(--bg-secondary)",
-	border: "1px solid var(--border)",
-	borderRadius: 8,
-	padding: 16,
-	marginBottom: 16,
-	overflowX: "auto",
-};
-
-const codeStyle: React.CSSProperties = {
-	fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-	fontSize: 13,
-	lineHeight: 1.6,
-	color: "var(--text-primary)",
-	whiteSpace: "pre",
-	display: "block",
-};
-
-const commentStyle: React.CSSProperties = {
-	color: "var(--text-muted)",
-	fontStyle: "italic",
-};
-
-const keywordStyle: React.CSSProperties = {
-	color: "#569cd6",
-	fontWeight: 500,
-};
-
-const stringStyle: React.CSSProperties = {
-	color: "#ce9178",
-};
-
-const warningBoxStyle: React.CSSProperties = {
-	backgroundColor: "rgba(245, 158, 11, 0.1)",
-	border: "1px solid rgba(245, 158, 11, 0.3)",
-	borderRadius: 8,
-	padding: 16,
-	marginTop: 24,
-};
-
-const warningTitleStyle: React.CSSProperties = {
-	fontSize: 14,
-	fontWeight: 600,
-	color: "#f59e0b",
-	marginBottom: 8,
-};
-
-const warningListStyle: React.CSSProperties = {
-	fontSize: 13,
-	color: "var(--text-secondary)",
-	lineHeight: 1.8,
-	paddingLeft: 20,
 	margin: 0,
 };
 
-const badgeStyle: React.CSSProperties = {
-	display: "inline-block",
-	padding: "2px 8px",
-	fontSize: 11,
+const backLinkStyle: React.CSSProperties = {
+	padding: "8px 16px",
+	backgroundColor: "var(--bg-tertiary)",
+	color: "var(--text-primary)",
+	textDecoration: "none",
+	borderRadius: 6,
+	fontSize: 13,
 	fontWeight: 500,
-	borderRadius: 4,
-	marginLeft: 8,
+	border: "1px solid var(--border)",
 };
 
-// Simple syntax highlighting for SQL
-function formatSQL(sql: string): React.ReactNode[] {
-	const lines = sql.split("\n");
-	return lines.map((line, lineIndex) => {
-		// Check if line is a comment
-		if (line.trim().startsWith("--")) {
-			return (
-				<span key={lineIndex}>
-					<span style={commentStyle}>{line}</span>
-					{lineIndex < lines.length - 1 ? "\n" : ""}
-				</span>
-			);
-		}
+const toolbarStyle: React.CSSProperties = {
+	display: "flex",
+	gap: 12,
+	alignItems: "center",
+	marginBottom: 24,
+	flexWrap: "wrap",
+};
 
-		// Process keywords and strings
-		const parts: React.ReactNode[] = [];
-		let partIndex = 0;
-
-		// First, extract strings
-		const stringMatches: { start: number; end: number; text: string }[] = [];
-		let match;
-		const stringRegex = /('[^']*'|`[^`]*`)/g;
-		while ((match = stringRegex.exec(line)) !== null) {
-			stringMatches.push({ start: match.index, end: match.index + match[0].length, text: match[0] });
-		}
-
-		// Build the line with highlighting
-		let pos = 0;
-		for (const strMatch of stringMatches) {
-			// Text before string
-			if (strMatch.start > pos) {
-				const beforeText = line.substring(pos, strMatch.start);
-				parts.push(...highlightKeywords(beforeText, partIndex));
-				partIndex += 10;
-			}
-			// The string itself
-			parts.push(<span key={partIndex++} style={stringStyle}>{strMatch.text}</span>);
-			pos = strMatch.end;
-		}
-		// Remaining text after last string
-		if (pos < line.length) {
-			const afterText = line.substring(pos);
-			parts.push(...highlightKeywords(afterText, partIndex));
-		}
-
-		return (
-			<span key={lineIndex}>
-				{parts}
-				{lineIndex < lines.length - 1 ? "\n" : ""}
-			</span>
-		);
-	});
-}
-
-function highlightKeywords(text: string, startIndex: number): React.ReactNode[] {
-	const keywords = /\b(SELECT|FROM|WHERE|AND|OR|AS|JOIN|LEFT|RIGHT|INNER|OUTER|ON|GROUP|BY|ORDER|LIMIT|OFFSET|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|ALTER|ATTACH|DETACH|DESCRIBE|SUMMARIZE|COUNT|AVG|SUM|MIN|MAX|DISTINCT|UNION|ALL|CASE|WHEN|THEN|ELSE|END|NULL|NOT|IN|LIKE|BETWEEN|EXISTS|HAVING|WITH|READ_ONLY|READ_WRITE)\b/gi;
-	const parts: React.ReactNode[] = [];
-	let lastIndex = 0;
-	let match;
-	let index = startIndex;
-
-	while ((match = keywords.exec(text)) !== null) {
-		if (match.index > lastIndex) {
-			parts.push(<span key={index++}>{text.substring(lastIndex, match.index)}</span>);
-		}
-		parts.push(<span key={index++} style={keywordStyle}>{match[0]}</span>);
-		lastIndex = match.index + match[0].length;
-	}
-
-	if (lastIndex < text.length) {
-		parts.push(<span key={index++}>{text.substring(lastIndex)}</span>);
-	}
-
-	return parts;
-}
-
-const copyButtonStyle: React.CSSProperties = {
-	position: "absolute",
-	top: 8,
-	right: 8,
-	padding: "4px 8px",
-	fontSize: 11,
-	fontWeight: 500,
-	backgroundColor: "var(--bg-tertiary)",
+const searchInputStyle: React.CSSProperties = {
+	flex: 1,
+	minWidth: 240,
+	padding: "8px 12px",
+	background: "var(--bg-secondary)",
+	color: "var(--text-primary)",
 	border: "1px solid var(--border)",
-	borderRadius: 4,
-	color: "var(--text-secondary)",
+	borderRadius: 6,
+	fontSize: 13,
+	outline: "none",
+};
+
+const chipStyle = (active: boolean): React.CSSProperties => ({
+	padding: "6px 12px",
+	background: active ? "var(--accent)" : "var(--bg-secondary)",
+	color: active ? "white" : "var(--text-secondary)",
+	border: "1px solid var(--border)",
+	borderRadius: 16,
+	fontSize: 12,
+	fontWeight: active ? 600 : 400,
 	cursor: "pointer",
+});
+
+const sectionCardStyle: React.CSSProperties = {
+	marginBottom: 16,
+	background: "var(--bg-secondary)",
+	border: "1px solid var(--border)",
+	borderRadius: 8,
+	overflow: "hidden",
+};
+
+const sectionHeaderStyle = (color: string): React.CSSProperties => ({
+	padding: "14px 18px",
 	display: "flex",
 	alignItems: "center",
-	gap: 4,
-	transition: "all 0.15s ease",
+	gap: 10,
+	cursor: "pointer",
+	background: "transparent",
+	border: "none",
+	width: "100%",
+	textAlign: "left",
+	color: "var(--text-primary)",
+	borderLeft: `4px solid ${color}`,
+});
+
+const exampleCardStyle: React.CSSProperties = {
+	padding: "12px 16px",
+	borderTop: "1px solid var(--border)",
+	display: "flex",
+	flexDirection: "column",
+	gap: 8,
 };
 
-function CodeBlock({ children }: { children: string }) {
-	const [copied, setCopied] = useState(false);
-
-	const handleCopy = async () => {
-		try {
-			await navigator.clipboard.writeText(children);
-			setCopied(true);
-			setTimeout(() => setCopied(false), 2000);
-		} catch (err) {
-			logger.error("Failed to copy to clipboard:", err);
-		}
+const dialectBadgeStyle = (
+	connector: SampleQuery["connector"],
+): React.CSSProperties => {
+	const colors: Record<string, { bg: string; fg: string; label: string }> = {
+		duckdb: { bg: "rgba(255, 192, 35, 0.15)", fg: "#f0b500", label: "DuckDB" },
+		bigquery: { bg: "rgba(66, 133, 244, 0.15)", fg: "#4285f4", label: "BigQuery" },
+		snowflake: { bg: "rgba(41, 181, 232, 0.15)", fg: "#29b5e8", label: "Snowflake" },
 	};
+	const c = colors[connector ?? "duckdb"] ?? colors.duckdb;
+	return {
+		display: "inline-block",
+		padding: "2px 8px",
+		fontSize: 10,
+		fontWeight: 600,
+		letterSpacing: "0.03em",
+		textTransform: "uppercase",
+		background: c.bg,
+		color: c.fg,
+		borderRadius: 3,
+	};
+};
+
+const codePreviewStyle: React.CSSProperties = {
+	background: "var(--bg-primary)",
+	border: "1px solid var(--border)",
+	borderRadius: 6,
+	padding: 12,
+	fontSize: 12,
+	fontFamily:
+		"ui-monospace, SFMono-Regular, 'JetBrains Mono', 'Fira Code', monospace",
+	color: "var(--text-primary)",
+	whiteSpace: "pre",
+	overflowX: "auto",
+	maxHeight: 320,
+	overflowY: "auto",
+	lineHeight: 1.55,
+};
+
+const buttonStyle: React.CSSProperties = {
+	padding: "6px 14px",
+	background: "var(--accent)",
+	color: "white",
+	border: "none",
+	borderRadius: 6,
+	fontSize: 12,
+	fontWeight: 500,
+	cursor: "pointer",
+	textDecoration: "none",
+	display: "inline-block",
+};
+
+function dialectLabel(connector: SampleQuery["connector"]): string {
+	switch (connector) {
+		case "bigquery":
+			return "BigQuery";
+		case "snowflake":
+			return "Snowflake";
+		default:
+			return "DuckDB";
+	}
+}
+
+function ExampleCard({ example }: { example: SampleQuery }) {
+	const [expanded, setExpanded] = useState(false);
+	const previewLines = example.sql.split("\n").length;
 
 	return (
-		<div style={{ ...codeBlockStyle, position: "relative" }}>
-			<button
-				type="button"
-				onClick={handleCopy}
+		<div style={exampleCardStyle}>
+			<div
 				style={{
-					...copyButtonStyle,
-					backgroundColor: copied ? "rgba(16, 185, 129, 0.2)" : "var(--bg-tertiary)",
-					color: copied ? "#10b981" : "var(--text-secondary)",
-					borderColor: copied ? "rgba(16, 185, 129, 0.3)" : "var(--border)",
-				}}
-				onMouseEnter={(e) => {
-					if (!copied) {
-						e.currentTarget.style.backgroundColor = "var(--bg-primary)";
-						e.currentTarget.style.color = "var(--text-primary)";
-					}
-				}}
-				onMouseLeave={(e) => {
-					if (!copied) {
-						e.currentTarget.style.backgroundColor = "var(--bg-tertiary)";
-						e.currentTarget.style.color = "var(--text-secondary)";
-					}
+					display: "flex",
+					alignItems: "flex-start",
+					gap: 12,
+					flexWrap: "wrap",
 				}}
 			>
-				{copied ? (
-					<>
-						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-							<polyline points="20 6 9 17 4 12" />
-						</svg>
-						Copied!
-					</>
-				) : (
-					<>
-						<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-							<rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-							<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-						</svg>
-						Copy
-					</>
-				)}
-			</button>
-			<code style={codeStyle}>{formatSQL(children)}</code>
+				<div style={{ flex: 1, minWidth: 200 }}>
+					<div
+						style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}
+					>
+						<span
+							style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}
+						>
+							{example.label}
+						</span>
+						<span style={dialectBadgeStyle(example.connector)}>
+							{dialectLabel(example.connector)}
+						</span>
+					</div>
+					{example.hint && (
+						<div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+							{example.hint}
+						</div>
+					)}
+				</div>
+				<div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+					<button
+						type="button"
+						onClick={() => setExpanded((v) => !v)}
+						style={{
+							...buttonStyle,
+							background: "var(--bg-tertiary)",
+							color: "var(--text-primary)",
+							border: "1px solid var(--border)",
+						}}
+						aria-expanded={expanded}
+					>
+						{expanded ? "Hide SQL" : `Show SQL (${previewLines} lines)`}
+					</button>
+					<a
+						href={generateExampleURL(example.id, { autoRun: true })}
+						style={buttonStyle}
+					>
+						Open in dbxlite
+					</a>
+				</div>
+			</div>
+			{expanded && <pre style={codePreviewStyle}>{example.sql}</pre>}
 		</div>
 	);
 }
 
-function ExamplesPage() {
+function matchesSearch(example: SampleQuery, query: string): boolean {
+	if (!query) return true;
+	const q = query.toLowerCase();
+	return (
+		example.label.toLowerCase().includes(q) ||
+		(example.hint?.toLowerCase().includes(q) ?? false) ||
+		example.sql.toLowerCase().includes(q)
+	);
+}
+
+function matchesDialect(
+	example: SampleQuery,
+	filter: DialectFilter,
+): boolean {
+	if (filter === "all") return true;
+	return (example.connector ?? "duckdb") === filter;
+}
+
+export default function ExamplesPage() {
+	const [query, setQuery] = useState("");
+	const [dialect, setDialect] = useState<DialectFilter>("all");
+	// Section open/close state. Defaults from registry, overridable per-section.
+	const [openSections, setOpenSections] = useState<Record<string, boolean>>(
+		() => {
+			const initial: Record<string, boolean> = {};
+			for (const g of exampleGroups) initial[g.id] = g.defaultExpanded ?? true;
+			return initial;
+		},
+	);
+
+	// Filter groups: drop examples that don't match search/dialect, drop
+	// groups that end up empty. Auto-expand sections with active matches.
+	const filteredGroups = useMemo(() => {
+		return exampleGroups
+			.map((g) => ({
+				...g,
+				examples: g.examples.filter(
+					(e) => matchesSearch(e, query) && matchesDialect(e, dialect),
+				),
+			}))
+			.filter((g) => g.examples.length > 0);
+	}, [query, dialect]);
+
+	const totalMatches = filteredGroups.reduce(
+		(n, g) => n + g.examples.length,
+		0,
+	);
+
+	const isFiltering = query.length > 0 || dialect !== "all";
+
 	return (
 		<div style={containerStyle}>
 			<header style={headerStyle}>
-				<h1 style={titleStyle}>SQL Examples</h1>
+				<div>
+					<h1 style={titleStyle}>SQL Examples</h1>
+					<p
+						style={{
+							margin: "4px 0 0",
+							fontSize: 13,
+							color: "var(--text-muted)",
+							maxWidth: 720,
+						}}
+					>
+						Runnable SQL recipes for DuckDB, BigQuery, and Snowflake. Click any
+						example to open it in the dbxlite editor - no install needed.
+					</p>
+				</div>
 				<a href="/" style={backLinkStyle}>
-					Back to App
+					← Back to App
 				</a>
 			</header>
 
-			{/* DuckDB Section */}
-			<section style={sectionStyle}>
-				<h2 style={sectionTitleStyle}>
-					<span style={{ fontSize: 24 }}>🦆</span>
-					DuckDB Examples
-					<span style={{ ...badgeStyle, backgroundColor: "rgba(59, 130, 246, 0.2)", color: "#3b82f6" }}>
-						Local Engine
+			<div style={toolbarStyle}>
+				<input
+					type="search"
+					value={query}
+					onChange={(e) => setQuery(e.target.value)}
+					placeholder="Search by label, hint, or SQL content…"
+					style={searchInputStyle}
+					aria-label="Search examples"
+				/>
+				{(["all", "duckdb", "bigquery", "snowflake"] as const).map((d) => (
+					<button
+						key={d}
+						type="button"
+						onClick={() => setDialect(d)}
+						style={chipStyle(dialect === d)}
+					>
+						{d === "all" ? "All" : dialectLabel(d)}
+					</button>
+				))}
+				{isFiltering && (
+					<span
+						style={{
+							fontSize: 12,
+							color: "var(--text-muted)",
+							marginLeft: 4,
+						}}
+					>
+						{totalMatches} match{totalMatches === 1 ? "" : "es"}
 					</span>
-				</h2>
-				<p style={descriptionStyle}>
-					DuckDB runs entirely in your browser using WebAssembly. Query local files, remote URLs,
-					and create in-memory databases without any server.
-				</p>
+				)}
+			</div>
 
-				<h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 12, color: "var(--text-primary)" }}>
-					Query Local Files
-				</h3>
-				<CodeBlock>{`-- Query a CSV file
-SELECT * FROM 'data.csv' LIMIT 100;
-
--- Query with column selection
-SELECT name, email, created_at FROM 'users.csv' WHERE active = true;
-
--- Query a Parquet file (columnar format, very efficient)
-SELECT * FROM 'analytics.parquet' LIMIT 100;
-
--- Query JSON file
-SELECT * FROM 'config.json';
-
--- Query Excel file (single sheet)
-SELECT * FROM 'report.xlsx' LIMIT 100;
-
--- Query specific Excel sheet
-SELECT * FROM read_xlsx('report.xlsx', sheet='Orders');`}</CodeBlock>
-
-				<h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 12, color: "var(--text-primary)" }}>
-					Query Remote URLs
-				</h3>
-				<CodeBlock>{`-- Query remote Parquet file
-SELECT * FROM 'https://example.com/data.parquet' LIMIT 100;
-
--- Query from Hugging Face datasets
-SELECT * FROM 'https://huggingface.co/datasets/wikimedia/wikipedia/resolve/main/20231101.ab/train-00000-of-00001.parquet';
-
--- Query remote CSV
-SELECT * FROM 'https://raw.githubusercontent.com/user/repo/main/data.csv';`}</CodeBlock>
-
-				<h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 12, color: "var(--text-primary)" }}>
-					Attach External Databases
-				</h3>
-				<CodeBlock>{`-- Attach database in read-only mode (safe, prevents modifications)
-ATTACH 'mydb.duckdb' AS mydb (READ_ONLY);
-
--- Attach database in read-write mode (allows INSERT/UPDATE/DELETE)
-ATTACH 'mydb.duckdb' AS mydb (READ_WRITE);
-
--- Query attached database
-SELECT * FROM mydb.main.users;
-
--- Detach when done
-DETACH mydb;
-
--- View all attached databases
-SELECT * FROM duckdb_databases();`}</CodeBlock>
-
-				<h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 12, color: "var(--text-primary)" }}>
-					Create Tables in Session Database
-				</h3>
-				<p style={descriptionStyle}>
-					Tables created without specifying a database go into the local "Session" database.
-					These tables persist during your browser session but are lost on page refresh.
-				</p>
-				<div style={{ ...warningBoxStyle, marginBottom: 16 }}>
-					<strong style={{ color: "#f59e0b", fontSize: 12 }}>Memory Warning for DDL/DML Operations</strong>
-					<p style={{ margin: "8px 0 0 0", fontSize: 11, color: "var(--text-secondary)" }}>
-						CREATE TABLE AS (CTAS) and large INSERT operations load data into memory. For large datasets,
-						use LIMIT or process in batches. DDL (CREATE, ALTER, DROP) and DML (INSERT, UPDATE, DELETE)
-						operations are powerful but can consume significant memory. Always test with small samples first.
-					</p>
+			{filteredGroups.length === 0 ? (
+				<div
+					style={{
+						padding: 32,
+						textAlign: "center",
+						color: "var(--text-muted)",
+						background: "var(--bg-secondary)",
+						borderRadius: 8,
+					}}
+				>
+					No examples match your filter.
 				</div>
-				<CodeBlock>{`-- Create a simple table in session
-CREATE TABLE my_data (id INTEGER, name VARCHAR, value DOUBLE);
-
--- Insert data
-INSERT INTO my_data VALUES (1, 'Alice', 100.5);
-INSERT INTO my_data VALUES (2, 'Bob', 200.0), (3, 'Charlie', 150.25);
-
--- Create table from literal values
-CREATE TABLE my_data AS SELECT 1 as id, 'hello' as msg;
-
--- Create table from file (copies data into session)
-CREATE TABLE users AS SELECT * FROM 'users.csv';
-
--- Create table from query result
-CREATE TABLE summary AS
-SELECT category, COUNT(*) as count, AVG(price) as avg_price
-FROM 'products.parquet'
-GROUP BY category;
-
--- Create table from remote URL
-CREATE TABLE wiki_sample AS
-SELECT * FROM 'https://huggingface.co/datasets/...' LIMIT 1000;
-
--- View your session tables
-SELECT * FROM information_schema.tables WHERE table_catalog = 'memory';
-
--- Drop a session table
-DROP TABLE my_data;`}</CodeBlock>
-
-				<h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 12, color: "var(--text-primary)" }}>
-					Create Tables in Attached Database (Persistent)
-				</h3>
-				<p style={descriptionStyle}>
-					To persist tables, create them in an attached database file. Changes are saved to disk.
-				</p>
-				<div style={{ ...warningBoxStyle, marginBottom: 16 }}>
-					<strong style={{ color: "#f59e0b", fontSize: 12 }}>Caution with Persistent Operations</strong>
-					<p style={{ margin: "8px 0 0 0", fontSize: 11, color: "var(--text-secondary)" }}>
-						Changes to attached databases (READ_WRITE mode) are written to your actual files on disk.
-						INSERT, UPDATE, DELETE, and DROP operations are permanent. Keep backups of important database files.
-						For large CTAS operations, consider using LIMIT and batching to avoid memory issues.
-					</p>
-				</div>
-				<CodeBlock>{`-- First attach a database in READ_WRITE mode
-ATTACH 'mydb.duckdb' AS mydb (READ_WRITE);
-
--- Create table in the attached database
-CREATE TABLE mydb.main.users (
-    id INTEGER PRIMARY KEY,
-    name VARCHAR,
-    email VARCHAR,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Insert data into attached database
-INSERT INTO mydb.main.users (id, name, email)
-VALUES (1, 'Alice', 'alice@example.com');
-
--- Copy data from file to attached database
-CREATE TABLE mydb.main.products AS SELECT * FROM 'products.csv';
-
--- Copy from session table to attached database
-CREATE TABLE mydb.main.backup AS SELECT * FROM my_data;`}</CodeBlock>
-
-				<h3 style={{ fontSize: 16, fontWeight: 600, marginTop: 24, marginBottom: 12, color: "var(--text-primary)" }}>
-					System Introspection
-				</h3>
-				<CodeBlock>{`-- View all attached databases
-SELECT * FROM duckdb_databases();
-
--- View all available functions
-SELECT * FROM duckdb_functions();
-
--- View tables in a database
-SELECT * FROM information_schema.tables;
-
--- View columns of a table
-SELECT * FROM information_schema.columns WHERE table_name = 'users';
-
--- Describe a query result schema
-DESCRIBE SELECT * FROM 'data.csv';
-
--- Profile data statistics
-SUMMARIZE SELECT * FROM 'data.parquet';`}</CodeBlock>
-			</section>
-
-			{/* BigQuery Section */}
-			<section style={sectionStyle}>
-				<h2 style={sectionTitleStyle}>
-					<span style={{ fontSize: 24 }}>☁️</span>
-					BigQuery Examples
-					<span style={{ ...badgeStyle, backgroundColor: "rgba(16, 185, 129, 0.2)", color: "#10b981" }}>
-						Cloud
-					</span>
-				</h2>
-				<p style={descriptionStyle}>
-					Connect to Google BigQuery for cloud data analysis. Authenticate via OAuth in the Connections settings tab.
-					Note the backtick syntax for table references.
-				</p>
-
-				<CodeBlock>{`-- Basic query (note backtick syntax for project.dataset.table)
-SELECT * FROM \`project-id.dataset.table\` LIMIT 100;
-
--- Aggregation query
-SELECT airline, COUNT(*) as flight_count
-FROM \`project-id.dataset.flights\`
-GROUP BY airline
-ORDER BY flight_count DESC;
-
--- Join tables
-SELECT u.name, o.order_id, o.total
-FROM \`project-id.dataset.users\` u
-JOIN \`project-id.dataset.orders\` o ON u.id = o.user_id
-WHERE o.total > 100;
-
--- Date filtering
-SELECT *
-FROM \`project-id.dataset.events\`
-WHERE DATE(created_at) = CURRENT_DATE()
-LIMIT 1000;`}</CodeBlock>
-			</section>
-
-			{/* Snowflake Section */}
-			<section style={sectionStyle}>
-				<h2 style={sectionTitleStyle}>
-					<span style={{ fontSize: 24 }}>❄️</span>
-					Snowflake Examples
-					<span style={{ ...badgeStyle, backgroundColor: "rgba(156, 163, 175, 0.2)", color: "#9ca3af" }}>
-						Coming Soon
-					</span>
-				</h2>
-				<p style={descriptionStyle}>
-					Snowflake support is planned for a future release. The syntax will follow Snowflake conventions.
-				</p>
-
-				<CodeBlock>{`-- Coming soon: Snowflake support
--- Syntax will follow Snowflake conventions
-
-SELECT * FROM database.schema.table LIMIT 100;
-
-SELECT category, SUM(amount) as total
-FROM sales.public.transactions
-WHERE transaction_date >= '2024-01-01'
-GROUP BY category;`}</CodeBlock>
-			</section>
-
-			{/* Best Practices */}
-			<section style={sectionStyle}>
-				<div style={warningBoxStyle}>
-					<h3 style={warningTitleStyle}>Best Practices & Warnings</h3>
-					<ul style={warningListStyle}>
-						<li><strong>Always use LIMIT:</strong> Add LIMIT to exploratory queries to avoid loading too much data into memory</li>
-						<li><strong>Avoid ORDER BY on large tables:</strong> Sorting large datasets can cause memory issues in WASM</li>
-						<li><strong>Keep separate backups:</strong> Always maintain backups of your SQL files and important data</li>
-						<li><strong>Memory limits:</strong> Browser WASM has ~2-4GB memory limit. Avoid operations that load entire large datasets into memory (ORDER BY, window functions on large tables, SELECT * without LIMIT, large JOINs, heavy aggregations). Feel free to experiment - what works depends on your data size!</li>
-						<li><strong>Large files are OK:</strong> You can attach databases of any size (50GB+) via OPFS - it's just file permission, not memory loading</li>
-						<li><strong>Session tables are temporary:</strong> Data in "Session" tables is lost on page refresh</li>
-						<li><strong>Use READ_ONLY mode:</strong> For databases you don't need to modify, use READ_ONLY for safety</li>
-						<li><strong>Trash doesn't delete files:</strong> The trash button only clears file handles and memory in dbxlite - your original files remain on disk</li>
-					</ul>
-				</div>
-			</section>
-
-			{/* Quick Reference */}
-			<section style={sectionStyle}>
-				<h2 style={sectionTitleStyle}>
-					<span style={{ fontSize: 24 }}>📋</span>
-					Quick Reference
-				</h2>
-				<div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-					<div style={{ ...codeBlockStyle, marginBottom: 0 }}>
-						<strong style={{ color: "var(--text-primary)", fontSize: 13 }}>File Formats</strong>
-						<ul style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
-							<li>CSV, TSV - Comma/tab-separated values</li>
-							<li>Parquet - Columnar format (fast, compressed)</li>
-							<li>JSON, JSONL - JSON and newline-delimited JSON</li>
-							<li>XLSX - Excel files (supports multiple sheets)</li>
-							<li>DuckDB - Native database files</li>
-						</ul>
-					</div>
-					<div style={{ ...codeBlockStyle, marginBottom: 0 }}>
-						<strong style={{ color: "var(--text-primary)", fontSize: 13 }}>Useful Functions</strong>
-						<ul style={{ margin: "8px 0 0 0", paddingLeft: 20, fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.8 }}>
-							<li>DESCRIBE - Show query result schema</li>
-							<li>SUMMARIZE - Profile data statistics</li>
-							<li>read_xlsx(..., sheet='Name') - Read specific Excel sheet</li>
-							<li>duckdb_databases() - List attached databases</li>
-							<li>duckdb_functions() - List available functions</li>
-						</ul>
-					</div>
-				</div>
-			</section>
+			) : (
+				filteredGroups.map((group) => {
+					// When filtering, force open so matches are visible without an
+					// extra click. Otherwise honour the manual open state.
+					const open = isFiltering ? true : openSections[group.id];
+					return (
+						<section key={group.id} style={sectionCardStyle}>
+							<button
+								type="button"
+								style={sectionHeaderStyle(group.color)}
+								onClick={() =>
+									setOpenSections((s) => ({ ...s, [group.id]: !s[group.id] }))
+								}
+								aria-expanded={open}
+							>
+								<span
+									style={{
+										display: "inline-block",
+										transform: open ? "rotate(90deg)" : "rotate(0deg)",
+										transition: "transform 120ms",
+										fontSize: 11,
+										color: "var(--text-muted)",
+									}}
+								>
+									▶
+								</span>
+								<span style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>
+									{group.label}
+								</span>
+								<span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+									{group.examples.length} example
+									{group.examples.length === 1 ? "" : "s"}
+								</span>
+							</button>
+							{open && (
+								<>
+									{group.description && (
+										<div
+											style={{
+												padding: "8px 18px 12px",
+												fontSize: 12,
+												color: "var(--text-secondary)",
+												borderTop: "1px solid var(--border)",
+											}}
+										>
+											{group.description}
+										</div>
+									)}
+									{group.examples.map((ex) => (
+										<ExampleCard key={ex.id} example={ex} />
+									))}
+								</>
+							)}
+						</section>
+					);
+				})
+			)}
 		</div>
 	);
 }
-
-export default ExamplesPage;

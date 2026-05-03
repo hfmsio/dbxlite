@@ -23,7 +23,7 @@ export async function introspectSheetColumns(
 
 	try {
 		// Use DuckDB to introspect the specific sheet's structure
-		const describeResult = await queryService.executeQuery(
+		const describeResult = await queryService.executeQueryOnConnector("duckdb", 
 			`DESCRIBE SELECT * FROM read_xlsx('${dataSource.filePath}', sheet='${sheetName}') LIMIT 1`,
 		);
 

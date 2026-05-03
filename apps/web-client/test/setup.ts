@@ -4,6 +4,16 @@
  */
 import '@testing-library/jest-dom'
 
+// jsdom 27 has a `btoa` that rejects plain ASCII strings with
+// InvalidCharacterError ("the string to be encoded contains invalid
+// characters"), which breaks any code that base64-encodes Basic auth
+// credentials. Use Node's Buffer to provide a correct btoa.
+if (typeof globalThis.btoa === 'undefined' || (() => {
+  try { globalThis.btoa('a'); return false } catch { return true }
+})()) {
+  globalThis.btoa = (s: string) => Buffer.from(s, 'binary').toString('base64')
+}
+
 // Mock document methods for theme system (called on module load)
 // These spies allow the theme system to work during tests while tracking calls
 const styleElementsById = new Map<string, HTMLElement>()

@@ -18,6 +18,7 @@ interface UseConnectorOptions {
 interface UseConnectorReturn {
 	activeConnector: ConnectorType;
 	isBigQueryConnected: boolean;
+	isSnowflakeConnected: boolean;
 	handleConnectorChange: (type: ConnectorType) => void;
 	/**
 	 * Programmatically switch connector. Returns true if switch was successful.
@@ -40,16 +41,18 @@ export function useConnector({
 	const [activeConnector, setActiveConnector] =
 		useState<ConnectorType>("duckdb");
 	const [isBigQueryConnected, setIsBigQueryConnected] = useState(false);
+	const [isSnowflakeConnected, setIsSnowflakeConnected] = useState(false);
 
 	// Load connector from localStorage on mount
 	useEffect(() => {
 		try {
 			const savedConnector = localStorage.getItem("dbxlite-connector");
 			if (
-				savedConnector &&
-				(savedConnector === "duckdb" || savedConnector === "bigquery")
+				savedConnector === "duckdb" ||
+				savedConnector === "bigquery" ||
+				savedConnector === "snowflake"
 			) {
-				setActiveConnector(savedConnector as ConnectorType);
+				setActiveConnector(savedConnector);
 			}
 		} catch (err) {
 			logger.error("Failed to load connector from localStorage", err);
@@ -65,17 +68,23 @@ export function useConnector({
 		}
 	}, [activeConnector]);
 
-	// Check BigQuery connection status periodically
+	// Check connection status periodically
 	useEffect(() => {
-		const checkBigQueryStatus = () => {
-			const connected = queryService.isBigQueryConnected();
-			setIsBigQueryConnected(connected);
+		const check = () => {
+			setIsBigQueryConnected(queryService.isBigQueryConnected());
+			// Snowflake is optional on queryService until Phase 2 wires it.
+			const sfCheck = (
+				queryService as unknown as {
+					isSnowflakeConnected?: () => boolean;
+				}
+			).isSnowflakeConnected;
+			setIsSnowflakeConnected(typeof sfCheck === "function" ? sfCheck.call(queryService) : false);
 		};
 
-		checkBigQueryStatus();
+		check();
 
 		// Check every 2 seconds
-		const interval = setInterval(checkBigQueryStatus, 2000);
+		const interval = setInterval(check, 2000);
 		return () => clearInterval(interval);
 	}, []);
 
@@ -84,22 +93,32 @@ export function useConnector({
 		(type: ConnectorType): boolean => {
 			if (type === "duckdb") return true;
 			if (type === "bigquery") return isBigQueryConnected;
+			if (type === "snowflake") return isSnowflakeConnected;
 			return false;
 		},
-		[isBigQueryConnected],
+		[isBigQueryConnected, isSnowflakeConnected],
 	);
 
 	// Handle connector change with validation (for UI dropdown)
 	const handleConnectorChange = useCallback(
 		(type: ConnectorType) => {
-			// Check if BigQuery is connected before allowing switch
 			if (type === "bigquery" && !isBigQueryConnected) {
 				showToast(
 					"BigQuery is not connected. Please configure BigQuery in Settings first.",
 					"warning",
 					4000,
 				);
-				// Force the select element to revert by resetting state to current value
+				setTimeout(() => {
+					setActiveConnector(activeConnector);
+				}, 0);
+				return;
+			}
+			if (type === "snowflake" && !isSnowflakeConnected) {
+				showToast(
+					"Snowflake is not connected. Please configure Snowflake in Settings first.",
+					"warning",
+					4000,
+				);
 				setTimeout(() => {
 					setActiveConnector(activeConnector);
 				}, 0);
@@ -109,7 +128,7 @@ export function useConnector({
 			queryService.setActiveConnector(type);
 			setActiveConnector(type);
 		},
-		[isBigQueryConnected, activeConnector, showToast],
+		[isBigQueryConnected, isSnowflakeConnected, activeConnector, showToast],
 	);
 
 	// Programmatic connector switch (for engine detection)
@@ -136,6 +155,7 @@ export function useConnector({
 	return {
 		activeConnector,
 		isBigQueryConnected,
+		isSnowflakeConnected,
 		handleConnectorChange,
 		switchConnector,
 		isConnectorAvailable,

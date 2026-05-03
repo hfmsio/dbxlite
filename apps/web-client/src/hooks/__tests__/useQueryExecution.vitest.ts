@@ -332,10 +332,11 @@ describe("useQueryExecution", () => {
 			);
 		});
 
-		it("should suggest switch without executing in suggest mode", async () => {
+		it("should hint without blocking in suggest mode (Phase 2.3 — gate softened)", async () => {
 			const switchConnector = vi.fn();
 			const showToast = vi.fn();
 
+			// Provide stubs for the execution path so the query actually runs.
 			vi.mocked(extractQueryAtCursor).mockReturnValue(
 				"SELECT * FROM `project.dataset.table`",
 			);
@@ -343,6 +344,16 @@ describe("useQueryExecution", () => {
 				engine: "bigquery",
 				confidence: "high",
 				signals: ["backtick-quoted identifiers"],
+			});
+			vi.mocked(queryService.getRowCount).mockResolvedValue({
+				count: 0,
+				isEstimated: false,
+			});
+			vi.mocked(queryService.executeQuery).mockResolvedValue({
+				rows: [],
+				columns: [],
+				totalRows: 0,
+				executionTime: 10,
 			});
 
 			const options = createDefaultOptions({
@@ -356,15 +367,14 @@ describe("useQueryExecution", () => {
 				await result.current.handleRunQuery();
 			});
 
-			// Should NOT switch
+			// New behavior (Phase 2.3): suggest mode shows a non-blocking hint,
+			// does NOT auto-switch, but DOES allow execution to proceed.
 			expect(switchConnector).not.toHaveBeenCalled();
-			// Should NOT execute
-			expect(queryService.executeQuery).not.toHaveBeenCalled();
-			// Should show suggestion toast
+			expect(queryService.executeQuery).toHaveBeenCalled();
 			expect(showToast).toHaveBeenCalledWith(
 				expect.stringContaining("looks like bigquery"),
-				"warning",
-				5000,
+				"info",
+				4000,
 			);
 		});
 

@@ -243,68 +243,60 @@ export function useQueryExecution({
 		// Start with the currently selected connector, may be updated by auto-detection
 		let effectiveConnector: ConnectorType = activeConnector;
 
-		// Engine detection - check if query is intended for a different engine
-		// Strategy: BigQuery uses backticks, everything else defaults to DuckDB
+		// Engine detection — purely a hint, never a gate.
+		// Old behavior was BigQuery-specific and blocked execution. We've
+		// learned that's hostile: users who click from the catalog explorer
+		// or pick from the dropdown have already declared intent.
+		//
+		//   "auto"    — silently switch when the detector strongly disagrees
+		//               with the active connector (high confidence only)
+		//   "suggest" — show a non-blocking toast; execution proceeds anyway
+		//   "off"     — no detection at all
 		if (engineDetectionMode !== "off") {
 			const detection = detectQueryEngine(sql);
+			const detectedEngine = detection.engine as ConnectorType | "unknown";
 
-			// Determine target engine:
-			// - If BigQuery detected with confidence → use BigQuery
-			// - Otherwise → default to DuckDB
-			let targetEngine: ConnectorType = "duckdb"; // Default
-			let signalSummary = "";
+			const isReal = (e: ConnectorType | "unknown"): e is ConnectorType =>
+				e === "duckdb" || e === "bigquery" || e === "snowflake";
 
+			const signalSummary =
+				detection.signals.length > 0
+					? ` (${detection.signals.slice(0, 2).join(", ")})`
+					: "";
+
+			// Only act when (a) detection is real, (b) confidence is high,
+			// and (c) it disagrees with the active connector.
 			if (
-				detection.engine === "bigquery" &&
-				detection.confidence !== "low"
+				isReal(detectedEngine) &&
+				detection.confidence === "high" &&
+				detectedEngine !== effectiveConnector
 			) {
-				targetEngine = "bigquery";
-				signalSummary =
-					detection.signals.length > 0
-						? ` (${detection.signals.slice(0, 2).join(", ")})`
-						: "";
-			}
-
-			// Only act if target differs from current connector
-			if (targetEngine !== effectiveConnector) {
 				if (engineDetectionMode === "auto") {
-					// Auto mode: switch and continue
-					if (!isConnectorAvailable(targetEngine)) {
+					if (!isConnectorAvailable(detectedEngine)) {
+						// Don't block — just inform; user may have meant the active one.
 						showToast(
-							`Detected ${targetEngine} syntax${signalSummary}, but ${targetEngine} is not connected. Configure it in Settings first.`,
-							"error",
-							5000,
+							`SQL hints at ${detectedEngine}${signalSummary}, but it's not connected. Running on ${effectiveConnector}.`,
+							"info",
+							4000,
 						);
-						return; // Don't execute - incompatible query would fail anyway
 					} else {
-						const switched = switchConnector(targetEngine);
+						const switched = switchConnector(detectedEngine);
 						if (switched) {
 							showToast(
-								`Auto-switched to ${targetEngine}${signalSummary || " (default)"}`,
+								`Auto-switched to ${detectedEngine}${signalSummary}`,
 								"info",
 								3000,
 							);
-							// Use the switched connector for this execution
-							effectiveConnector = targetEngine;
+							effectiveConnector = detectedEngine;
 						}
 					}
-				} else if (engineDetectionMode === "suggest") {
-					// Suggest mode: warn and block execution
-					if (!isConnectorAvailable(targetEngine)) {
-						showToast(
-							`This looks like ${targetEngine} syntax${signalSummary}, but ${targetEngine} is not connected. Configure it in Settings.`,
-							"error",
-							5000,
-						);
-						return; // Don't execute - incompatible query would fail anyway
-					} else {
-						showToast(
-							`This looks like ${targetEngine} syntax${signalSummary || " (default)"}. Switch connector to run.`,
-							"warning",
-							5000,
-						);
-						return; // Don't execute - user must manually switch
-					}
+				} else {
+					// "suggest" mode — non-blocking hint
+					showToast(
+						`SQL looks like ${detectedEngine}${signalSummary}. Currently on ${effectiveConnector}.`,
+						"info",
+						4000,
+					);
 				}
 			}
 		}
@@ -496,9 +488,15 @@ export function useQueryExecution({
 			}
 
 			// Detect aggregation queries that produce small results regardless of input size
-			// These should always use pre-loaded mode for fast cached pagination
+			// These should always use pre-loaded mode for fast cached pagination.
+			//
+			// Two patterns OR'd because `\b` after `\(` doesn't fire when the next
+			// char is also non-word (e.g. `COUNT(*)` — `(` and `*` are both
+			// non-word, so no boundary). Splitting:
+			//   - GROUP BY / HAVING: word-boundary on both sides
+			//   - aggregate functions: leading boundary, trailing `\s*\(`
 			const isAggregationQuery =
-				/\b(GROUP\s+BY|HAVING|COUNT\s*\(|SUM\s*\(|AVG\s*\(|MAX\s*\(|MIN\s*\()\b/i.test(
+				/\b(?:GROUP\s+BY|HAVING)\b|\b(?:COUNT|SUM|AVG|MAX|MIN)\s*\(/i.test(
 					sql,
 				);
 
@@ -523,14 +521,18 @@ export function useQueryExecution({
 					error: null,
 				});
 
-				const message =
-					estimatedCount > 0
-						? `📊 Query will scan ~${estimatedCount.toLocaleString()} rows. Using optimized pagination.`
-						: estimatedCount === -1
-							? "⚡ Very large dataset detected (count timed out). Using optimized pagination."
-							: "📊 Large result set detected. Using optimized pagination.";
-
-				showToast(message, "info", 5000);
+				// Only surface the pagination toast when we have a real row
+				// count to report — that's a useful cost-preview signal.
+				// When count is unknown (-1: timeout / wrap failure / no fast
+				// count for this connector), the toast is internal jargon
+				// users don't need; pagination "just works" either way.
+				if (estimatedCount > 0) {
+					showToast(
+						`📊 Query will scan ~${estimatedCount.toLocaleString()} rows. Using optimized pagination.`,
+						"info",
+						5000,
+					);
+				}
 
 				// Auto-detect and add remote URLs after successful streaming query start
 				await addRemoteURLsFromQuery(sql);
@@ -648,6 +650,11 @@ export function useQueryExecution({
 			if (!isStreamingMode) {
 				abortControllerRef.current = null;
 			}
+			// Snowflake auto-resumes a SUSPENDED warehouse on first query.
+			// The compute-status badge polls every 30s and otherwise misses
+			// that transition; emit an event here so any listeners (e.g.
+			// ComputeStatusBadge) can re-poll immediately.
+			window.dispatchEvent(new Event("dbxlite:query-completed"));
 		}
 
 		/**

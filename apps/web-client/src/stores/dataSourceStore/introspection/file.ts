@@ -25,7 +25,7 @@ export async function introspectFileSchema(
 
 	try {
 		// Use DESCRIBE to get column information (metadata only, doesn't scan data)
-		const describeResult = await queryService.executeQuery(
+		const describeResult = await queryService.executeQueryOnConnector("duckdb", 
 			`DESCRIBE SELECT * FROM ${tableName} LIMIT 1`,
 		);
 
@@ -38,7 +38,7 @@ export async function introspectFileSchema(
 		// Get row count
 		let rowCount: number | undefined;
 		try {
-			const countResult = await queryService.executeQuery(
+			const countResult = await queryService.executeQueryOnConnector("duckdb", 
 				`SELECT COUNT(*) as cnt FROM ${tableName}`,
 			);
 			if (countResult.rows.length > 0) {

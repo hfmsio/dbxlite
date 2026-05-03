@@ -223,8 +223,15 @@ function ToastItem({
 
 	const colors = getColors();
 
+	// role="alert" → implicit aria-live="assertive" (interrupts AT), role="status"
+	// → implicit aria-live="polite" (waits for current speech to finish). Errors
+	// warrant interruption; info/success/warning do not.
+	const ariaRole = toast.type === "error" ? "alert" : "status";
+
 	return (
 		<div
+			role={ariaRole}
+			aria-atomic="true"
 			style={{
 				background: colors.bg,
 				border: "none",

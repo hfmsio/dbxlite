@@ -1,7 +1,9 @@
 import { CredentialStore, EncryptionManager } from "@ide/storage";
 import { useEffect, useState } from "react";
 import { useLock } from "../state/lock";
+import { createLogger } from "../utils/logger";
 
+const logger = createLogger("ConnectionVault");
 const store = new CredentialStore();
 const em = new EncryptionManager();
 
@@ -17,7 +19,7 @@ export default function ConnectionVault() {
 
 	const exportAll = async () => {
 		if (!passphrase) {
-			console.warn("Please enter a passphrase first");
+			logger.warn("Please enter a passphrase first");
 			return;
 		}
 		if (!confirm("Export all credentials encrypted with this passphrase?"))
@@ -35,11 +37,11 @@ export default function ConnectionVault() {
 
 	const importBlob = async () => {
 		if (!exportBlob) {
-			console.warn("Please paste the export blob first");
+			logger.warn("Please paste the export blob first");
 			return;
 		}
 		if (!passphrase) {
-			console.warn("Please enter a passphrase first");
+			logger.warn("Please enter a passphrase first");
 			return;
 		}
 		try {
@@ -49,9 +51,9 @@ export default function ConnectionVault() {
 				await store.save(k, obj[k]);
 			}
 			setKeys(store.listKeys());
-			console.log("Credentials imported successfully");
+			logger.info("Credentials imported successfully");
 		} catch (e) {
-			console.error(`Failed to import: ${String(e)}`);
+			logger.error(`Failed to import: ${String(e)}`);
 		}
 	};
 
@@ -64,14 +66,14 @@ export default function ConnectionVault() {
 	const copy = async (k: string) => {
 		const v = await store.load(k);
 		if (!v) {
-			console.warn("No value to copy for this credential");
+			logger.warn("No value to copy for this credential");
 			return;
 		}
 		const text = JSON.stringify(v);
 		// Attempt clipboard; fallback to textarea selection
 		try {
 			await navigator.clipboard.writeText(text);
-			console.log("Credential copied to clipboard");
+			logger.info("Credential copied to clipboard");
 		} catch (_e) {
 			// fallback: create temporary textarea
 			const ta = document.createElement("textarea");
@@ -80,9 +82,9 @@ export default function ConnectionVault() {
 			ta.select();
 			try {
 				document.execCommand("copy");
-				console.log("Credential copied to clipboard (fallback)");
+				logger.info("Credential copied to clipboard (fallback)");
 			} catch (_err) {
-				console.error("Copy failed; credential is available in the textarea above");
+				logger.error("Copy failed; credential is available in the textarea above");
 			}
 			ta.remove();
 		}

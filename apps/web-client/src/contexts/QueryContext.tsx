@@ -12,6 +12,7 @@ export interface QueryContextType {
 	// Connector state
 	activeConnector: ConnectorType;
 	isBigQueryConnected: boolean;
+	isSnowflakeConnected: boolean;
 	handleConnectorChange: (connector: ConnectorType) => void;
 	switchConnector: (connector: ConnectorType) => boolean;
 	isConnectorAvailable: (connector: ConnectorType) => boolean;
@@ -38,6 +39,7 @@ export function QueryProvider({ children }: QueryProviderProps) {
 	const {
 		activeConnector,
 		isBigQueryConnected,
+		isSnowflakeConnected,
 		handleConnectorChange,
 		switchConnector,
 		isConnectorAvailable,
@@ -48,6 +50,7 @@ export function QueryProvider({ children }: QueryProviderProps) {
 		() => ({
 			activeConnector,
 			isBigQueryConnected,
+			isSnowflakeConnected,
 			handleConnectorChange,
 			switchConnector,
 			isConnectorAvailable,
@@ -55,6 +58,7 @@ export function QueryProvider({ children }: QueryProviderProps) {
 		[
 			activeConnector,
 			isBigQueryConnected,
+			isSnowflakeConnected,
 			handleConnectorChange,
 			switchConnector,
 			isConnectorAvailable,

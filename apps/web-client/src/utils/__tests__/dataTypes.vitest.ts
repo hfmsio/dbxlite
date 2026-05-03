@@ -466,3 +466,156 @@ describe("TypeMapper.getDisplayName", () => {
 		expect(TypeMapper.getDisplayName(DataType.UHUGEINT)).toBe("Unsigned Huge Integer (128-bit)");
 	});
 });
+
+describe("TypeMapper.normalizeSnowflakeType", () => {
+	describe("numeric types", () => {
+		it("maps FIXED (Snowflake's wire name for integer/decimal) to DECIMAL", () => {
+			expect(TypeMapper.normalizeSnowflakeType("FIXED")).toBe(DataType.DECIMAL);
+		});
+
+		it("maps NUMBER family to DECIMAL", () => {
+			expect(TypeMapper.normalizeSnowflakeType("NUMBER")).toBe(DataType.DECIMAL);
+			expect(TypeMapper.normalizeSnowflakeType("DECIMAL")).toBe(DataType.DECIMAL);
+			expect(TypeMapper.normalizeSnowflakeType("NUMERIC")).toBe(DataType.DECIMAL);
+		});
+
+		it("maps integer family to BIGINT", () => {
+			for (const t of [
+				"INT",
+				"INTEGER",
+				"BIGINT",
+				"SMALLINT",
+				"TINYINT",
+				"BYTEINT",
+			]) {
+				expect(TypeMapper.normalizeSnowflakeType(t)).toBe(DataType.BIGINT);
+			}
+		});
+
+		it("maps single-precision floats to FLOAT", () => {
+			expect(TypeMapper.normalizeSnowflakeType("REAL")).toBe(DataType.FLOAT);
+			expect(TypeMapper.normalizeSnowflakeType("FLOAT")).toBe(DataType.FLOAT);
+			expect(TypeMapper.normalizeSnowflakeType("FLOAT4")).toBe(DataType.FLOAT);
+		});
+
+		it("maps double-precision floats to DOUBLE", () => {
+			expect(TypeMapper.normalizeSnowflakeType("FLOAT8")).toBe(DataType.DOUBLE);
+			expect(TypeMapper.normalizeSnowflakeType("DOUBLE")).toBe(DataType.DOUBLE);
+			expect(TypeMapper.normalizeSnowflakeType("DOUBLE PRECISION")).toBe(
+				DataType.DOUBLE,
+			);
+		});
+	});
+
+	describe("string types", () => {
+		it("maps text family to VARCHAR", () => {
+			for (const t of ["TEXT", "VARCHAR", "CHAR", "CHARACTER", "STRING"]) {
+				expect(TypeMapper.normalizeSnowflakeType(t)).toBe(DataType.VARCHAR);
+			}
+		});
+	});
+
+	describe("boolean", () => {
+		it("maps BOOLEAN/BOOL", () => {
+			expect(TypeMapper.normalizeSnowflakeType("BOOLEAN")).toBe(
+				DataType.BOOLEAN,
+			);
+			expect(TypeMapper.normalizeSnowflakeType("BOOL")).toBe(DataType.BOOLEAN);
+		});
+	});
+
+	describe("temporal types", () => {
+		it("maps DATE / TIME / DATETIME", () => {
+			expect(TypeMapper.normalizeSnowflakeType("DATE")).toBe(DataType.DATE);
+			expect(TypeMapper.normalizeSnowflakeType("TIME")).toBe(DataType.TIME);
+			expect(TypeMapper.normalizeSnowflakeType("DATETIME")).toBe(
+				DataType.DATETIME,
+			);
+		});
+
+		it("maps TIMESTAMP and TIMESTAMP_NTZ to TIMESTAMP (no tz)", () => {
+			expect(TypeMapper.normalizeSnowflakeType("TIMESTAMP")).toBe(
+				DataType.TIMESTAMP,
+			);
+			expect(TypeMapper.normalizeSnowflakeType("TIMESTAMP_NTZ")).toBe(
+				DataType.TIMESTAMP,
+			);
+		});
+
+		it("maps TIMESTAMP_LTZ and TIMESTAMP_TZ to TIMESTAMPTZ (with tz)", () => {
+			expect(TypeMapper.normalizeSnowflakeType("TIMESTAMP_LTZ")).toBe(
+				DataType.TIMESTAMPTZ,
+			);
+			expect(TypeMapper.normalizeSnowflakeType("TIMESTAMP_TZ")).toBe(
+				DataType.TIMESTAMPTZ,
+			);
+		});
+	});
+
+	describe("binary types", () => {
+		it("maps BINARY/VARBINARY to BLOB", () => {
+			expect(TypeMapper.normalizeSnowflakeType("BINARY")).toBe(DataType.BLOB);
+			expect(TypeMapper.normalizeSnowflakeType("VARBINARY")).toBe(DataType.BLOB);
+		});
+	});
+
+	describe("semi-structured types", () => {
+		it("maps VARIANT to JSON (rendered as JSON in the grid)", () => {
+			expect(TypeMapper.normalizeSnowflakeType("VARIANT")).toBe(DataType.JSON);
+		});
+
+		it("maps OBJECT to STRUCT", () => {
+			expect(TypeMapper.normalizeSnowflakeType("OBJECT")).toBe(DataType.STRUCT);
+		});
+
+		it("maps ARRAY", () => {
+			expect(TypeMapper.normalizeSnowflakeType("ARRAY")).toBe(DataType.ARRAY);
+		});
+	});
+
+	describe("spatial types", () => {
+		it("maps GEOGRAPHY and GEOMETRY", () => {
+			expect(TypeMapper.normalizeSnowflakeType("GEOGRAPHY")).toBe(
+				DataType.GEOGRAPHY,
+			);
+			expect(TypeMapper.normalizeSnowflakeType("GEOMETRY")).toBe(
+				DataType.GEOGRAPHY,
+			);
+		});
+	});
+
+	describe("normalization edge cases", () => {
+		it("is case-insensitive", () => {
+			expect(TypeMapper.normalizeSnowflakeType("variant")).toBe(DataType.JSON);
+			expect(TypeMapper.normalizeSnowflakeType("Number")).toBe(
+				DataType.DECIMAL,
+			);
+		});
+
+		it("trims whitespace", () => {
+			expect(TypeMapper.normalizeSnowflakeType("  TEXT  ")).toBe(
+				DataType.VARCHAR,
+			);
+		});
+
+		it("returns UNKNOWN for unrecognized types", () => {
+			expect(TypeMapper.normalizeSnowflakeType("MYSTERY_TYPE")).toBe(
+				DataType.UNKNOWN,
+			);
+		});
+	});
+
+	describe("dispatch via normalizeType(connector='snowflake')", () => {
+		it("routes through normalizeSnowflakeType", () => {
+			expect(TypeMapper.normalizeType("VARIANT", "snowflake")).toBe(
+				DataType.JSON,
+			);
+			expect(TypeMapper.normalizeType("FIXED", "snowflake")).toBe(
+				DataType.DECIMAL,
+			);
+			expect(TypeMapper.normalizeType("TIMESTAMP_LTZ", "snowflake")).toBe(
+				DataType.TIMESTAMPTZ,
+			);
+		});
+	});
+});

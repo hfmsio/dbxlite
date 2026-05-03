@@ -1,4 +1,4 @@
-import { CredentialStore } from "@ide/storage";
+import { EncryptedCredentialStore } from "@ide/storage";
 import { useEffect, useState } from "react";
 import { queryService } from "../services/streaming-query-service";
 import { connectionHealthChecker } from "../utils/connectionHealthCheck";
@@ -32,7 +32,10 @@ export function useAppInitialization({
 	const [initError, setInitError] = useState<string | null>(null);
 
 	useEffect(() => {
-		const credentialStore = new CredentialStore();
+		// Encrypted at rest (AES-GCM, device-bound key in IndexedDB).
+		// Holds OAuth tokens (Snowflake, BigQuery) and Snowflake client secrets.
+		// Same wrapper used for AI API keys via aiCredentialStore.
+		const credentialStore = new EncryptedCredentialStore();
 		queryService
 			.initialize(credentialStore)
 			.then(async () => {
@@ -54,6 +57,20 @@ export function useAppInitialization({
 					} catch (err) {
 						logger.error("BigQuery auto-connect error", err);
 						// Don't show error toast - user can manually connect if needed
+					}
+				}
+
+				// Auto-connect to Snowflake if enabled
+				const snowflakeAutoConnect =
+					localStorage.getItem("snowflake-auto-connect") === "true";
+				if (snowflakeAutoConnect) {
+					try {
+						const connected = await queryService.restoreSnowflakeConnection();
+						if (connected) {
+							showToast("Connected to Snowflake", "success", 3000);
+						}
+					} catch (err) {
+						logger.error("Snowflake auto-connect error", err);
 					}
 				}
 			})

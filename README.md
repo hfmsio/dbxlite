@@ -6,9 +6,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 
-A modern SQL workbench for DuckDB. Use it with your local DuckDB CLI for full power, or run entirely in-browser with zero install.
+A SQL workbench for DuckDB. Run it with your local DuckDB CLI for full power, or in-browser with zero install. Connectors for BigQuery and Snowflake; an AI assistant (BYO key or Snowflake Cortex) for writing and fixing SQL.
 
-**New: AI SQL Assistant** -- Write, explain, fix, and optimize SQL with a built-in chat assistant. Free tiers available via Google Gemini and Groq. Open with `Cmd/Ctrl+Shift+A` or the sparkles button.
+**Try it now (no install):** [sql.dbxlite.com](https://sql.dbxlite.com) — runs entirely in your browser via DuckDB WASM. Your data never leaves your machine.
 
 ## Quick Start
 
@@ -32,19 +32,11 @@ Open http://localhost:4213 in your browser. You get full native DuckDB with all 
 duckdb mydata.duckdb -unsigned -ui
 ```
 
-**Alternative: Use hosted assets (no npm required):**
-```bash
-export ui_remote_url="https://sql.dbxlite.com"
-duckdb -unsigned -ui
-```
-
-> The hosted URL only serves static UI assets (similar to the default DuckDB UI hosted by MotherDuck). All data and query execution stays local: DuckDB on your machine talks directly to your browser. Nothing is sent to external servers.
-
 > The `-unsigned` flag is required for custom UI URLs. This is a DuckDB security measure.
 
 ### WASM Mode (Zero Install)
 
-No DuckDB CLI? Visit **https://sql.dbxlite.com** directly. Runs entirely in your browser with DuckDB WebAssembly.
+No DuckDB CLI? Try the hosted version at **[sql.dbxlite.com](https://sql.dbxlite.com)** — it's the same app served as static assets, with DuckDB compiled to WebAssembly running entirely in your browser. The URL only serves UI; queries run locally on your machine. Or run a copy yourself: `pnpm dev` and open the local URL.
 
 ### Mode Comparison
 
@@ -54,30 +46,23 @@ No DuckDB CLI? Visit **https://sql.dbxlite.com** directly. Runs entirely in your
 | **Extensions** | All (httpfs, spatial, iceberg, etc.) | Limited subset |
 | **Filesystem** | Direct access | File handles only |
 | **BigQuery** | Via DuckDB extension | Browser OAuth connector |
+| **Snowflake** | Via DuckDB extension | Browser OAuth connector (SQL REST API v2) |
 | **Install** | DuckDB CLI required | Zero install |
 | **Offline** | Requires CLI | Works after first load |
 
 ---
 
-## Highlights
+## What it does
 
-**Query Any Data, Any Size**
-Query CSV, Parquet, Excel, JSON, JSONL locally or from cloud URLs. In Server mode, access your entire filesystem. In WASM mode, files register via File System Access API and stay on disk.
+Query CSV, Parquet, Excel, JSON, and JSONL — local files via the File System Access API (so they stay on disk), or remote URLs via DuckDB's `httpfs` extension. Server mode gives you full native DuckDB with every extension; WASM mode runs the same engine in a Web Worker, with a smaller extension set that works offline.
 
-**Full SQL Workbench**
-Monaco editor with autocomplete and formatting. Schema explorer that visualizes nested structs and shows all sheets in Excel files. Results grid with cell-by-cell keyboard navigation, cell modal for large content, export to Parquet/CSV/JSON. 10 color themes.
+The editor is Monaco with SQL autocomplete. Results stream via Arrow IPC.
 
-**Cloud Data Warehouses**
-Query BigQuery directly with cost estimates before you run. In Server mode, use DuckDB's native BigQuery extension. In WASM mode, use the browser OAuth connector.
+BigQuery and Snowflake connect from the browser too. BigQuery talks to GCP directly because Google APIs serve CORS. Snowflake doesn't, so it routes through a thin proxy that strips response headers Snowflake adds (CSRF cookies, content-encoding) and rewrites the URL. The Snowflake explorer is the part that took the most work: a vendor-neutral `CatalogProvider` interface drives the same UI Snowsight has (databases, schemas, tables, column preview, compute status, query history), and both OAuth 2.0 PKCE and Programmatic Access Tokens are supported. PATs are the lower-friction path for users who don't have ACCOUNTADMIN.
 
-**Share Executable SQL**
-Share queries via URL that run on click. Built-in examples include getting started, remote datasets, DuckDB tutorials, and advanced analytics.
+The AI assistant is opt-in. Bring your own key for OpenAI, Anthropic, Gemini, or Groq; or use Snowflake Cortex if you're already on Snowflake. Keys are encrypted with AES-GCM, and a one-time consent dialog gates the first send to each external provider. Toggle with `Cmd/Ctrl+Shift+A`.
 
-**AI SQL Assistant**
-Built-in chat assistant for writing, explaining, fixing, and optimizing SQL. Supports multiple providers (Google Gemini, Groq, OpenAI, Anthropic) with free-tier options that need no credit card. API keys are encrypted locally with AES-GCM and never sent anywhere except the provider you choose. Toggle with the sparkles button or `Cmd/Ctrl+Shift+A`.
-
-**Private by Default**
-In WASM mode, everything runs in your browser - data never leaves your machine. In Server mode, data stays on your local machine. Cloud connectors communicate directly with their APIs. AI API keys are encrypted at rest in your browser.
+Queries are shareable as URLs that run on click — `?example=`, `?sql=`, `?share=gist:...`, plus `&theme=` and `&run=true`.
 
 ---
 
@@ -142,10 +127,10 @@ dbxlite/
 │  │  │  ├─ services/       # Data services (data-source-store, settings-store, ai/)
 │  │  │  ├─ stores/         # Zustand stores (settingsStore, aiChatStore)
 │  │  │  └─ utils/          # Utilities (formatters, dataTypes, logger)
-│  │  └─ App.tsx            # Main orchestrator (~680 lines)
+│  │  └─ App.tsx            # Main orchestrator (~860 lines)
 │  └─ cli/                  # dbxlite-ui npm package (for duckdb -ui integration)
 ├─ packages/
-│  ├─ connectors/           # Data connectors (DuckDB, BigQuery)
+│  ├─ connectors/           # Data connectors (DuckDB, BigQuery, Snowflake)
 │  ├─ duckdb-wasm-adapter/  # Worker/engine bridge
 │  ├─ storage/              # Credential and handle storage
 │  ├─ schema-cache/         # Metadata caching
@@ -192,37 +177,13 @@ http://localhost:5173/?example=covid&run=true&theme=dracula
 
 See [docs/URL-SHARING.md](docs/URL-SHARING.md) for full reference.
 
-## Known Limitations & Roadmap
+## Limitations
 
-### Current Limitations
+Browser apps can only reach databases over HTTP/REST. PostgreSQL, MySQL, and other TCP-only databases aren't supported and won't be without a server-side proxy. See [CONTRIBUTING.md](CONTRIBUTING.md#adding-new-connectors).
 
-**Credential Storage** (`credential-store.ts`)
-- AI API keys are encrypted at rest (AES-GCM with device-bound key in IndexedDB)
-- Other credentials (e.g., BigQuery) still use plain localStorage
+Parquet export currently round-trips through JSON; native `parquetjs` / Arrow is on the list. Most credentials are encrypted at rest with AES-GCM, but a few legacy paths still use plain `localStorage` and are being migrated.
 
-**Parquet Support** (`materialization-manager.ts`, `import-queue.ts`)
-- Parquet export uses JSON serialization as intermediate format
-- Native Parquet library integration (parquetjs or Arrow) planned for improved performance
-
-**Connection Testing** (`connection-store.tsx`)
-- Connection validation is simulated
-- Actual connection testing based on connector type in development
-
-**Connector Integration** (`import-queue.ts`)
-- Table import connector integration is a work-in-progress
-- Snowflake and other cloud data warehouse connectors in active development
-
-### Planned Improvements
-
-- ✓ BigQuery connector (REST API + OAuth)
-- ⬜ Snowflake connector (SQL REST API + OAuth)
-- ⬜ Supabase connector (PostgREST - browser-friendly PostgreSQL)
-- ✓ AI SQL Assistant (multi-provider, streaming, free-tier support)
-- ✓ Encrypted credential storage (AI API keys)
-- ⬜ Native Parquet export via parquetjs
-- ⬜ Query result caching layer
-
-> **Note:** Browser-based apps can only connect to databases via HTTP/REST APIs. Traditional databases (PostgreSQL, MySQL) use TCP protocols that browsers cannot access directly. See [CONTRIBUTING.md](CONTRIBUTING.md#adding-new-connectors) for details.
+What's next: Supabase (via PostgREST, since that's HTTP-shaped), native Parquet export, and a query-result caching layer. The AI assistant likely gets a Databricks backend once we have a Databricks connector at all.
 
 ## Contributing & Community
 - See [CONTRIBUTING](CONTRIBUTING.md) for setup, workflow, and testing guidance.

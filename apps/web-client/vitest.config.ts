@@ -4,7 +4,16 @@ import path from 'path'
 export default defineConfig({
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.{test,spec,vitest}.{ts,tsx}'],
+    include: [
+      'src/**/*.{test,spec,vitest}.{ts,tsx}',
+      // Pick up unit tests in shared connector packages too — keeps
+      // snowflake-connector tests live.
+      '../../packages/connectors/src/**/*.{test,spec,vitest}.{ts,tsx}',
+    ],
+    exclude: [
+      'node_modules',
+      'dist',
+    ],
     setupFiles: ['./test/setup.ts'],
     globals: true,
     coverage: {

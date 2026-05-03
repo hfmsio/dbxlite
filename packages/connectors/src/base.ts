@@ -19,6 +19,13 @@ export interface QueryOptions {
   timeout?: number
   /** Chunk size for result pagination */
   chunkSize?: number
+  /**
+   * Abort signal. Connectors must read this and propagate to underlying
+   * fetch / WASM message-passing. On abort, generators yield error+done and
+   * cloud connectors call their server-side cancel endpoint (Snowflake
+   * `cancel(handle)`, BigQuery `jobs.cancel`) to stop billing.
+   */
+  signal?: AbortSignal
   /** Additional connector-specific options */
   [key: string]: unknown
 }
@@ -44,6 +51,13 @@ export interface QueryChunk {
   totalRows?: number
   /** Optional payload stats (sent with final chunk for DuckDB) */
   queryStats?: QueryStats
+  /**
+   * Connector-side query identifier — Snowflake's statementHandle (also the
+   * INFORMATION_SCHEMA query_id), BigQuery's jobId. Optional; only present on
+   * the first chunk for connectors that surface it. Consumed by
+   * QueryStatsFooter for post-execution stats lookup. (Backlog SF-T5.3.)
+   */
+  connectorQueryId?: string
 }
 
 export interface TableInfo {

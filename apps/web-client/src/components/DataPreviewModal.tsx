@@ -45,12 +45,12 @@ export function DataPreviewModal({
 
 			// Fetch preview data (first 100 rows)
 			// executeQuery now returns a QueryResult with columnTypes
-			const result = await queryService.executeQuery(
+			const result = await queryService.executeQueryOnConnector("duckdb", 
 				`SELECT * FROM ${fullTableName} LIMIT 100;`,
 			);
 
 			// Get total row count
-			const countResult = await queryService.executeQuery(
+			const countResult = await queryService.executeQueryOnConnector("duckdb", 
 				`SELECT COUNT(*) as total FROM ${fullTableName};`,
 			);
 

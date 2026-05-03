@@ -50,10 +50,11 @@ dbxlite runs in-browser, so connectors must use HTTP/REST APIs (not TCP):
 |----------|-----|--------|
 | DuckDB WASM | In-browser | Implemented |
 | BigQuery | REST + OAuth | Implemented |
-| Snowflake | SQL REST API | Planned |
+| Snowflake | SQL REST API v2 (PKCE OAuth + CORS proxy) | Implemented |
 | Supabase | PostgREST | Candidate |
+| Databricks | SQL Statement Execution API | Candidate |
 
-See `packages/connectors/src/bigquery/` for implementation reference.
+See `packages/connectors/src/snowflake-connector.ts` and `bigquery-connector.ts` for implementation references.
 
 **Why no PostgreSQL/MySQL?** Browsers can't create TCP sockets. Use REST-based alternatives like Supabase (PostgREST over PostgreSQL).
 

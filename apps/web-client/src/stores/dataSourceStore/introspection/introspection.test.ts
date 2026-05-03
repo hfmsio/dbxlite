@@ -8,11 +8,15 @@ import { introspectFileSchema } from "./file";
 import { introspectSheetColumns } from "./xlsx";
 import type { DataSource } from "../../../types/data-source";
 
-// Mock query service
+// Mock query service. Introspection now calls executeQueryOnConnector("duckdb", sql)
+// to keep DuckDB-only system queries off whatever connector is active. Both
+// methods route to the same mock so existing assertions still pass.
 const mockExecuteQuery = vi.fn();
 vi.mock("../../../services/streaming-query-service", () => ({
 	queryService: {
 		executeQuery: (...args: unknown[]) => mockExecuteQuery(...args),
+		executeQueryOnConnector: (_connector: string, ...args: unknown[]) =>
+			mockExecuteQuery(...args),
 	},
 }));
 
