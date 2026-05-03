@@ -1,0 +1,6 @@
+# Empty .npmignore: presence prevents npm from falling back to .gitignore,
+# which would exclude assets/duckdb/*.wasm + *.worker.js (they're listed in
+# web-client/public/duckdb/.gitignore as auto-downloaded). The "files" field
+# in package.json controls what gets published.
+.DS_Store
+node_modules

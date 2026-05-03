@@ -47,6 +47,16 @@ cpSync(join(ROOT, 'src', 'cli.js'), join(distDir, 'cli.js'));
 console.log('Copying web-client assets...');
 cpSync(WEB_CLIENT_DIST, assetsDir, { recursive: true });
 
+// Drop the public/duckdb/.gitignore that tags along from the web-client tree.
+// That .gitignore says "ignore *" (the wasm files are auto-downloaded), and
+// npm publish honors .gitignore when no .npmignore is present, so it was
+// silently excluding the actual .wasm/.worker.js files from the npm tarball.
+const rogueGitignore = join(assetsDir, 'duckdb', '.gitignore');
+if (existsSync(rogueGitignore)) {
+  rmSync(rogueGitignore);
+  console.log('Removed assets/duckdb/.gitignore (was excluding wasm files from publish)');
+}
+
 console.log('\nBuild complete!');
 console.log(`  dist/cli.js - CLI entry point`);
 console.log(`  assets/ - Web UI files`);
