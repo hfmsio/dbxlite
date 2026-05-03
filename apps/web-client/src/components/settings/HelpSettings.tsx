@@ -130,7 +130,7 @@ function HelpSettings({ initialSubTab }: HelpSettingsProps = {}) {
 	return (
 		<div style={{ display: "flex", height: "100%", gap: 16 }}>
 			{/* Sub-tab sidebar */}
-			<nav
+			<div
 				role="tablist"
 				aria-label="Help sections"
 				style={{
@@ -187,7 +187,7 @@ function HelpSettings({ initialSubTab }: HelpSettingsProps = {}) {
 						</button>
 					);
 				})}
-			</nav>
+			</div>
 
 			{/* Content area */}
 			<div

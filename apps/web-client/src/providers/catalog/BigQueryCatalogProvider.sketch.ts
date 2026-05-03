@@ -171,9 +171,8 @@ export class BigQueryCatalogProvider implements CatalogProvider {
 
 	async estimateQueryCost(sql: string): Promise<QueryCostEstimate> {
 		// Real impl would call queryService's cost-estimate path. Sketch only.
-		return { estimatedBytes: 0, estimatedCostUSD: 0, cachingPossible: true }
-		// noop reference to keep the param "used" in TS
 		void sql
+		return { estimatedBytes: 0, estimatedCostUSD: 0, cachingPossible: true }
 	}
 
 	getPinnedCatalogs(): string[] {

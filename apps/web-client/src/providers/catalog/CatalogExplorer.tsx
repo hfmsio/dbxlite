@@ -1330,6 +1330,7 @@ function Chevron({ expanded }: { expanded: boolean }) {
 function Spinner() {
 	return (
 		<span
+			role="status"
 			aria-label="loading"
 			style={{
 				display: "inline-block",

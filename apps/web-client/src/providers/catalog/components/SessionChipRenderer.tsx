@@ -53,6 +53,7 @@ export default function SessionChipRenderer({
 			{/* Icon-only label keeps the chip row compact; the full label
 			    lives in the title attribute / tooltip above. */}
 			<span
+				role="img"
 				aria-label={chip.label}
 				style={{ fontFamily: "system-ui, sans-serif" }}
 			>

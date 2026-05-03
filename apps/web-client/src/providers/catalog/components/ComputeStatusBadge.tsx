@@ -148,6 +148,7 @@ export default function ComputeStatusBadge({
 	if (!status) {
 		return (
 			<span
+				role="status"
 				aria-label="Compute status loading"
 				style={{
 					display: "inline-flex",
@@ -170,6 +171,7 @@ export default function ComputeStatusBadge({
 	return (
 		<>
 			<span
+				role="status"
 				aria-live="polite"
 				aria-label={`Compute ${label ?? "status"}: ${style.label}${status.size ? ` (${status.size})` : ""}`}
 				title={`Compute is ${style.label}${status.size ? ` · size ${status.size}` : ""}\nLast checked ${status.lastChecked.toLocaleTimeString()}`}

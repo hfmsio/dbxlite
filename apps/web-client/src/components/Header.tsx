@@ -183,6 +183,7 @@ export default function Header({
 									: "#10b981"
 						return (
 							<span
+								role="status"
 								title={label}
 								aria-label={label}
 								style={{
