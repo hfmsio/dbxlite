@@ -23,7 +23,13 @@ interface FileWithPath extends File {
 // Type for file data from openDataFiles
 interface DataFileInfo {
 	name: string;
-	buffer: ArrayBuffer;
+	/**
+	 * Optional. Only populated by callers that genuinely need the full
+	 * file in memory (XLSX sheet detection). Drag-drop and button uploads
+	 * for parquet/csv/json now skip the upfront read and let DuckDB pull
+	 * bytes through the File handle on demand.
+	 */
+	buffer?: ArrayBuffer;
 	type: string;
 	size: number;
 	extension: string;
@@ -301,15 +307,23 @@ export function useFileUpload({
 							`HTTP mode: Using local file path: ${fileData.fullPath}`,
 						);
 					} else {
-						// WASM mode: Register file with query service
-						if (isDragDrop || !fileData.file) {
-							// Drag-drop or no file handle - use buffer
-							await queryService.registerFile(fileData.name, fileData.buffer);
-						} else {
-							// Button upload with file handle - use zero-copy
+						// WASM mode: prefer the zero-copy File handle path whenever
+						// it's available — DuckDB only fetches the bytes it actually
+						// reads (e.g. Parquet metadata footer = a few KB even for
+						// hundred-MB files). The full-buffer registerFile path is a
+						// fallback for: (a) callers that already have only a buffer
+						// (XLSX after sheet extraction) and (b) very-old browsers
+						// without File handles in drag-drop.
+						if (fileData.file) {
 							await queryService.registerFileHandle(
 								fileData.name,
 								fileData.file,
+							);
+						} else if (fileData.buffer) {
+							await queryService.registerFile(fileData.name, fileData.buffer);
+						} else {
+							throw new Error(
+								`No file handle or buffer for ${fileData.name}`,
 							);
 						}
 
@@ -460,16 +474,6 @@ export function useFileUpload({
 				});
 
 				try {
-					if (file.size > ZERO_COPY_THRESHOLD) {
-						const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-						showToast(
-							`Reading large file ${file.name} (${sizeMB} MB) - this may take a while...`,
-							"warning",
-							5000,
-						);
-					}
-
-					const buffer = await file.arrayBuffer();
 					const extension = file.name.split(".").pop()?.toLowerCase() || "";
 					const type = detectDataSourceType(file.name);
 
@@ -477,9 +481,29 @@ export function useFileUpload({
 					const fileWithPath = file as FileWithPath;
 					const fullPath = fileWithPath.path;
 
+					// XLSX needs the full buffer for sheet detection; everything
+					// else (parquet/csv/json/duckdb) registers via the File handle
+					// so DuckDB only fetches the bytes it actually reads. For a
+					// 600k-row Parquet that's a few KB of footer metadata instead
+					// of 150 MB of full-file read into JS heap.
+					const needsBuffer = extension === "xlsx" || extension === "xls";
+					let buffer: ArrayBuffer | undefined;
+					if (needsBuffer) {
+						if (file.size > ZERO_COPY_THRESHOLD) {
+							const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+							showToast(
+								`Reading large file ${file.name} (${sizeMB} MB) — this may take a while...`,
+								"warning",
+								5000,
+							);
+						}
+						buffer = await file.arrayBuffer();
+					}
+
 					files.push({
 						name: file.name,
-						buffer,
+						buffer, // undefined for non-XLSX; processFiles uses fileData.file
+						// (registerFileHandle) when buffer is missing
 						type,
 						size: file.size,
 						extension,

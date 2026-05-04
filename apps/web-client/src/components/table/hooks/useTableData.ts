@@ -683,6 +683,15 @@ export function useTableData({
 	// is shared across tabs, so without per-tab caching, switching tabs would
 	// re-run the warehouse query every time — unacceptable for credit-burning
 	// backends like Snowflake.
+	// Tracks the (tabId, sql) tuple we last *auto-executed* for so that a
+	// connector-only change doesn't trigger a fresh query. Without this,
+	// switching engines (DuckDB ↔ Snowflake) on a tab with an existing SQL
+	// would silently kick off a full warehouse run — a credit/cost surprise
+	// the user explicitly didn't ask for.
+	const lastAutoExecutedRef = useRef<{ tabId: string; sql: string } | null>(
+		null,
+	);
+
 	useEffect(() => {
 		if (!isStreamingMode || !sql) return;
 
@@ -705,10 +714,23 @@ export function useTableData({
 			setSortDirection(snap.sortDirection);
 			setLoading(false);
 			onLoadingChangeRef.current?.(false, tabId);
+			lastAutoExecutedRef.current = { tabId, sql };
 			return;
 		}
 
-		// First-time execution for this (tabId, sql).
+		// No snapshot for this (connector, tab, sql). Auto-execute only when the
+		// (tabId, sql) tuple actually changed; if the user just switched the
+		// connector dropdown, leave the editor state alone and wait for an
+		// explicit Run. This was a real footgun on Snowflake where a stray
+		// engine switch could kick off a 500k-row warehouse query.
+		if (
+			lastAutoExecutedRef.current?.tabId === tabId &&
+			lastAutoExecutedRef.current?.sql === sql
+		) {
+			return;
+		}
+		lastAutoExecutedRef.current = { tabId, sql };
+
 		setError(null);
 		setPageData([]);
 		setColumns([]);

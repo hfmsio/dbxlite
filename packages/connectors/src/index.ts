@@ -12,8 +12,11 @@ export type {
   SchemaInfo,
   TableMetadata,
   QueryCostEstimate,
-  ConnectionTestResult
+  ConnectionTestResult,
+  ParquetExportCapable
 } from './base'
+
+export { isParquetExportCapable } from './base'
 
 // Export connector implementations
 export { BigQueryConnector } from './bigquery-connector'

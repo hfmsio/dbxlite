@@ -37,6 +37,7 @@ import { type CredentialStoreLike, EncryptionManager } from "@ide/storage"
 import { createLogger } from "./logger"
 import { BrowserTransport, RequestTransport } from "./transport"
 import { parseSnowflakeAccount } from "./snowflake-account"
+import { parseSnowflakeValue } from "./snowflake-parse-shared"
 
 const logger = createLogger("Snowflake")
 
@@ -292,6 +293,18 @@ export class SnowflakeConnector implements CloudConnector {
 	private refreshPromise: Promise<void> | null = null
 	private cache = new MetadataCache()
 	private activeStatements = new Map<string, string>()
+
+	// Lazily-created Web Worker for row-typing partitions off the main
+	// thread. Falls back to main-thread parsing if Worker construction
+	// fails (e.g. jsdom in tests, or a hosting context with no Worker
+	// support). See snowflake-parse.worker.ts.
+	private parserWorker: Worker | null = null
+	private parserWorkerInitTried = false
+	private parseHandlers = new Map<
+		string,
+		(rows: Record<string, unknown>[]) => void
+	>()
+	private parseSeq = 0
 
 	private accountIdentifier: string
 	private accountHostname: string
@@ -1189,8 +1202,10 @@ export class SnowflakeConnector implements CloudConnector {
 				  }
 				: undefined
 
-			// Partition 0 is included in the initial response
-			const firstRows = this.parseRows(initial.data ?? [], rowType)
+			// Partition 0 is included in the initial response. parseRowsAsync
+			// dispatches to a worker for large partitions (keeps UI responsive)
+			// or stays main-thread for small ones (avoids postMessage overhead).
+			const firstRows = await this.parseRowsAsync(initial.data ?? [], rowType)
 			const isLast = partitions.length <= 1
 
 			yield {
@@ -1212,7 +1227,7 @@ export class SnowflakeConnector implements CloudConnector {
 					i,
 					signal,
 				)
-				const rows = this.parseRows(part.data ?? [], rowType)
+				const rows = await this.parseRowsAsync(part.data ?? [], rowType)
 				const last = i === partitions.length - 1
 				yield {
 					rows,
@@ -1375,6 +1390,17 @@ export class SnowflakeConnector implements CloudConnector {
 		try {
 			localStorage.removeItem(OAUTH_AUTO_CONNECT_LSKEY)
 		} catch {}
+		// Tear down the parse worker so we don't leak it across reconnects
+		if (this.parserWorker) {
+			try {
+				this.parserWorker.terminate()
+			} catch {
+				// non-critical
+			}
+			this.parserWorker = null
+		}
+		this.parserWorkerInitTried = false
+		this.parseHandlers.clear()
 	}
 
 	clearCache(): void {
@@ -1424,6 +1450,10 @@ export class SnowflakeConnector implements CloudConnector {
 		data: unknown[][],
 		rowType: SnowflakeColumnMeta[],
 	): Record<string, unknown>[] {
+		// Synchronous main-thread parse. Used as the fallback when the
+		// worker is unavailable (jsdom tests, restricted hosts) and for
+		// small result sets where worker postMessage overhead would
+		// dominate runtime.
 		if (!data || data.length === 0) return []
 		if (!rowType || rowType.length === 0) return []
 
@@ -1434,6 +1464,89 @@ export class SnowflakeConnector implements CloudConnector {
 			})
 			return obj
 		})
+	}
+
+	/**
+	 * Async row parser. For small partitions (<2000 rows) parse on the
+	 * main thread — postMessage overhead would dominate. For large ones
+	 * dispatch to the dedicated worker so the executing-query timer and
+	 * other UI keep ticking while LIMIT 500k+ partitions get typed.
+	 *
+	 * The worker is constructed lazily on first large-partition request.
+	 * If construction fails (no Worker constructor, bundler can't load
+	 * the worker module) we mark the attempt so we don't retry, and
+	 * permanently fall back to main-thread parsing.
+	 */
+	private async parseRowsAsync(
+		data: unknown[][],
+		rowType: SnowflakeColumnMeta[],
+	): Promise<Record<string, unknown>[]> {
+		if (!data || data.length === 0) return []
+		if (!rowType || rowType.length === 0) return []
+
+		const SMALL_PARTITION_THRESHOLD = 2000
+		if (data.length < SMALL_PARTITION_THRESHOLD) {
+			return this.parseRows(data, rowType)
+		}
+
+		const worker = await this.ensureParserWorker()
+		if (!worker) {
+			return this.parseRows(data, rowType)
+		}
+
+		return new Promise((resolve) => {
+			const id = `p_${++this.parseSeq}`
+			this.parseHandlers.set(id, resolve)
+			// Lite shape: only the fields the worker reads. Avoids leaking
+			// internal SnowflakeColumnMeta extras that may not be cloneable.
+			const lite = rowType.map((c) => ({
+				name: c.name,
+				type: c.type,
+				scale: c.scale,
+			}))
+			worker.postMessage({ id, type: "parseRows", data, rowType: lite })
+		})
+	}
+
+	private async ensureParserWorker(): Promise<Worker | null> {
+		if (this.parserWorker) return this.parserWorker
+		if (this.parserWorkerInitTried) return null
+		this.parserWorkerInitTried = true
+
+		// Vite-style worker import. Wrapped because:
+		//   1. jsdom (Vitest) has no Worker constructor — `new Worker(...)` throws
+		//   2. The dynamic `import.meta.url` path may fail under odd bundlers
+		//   3. Some browsers in private mode restrict workers
+		// In any of these cases we fall back to main-thread parse.
+		try {
+			if (typeof Worker === "undefined") return null
+			const ParserWorker = (
+				await import("./snowflake-parse.worker?worker")
+			).default as new () => Worker
+			this.parserWorker = new ParserWorker()
+			this.parserWorker.onmessage = (
+				e: MessageEvent<{ id: string; rows: Record<string, unknown>[] }>,
+			) => {
+				const handler = this.parseHandlers.get(e.data.id)
+				if (handler) {
+					this.parseHandlers.delete(e.data.id)
+					handler(e.data.rows)
+				}
+			}
+			this.parserWorker.onerror = (err) => {
+				logger.warn("[snowflake parse-worker] error, falling back", err)
+				try {
+					this.parserWorker?.terminate()
+				} catch {
+					// non-critical
+				}
+				this.parserWorker = null
+			}
+			return this.parserWorker
+		} catch (err) {
+			logger.warn("[snowflake parse-worker] init failed, using main thread", err)
+			return null
+		}
 	}
 
 	private snapshotConfig(): StoredConfig {
@@ -1525,138 +1638,12 @@ export function formatSnowflakeColumnType(dataTypeJson: string): string {
 	}
 }
 
-export function parseSnowflakeValue(
-	value: unknown,
-	col: { type: string; scale?: number },
-): unknown {
-	if (value === null || value === undefined) return null
-
-	const upper = col.type.toUpperCase()
-
-	switch (upper) {
-		case "FIXED":
-			return parseFixed(value, col.scale ?? 0)
-
-		case "NUMBER":
-		case "DECIMAL":
-		case "NUMERIC":
-			// Numeric with potential scale — treat like FIXED.
-			return parseFixed(value, col.scale ?? 0)
-
-		case "INT":
-		case "INTEGER":
-		case "BIGINT":
-		case "SMALLINT":
-		case "TINYINT":
-		case "BYTEINT":
-			return typeof value === "string" ? parseInt(value, 10) : value
-
-		case "FLOAT":
-		case "FLOAT4":
-		case "FLOAT8":
-		case "DOUBLE":
-		case "DOUBLE PRECISION":
-		case "REAL":
-			return typeof value === "string" ? parseFloat(value) : value
-
-		case "BOOLEAN":
-			return value === true || value === "true" || value === 1
-
-		case "DATE":
-			// Snowflake DATE is days-since-epoch (string) in jsonv2
-			if (typeof value === "string" && /^-?\d+$/.test(value)) {
-				const days = parseInt(value, 10)
-				return new Date(days * 86400000)
-			}
-			return value
-
-		case "TIME":
-			// "HH:MM:SS[.fraction]" — keep as string for formatters
-			return value
-
-		case "DATETIME":
-		case "TIMESTAMP":
-		case "TIMESTAMP_LTZ":
-		case "TIMESTAMP_NTZ":
-		case "TIMESTAMP_TZ":
-			return parseSnowflakeTimestamp(value, upper)
-
-		case "VARIANT":
-		case "OBJECT":
-		case "ARRAY":
-			if (typeof value === "string") {
-				try {
-					return JSON.parse(value)
-				} catch {
-					return value
-				}
-			}
-			return value
-
-		case "BINARY":
-			return value // hex string, leave as-is
-
-		default:
-			return value
-	}
-}
-
-/**
- * Parse FIXED/NUMBER/DECIMAL.
- * - scale 0 → integer
- * - scale >0 → string preserved (precision matters)
- */
-export function parseFixed(value: unknown, scale: number): unknown {
-	if (value === null || value === undefined) return null
-	if (scale > 0) {
-		// Keep as string; downstream formatters/UI handle display.
-		return typeof value === "string" ? value : String(value)
-	}
-	if (typeof value === "string") return parseInt(value, 10)
-	if (typeof value === "number") return value
-	return value
-}
-
-/**
- * Parse Snowflake timestamps.
- *
- * jsonv2 wire formats:
- *   TIMESTAMP_LTZ / TIMESTAMP_NTZ / TIMESTAMP / DATETIME:
- *     "epoch_seconds.fractional_nanoseconds"  e.g. "1701648000.000000000"
- *   TIMESTAMP_TZ:
- *     "epoch_seconds.fraction offset_minutes"  e.g. "1701648000.000000000 1440"
- *     where offset_minutes is minutes-since-midnight-UTC offset (1440 = +0:00,
- *     1500 = +1:00, 1380 = -1:00). Decoded as `(offset - 1440)` minutes.
- *
- * Returns a Date object. NTZ is intentionally still returned as a Date
- * representing the instant; downstream UI can format it as wall-clock.
- */
-export function parseSnowflakeTimestamp(value: unknown, type: string): Date {
-	if (typeof value !== "string") {
-		// May already be a Date or pre-parsed value — best effort
-		return value instanceof Date ? value : new Date(value as string)
-	}
-
-	let epochPart = value
-	if (type === "TIMESTAMP_TZ") {
-		const sp = value.indexOf(" ")
-		if (sp !== -1) {
-			epochPart = value.slice(0, sp)
-			// We don't apply the offset to the Date object — Date is always UTC
-			// internally. Callers that need wall-clock + offset rendering can
-			// pass through a DTO; for now the instant is correct.
-		}
-	}
-
-	// Snowflake jsonv2 epoch format: optional sign, digits, optional fraction.
-	// Anything else (e.g. ISO 8601) falls back to Date constructor parsing,
-	// which handles "2024-01-01T00:00:00Z" correctly.
-	if (!/^-?\d+(\.\d+)?$/.test(epochPart)) {
-		return new Date(value)
-	}
-	const num = parseFloat(epochPart)
-	if (!Number.isFinite(num)) {
-		return new Date(value)
-	}
-	return new Date(num * 1000)
-}
+// The actual implementations of parseSnowflakeValue, parseFixed, and
+// parseSnowflakeTimestamp now live in `snowflake-parse-shared.ts` so the
+// Web Worker can import them too. Re-export here so existing test suites
+// (snowflake-connector.test.ts, .edge.test.ts) keep their import paths.
+export {
+	parseSnowflakeValue,
+	parseFixed,
+	parseSnowflakeTimestamp,
+} from "./snowflake-parse-shared"

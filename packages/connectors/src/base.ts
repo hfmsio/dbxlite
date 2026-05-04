@@ -208,6 +208,51 @@ export interface BaseConnector {
 }
 
 /**
+ * Capability: connector can write Parquet files to a virtual filesystem
+ * that the host can read back via copyFileToBuffer. Implemented by DuckDB
+ * today; intentionally not on BaseConnector because Snowflake/BigQuery
+ * delegate to DuckDB for the actual file write.
+ *
+ * Consumers should narrow via isParquetExportCapable() rather than ad-hoc
+ * structural casts. That way:
+ *   - TypeScript catches missing methods at the consumer site
+ *   - Replacing the writer (e.g. with parquet-wasm) means changing one
+ *     class, not hunting `as { exportToParquet?: ... }` casts
+ */
+export interface ParquetExportCapable {
+  exportToParquet(
+    fileName: string,
+    rows: Row[],
+    columns: string[],
+    columnTypes?: { name: string; type: string }[],
+  ): Promise<void>
+
+  exportToParquetStreaming(
+    fileName: string,
+    dataGenerator: AsyncGenerator<{
+      rows: Row[]
+      done: boolean
+      totalRows?: number
+    }>,
+    columns: string[],
+    columnTypes?: { name: string; type: string }[],
+    onProgress?: (rowsProcessed: number, totalRows?: number) => void,
+  ): Promise<number>
+}
+
+export function isParquetExportCapable(c: unknown): c is ParquetExportCapable {
+  return (
+    !!c &&
+    typeof c === "object" &&
+    "exportToParquet" in c &&
+    typeof (c as { exportToParquet?: unknown }).exportToParquet === "function" &&
+    "exportToParquetStreaming" in c &&
+    typeof (c as { exportToParquetStreaming?: unknown })
+      .exportToParquetStreaming === "function"
+  )
+}
+
+/**
  * Extended connector interface for cloud data warehouses
  */
 export interface CloudConnector extends BaseConnector {

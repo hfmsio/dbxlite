@@ -202,14 +202,12 @@ export const useDataSourceStore = create<DataSourceStore>()(
 				return existing;
 			}
 
-			// Switch to DuckDB for remote file introspection
-			const currentConnector = queryService.getActiveConnectorType();
-			const needsRestore = currentConnector !== "duckdb";
-
-			if (needsRestore) {
-				queryService.setActiveConnector("duckdb");
-			}
-
+			// Remote-file introspection uses queryService.executeQueryOnConnector
+			// which targets DuckDB explicitly regardless of the active flag, so
+			// we don't need to swap-and-restore the global active connector here.
+			// (Old code did. It was a footgun: errors mid-introspection orphaned
+			// the swap; concurrent operations on Snowflake/BigQuery briefly
+			// went to DuckDB by accident.)
 			try {
 				const remoteFileGroup = parseRemoteURL(url);
 				const fileName =
@@ -247,10 +245,9 @@ export const useDataSourceStore = create<DataSourceStore>()(
 				}));
 
 				return finalDataSource;
-			} finally {
-				if (needsRestore) {
-					queryService.setActiveConnector(currentConnector);
-				}
+			} catch (err) {
+				// Re-throw — caller (App / DataSourceTree) handles the error toast
+				throw err;
 			}
 		},
 

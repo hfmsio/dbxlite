@@ -337,7 +337,14 @@ export class TypeMapper {
 		if (normalized === "uuid") return DataType.UUID;
 		if (normalized === "null") return DataType.NULL;
 
-		logger.warn(`Unknown DuckDB type: ${arrowTypeString}`);
+		// DuckDB's wire types are largely Arrow-shaped already, but newer
+		// or unusual types (Decimal128(p,s), Map, Union…) may not match
+		// the explicit cases above. Try Arrow fallthrough; demote logging
+		// to debug since the UNKNOWN fallback renders correctly.
+		const arrowFallthrough = TypeMapper.tryNormalizeArrowType(arrowTypeString);
+		if (arrowFallthrough !== null) return arrowFallthrough;
+
+		logger.debug(`Unknown DuckDB type: ${arrowTypeString}`);
 		return DataType.UNKNOWN;
 	}
 
@@ -399,7 +406,11 @@ export class TypeMapper {
 		// Spatial types
 		if (normalized === "GEOGRAPHY") return DataType.GEOGRAPHY;
 
-		logger.warn(`Unknown BigQuery type: ${bqType}`);
+		// Arrow fallthrough — same rationale as the Snowflake mapper.
+		const arrowFallthrough = TypeMapper.tryNormalizeArrowType(bqType);
+		if (arrowFallthrough !== null) return arrowFallthrough;
+
+		logger.debug(`Unknown BigQuery type: ${bqType}`);
 		return DataType.UNKNOWN;
 	}
 
@@ -479,8 +490,55 @@ export class TypeMapper {
 		if (normalized === "GEOGRAPHY") return DataType.GEOGRAPHY;
 		if (normalized === "GEOMETRY") return DataType.GEOGRAPHY;
 
-		logger.warn(`Unknown Snowflake type: ${sfType}`);
+		// Fallthrough for Arrow type names that may leak in when a Snowflake
+		// result is rendered through a path that picked up DuckDB/Arrow
+		// schema (e.g. a future cache layer). These also map cleanly so we
+		// don't spam the console with warnings on every cell render.
+		const arrowFallthrough = TypeMapper.tryNormalizeArrowType(sfType);
+		if (arrowFallthrough !== null) return arrowFallthrough;
+
+		// Demoted to debug: every render of an unknown column would otherwise
+		// flood the console. The fallback (DataType.UNKNOWN → default
+		// formatter, left-align) works fine for display.
+		logger.debug(`Unknown Snowflake type: ${sfType}`);
 		return DataType.UNKNOWN;
+	}
+
+	/**
+	 * Map common Apache Arrow type-name strings (as emitted by
+	 * apache-arrow's Type.toString) to our DataType enum. Returns null
+	 * when the input isn't an Arrow type so callers can fall through to
+	 * their connector-specific tables.
+	 *
+	 * Used as a final fallback in connector-specific normalizers because
+	 * Arrow types can leak into any rendering context (e.g. when a result
+	 * passes through DuckDB-WASM as a re-read step).
+	 */
+	private static tryNormalizeArrowType(t: string): DataType | null {
+		const lower = t.toLowerCase().trim();
+		if (lower.startsWith("utf8") || lower === "largeutf8")
+			return DataType.VARCHAR;
+		if (lower === "bool") return DataType.BOOLEAN;
+		if (
+			lower === "int8" ||
+			lower === "int16" ||
+			lower === "int32" ||
+			lower === "uint8" ||
+			lower === "uint16" ||
+			lower === "uint32"
+		)
+			return DataType.INTEGER;
+		if (lower === "int64" || lower === "uint64") return DataType.BIGINT;
+		if (lower === "float16" || lower === "float32") return DataType.FLOAT;
+		if (lower === "float64") return DataType.DOUBLE;
+		if (lower.startsWith("decimal")) return DataType.DECIMAL;
+		if (lower.startsWith("date32") || lower.startsWith("date64"))
+			return DataType.DATE;
+		if (lower.startsWith("time")) return DataType.TIME;
+		if (lower.startsWith("timestamp")) return DataType.TIMESTAMP;
+		if (lower === "binary" || lower === "largebinary") return DataType.BLOB;
+		if (lower === "null") return DataType.NULL;
+		return null;
 	}
 
 	/**

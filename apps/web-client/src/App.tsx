@@ -359,8 +359,18 @@ function AppContent() {
 		handleStopQueryRef.current = handleStopQuery;
 	}, [handleStopQuery]);
 
-	const { showLongRunningOverlay, queryElapsedSeconds } =
-		useQueryOverlay(isQueryExecuting);
+	// Keep the overlay alive while EITHER the imperative executing flag is set
+	// OR the active tab is still loading. Streaming-mode paths flip
+	// isQueryExecuting=false as soon as they hand off to PaginatedTable, but the
+	// data fetch (especially Snowflake partition fetches) keeps going for many
+	// more seconds. Without this OR, large Snowflake queries show the Stop Query
+	// button without any timer/progress.
+	// Inline `activeTab` lookup because the named const is declared further
+	// down; the equivalent expression mirrors that resolution.
+	const _overlayActiveTab = activeTabFromHook || tabs[0];
+	const { showLongRunningOverlay, queryElapsedSeconds } = useQueryOverlay(
+		isQueryExecuting || Boolean(_overlayActiveTab?.loading),
+	);
 
 	// Onboarding - runs sample queries for first-time users
 	const {

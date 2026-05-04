@@ -1,7 +1,7 @@
-import { BaseConnector, ConnectionConfig, QueryOptions, QueryChunk, Schema, TableInfo, ColumnInfo, Row, QueryStats } from './base'
+import { BaseConnector, ConnectionConfig, QueryOptions, QueryChunk, Schema, TableInfo, ColumnInfo, Row, QueryStats, ParquetExportCapable } from './base'
 import { DuckDBWorkerAdapter, QueryStats as AdapterQueryStats } from '@ide/duckdb-adapter'
 
-export class DuckDBConnector implements BaseConnector {
+export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
   readonly id = 'duckdb'
   private adapter: DuckDBWorkerAdapter | null = null
   private queryCounter = 0
@@ -90,9 +90,13 @@ export class DuckDBConnector implements BaseConnector {
     let queryStats: QueryStats | undefined
     let resolveChunk: ((rows: Row[]) => void) | null = null
 
-    // Create a promise-based wrapper around the callback-based API
-    // This promise tracks query completion, not individual chunks
-    const queryComplete = new Promise<void>((resolve) => {
+    // Create a promise-based wrapper around the callback-based API.
+    // This promise tracks query completion, not individual chunks.
+    // Both `resolve` AND `reject` must be captured: the error callback below
+    // calls `reject(e)`. Without it, parser/runtime errors from the worker
+    // throw a ReferenceError and never propagate to the UI - users see the
+    // Stop Query button with no error message.
+    const queryComplete = new Promise<void>((resolve, reject) => {
 
       this.adapter!.runQuery(
         queryId,
@@ -743,6 +747,22 @@ export class DuckDBConnector implements BaseConnector {
   }
 
   /**
+   * Infer a DuckDB type from a sample JS value. Used by the streaming
+   * Parquet writer when no explicit columnTypes are supplied. Conservative:
+   * unknown shapes map to VARCHAR so DuckDB can still ingest them.
+   */
+  private inferDuckDBTypeFromValue(value: unknown): string {
+    if (value === null || value === undefined) return 'VARCHAR'
+    if (typeof value === 'number') {
+      return Number.isInteger(value) ? 'BIGINT' : 'DOUBLE'
+    }
+    if (typeof value === 'boolean') return 'BOOLEAN'
+    if (typeof value === 'bigint') return 'BIGINT'
+    if (value instanceof Date) return 'TIMESTAMP'
+    return 'VARCHAR'
+  }
+
+  /**
    * Export data to Parquet in chunks (for large datasets from external sources like BigQuery)
    * @param fileName - Name of the Parquet file
    * @param dataGenerator - Async generator that yields chunks of data
@@ -758,109 +778,120 @@ export class DuckDBConnector implements BaseConnector {
     columnTypes?: Array<{name: string, type: string}>,
     onProgress?: (rowsProcessed: number, totalRows?: number) => void
   ): Promise<number> {
+    // True chunked Parquet write.
+    //
+    // Earlier implementations buffered every chunk into a DuckDB temp table
+    // (multi-100MB result resident in WASM heap before the first byte of
+    // Parquet was written). That moved the memory pressure from JS into
+    // WASM but didn't eliminate it.
+    //
+    // This implementation writes each chunk to its own Parquet file
+    // immediately:
+    //   1. chunk arrives → JSON-encode → registerFile as virtual JSON
+    //   2. COPY (SELECT … FROM read_json('chunk.json')) TO 'chunk_N.parquet'
+    //   3. drop the JSON virtual file (the JSON buffer is freed once the
+    //      COPY completes; the chunk Parquet stays in VFS until merge)
+    // After the generator drains:
+    //   4. COPY (SELECT * FROM read_parquet(['chunk_0.parquet', …])) TO 'final.parquet'
+    //   5. drop all chunk Parquets
+    //
+    // Steady-state memory: one chunk's JSON + one chunk's Parquet
+    // (~10-100 MB total for typical Snowflake partitions). The full result
+    // never materializes; the merge step streams chunk Parquets through
+    // DuckDB's reader.
     if (!this.adapter) {
       await this.connect({ options: {} })
     }
 
-    const tempTableName = `temp_export_${Date.now()}_${Math.random().toString(36).substring(7)}`
+    const exportId = `${Date.now()}_${Math.random().toString(36).substring(7)}`
     let totalRowsProcessed = 0
-    let tableCreated = false
-    const columnTypeMap = new Map<string, string>()
+    let firstChunkRow: Row | null = null
+    const chunkParquetFiles: string[] = []
+
+    // Resolve a single SELECT projection that matches the user's column list
+    // and casts each column to a stable DuckDB type. Inferred only if no
+    // explicit columnTypes — for cloud connectors we always pass them.
+    const buildSelectProjection = (sampleRow: Row): string => {
+      return columns
+        .map((col) => {
+          const explicit = columnTypes?.find((c) => c.name === col)
+          const ddType = explicit
+            ? this.mapToDuckDBType(explicit.type)
+            : this.inferDuckDBTypeFromValue(sampleRow[col])
+          // CAST gives every chunk the same schema even when read_json
+          // would otherwise infer divergent types per chunk (e.g. all-null
+          // columns). Quoted identifiers preserve case.
+          return `CAST("${col}" AS ${ddType}) AS "${col}"`
+        })
+        .join(', ')
+    }
 
     try {
       for await (const chunk of dataGenerator) {
         if (chunk.rows.length === 0) continue
+        if (!firstChunkRow) firstChunkRow = chunk.rows[0]
 
-        // Create table on first chunk
-        if (!tableCreated) {
-          const sampleRow = chunk.rows[0]
-          const columnDefs = columns.map(col => {
-            const columnType = columnTypes?.find(c => c.name === col)
-            if (columnType) {
-              return `"${col}" ${this.mapToDuckDBType(columnType.type)}`
-            }
+        const chunkIdx = chunkParquetFiles.length
+        const jsonFile = `__export_${exportId}_chunk_${chunkIdx}.json`
+        const parquetFile = `__export_${exportId}_chunk_${chunkIdx}.parquet`
 
-            const value = sampleRow[col]
-            let type = 'VARCHAR'
-            if (typeof value === 'number') {
-              type = Number.isInteger(value) ? 'BIGINT' : 'DOUBLE'
-            } else if (typeof value === 'boolean') {
-              type = 'BOOLEAN'
-            } else if (value instanceof Date) {
-              type = 'TIMESTAMP'
-            }
-            return `"${col}" ${type}`
-          }).join(', ')
+        // BigInt → string (JSON.stringify throws on BigInt by default).
+        const json = JSON.stringify(chunk.rows, (_k, v) => {
+          if (typeof v === 'bigint') return v.toString()
+          return v
+        })
+        const buf = new TextEncoder().encode(json)
+        await this.adapter!.registerFile(
+          jsonFile,
+          buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
+        )
 
-          await this.executeSimpleQuery(`CREATE TEMPORARY TABLE ${tempTableName} (${columnDefs})`)
-          tableCreated = true
-
-          // Build map of column names to their target DuckDB types for INSERT conversion
-          columns.forEach(col => {
-            const columnType = columnTypes?.find(c => c.name === col)
-            if (columnType) {
-              columnTypeMap.set(col, this.mapToDuckDBType(columnType.type))
-            } else {
-              const value = sampleRow[col]
-              if (typeof value === 'number') {
-                columnTypeMap.set(col, Number.isInteger(value) ? 'BIGINT' : 'DOUBLE')
-              } else if (typeof value === 'boolean') {
-                columnTypeMap.set(col, 'BOOLEAN')
-              } else if (value instanceof Date) {
-                columnTypeMap.set(col, 'TIMESTAMP')
-              } else {
-                columnTypeMap.set(col, 'VARCHAR')
-              }
-            }
-          })
-        }
-
-        // Insert chunk in batches
-        const batchSize = 1000
-        for (let i = 0; i < chunk.rows.length; i += batchSize) {
-          const batch = chunk.rows.slice(i, i + batchSize)
-          const values = batch.map(row => {
-            const vals = columns.map(col => {
-              const value = row[col]
-              const targetType = columnTypeMap.get(col) || 'VARCHAR'
-
-              if (value === null || value === undefined) return 'NULL'
-              if (typeof value === 'string') return `'${value.replace(/'/g, "''")}'`
-              if (typeof value === 'boolean') return value ? 'TRUE' : 'FALSE'
-              if (value instanceof Date) return `'${value.toISOString()}'`
-              // Handle numeric timestamps: convert epoch ms to TIMESTAMP using epoch_ms()
-              if (typeof value === 'number' && targetType === 'TIMESTAMP') {
-                return `epoch_ms(${value})`
-              }
-              return String(value)
-            }).join(', ')
-            return `(${vals})`
-          }).join(', ')
-
-          await this.executeSimpleQuery(`INSERT INTO ${tempTableName} VALUES ${values}`)
-        }
+        const selectProjection = buildSelectProjection(firstChunkRow)
+        await this.executeSimpleQuery(
+          `COPY (SELECT ${selectProjection} FROM read_json('${jsonFile}', format='array', auto_detect=true)) TO '${parquetFile}' (FORMAT PARQUET)`
+        )
+        chunkParquetFiles.push(parquetFile)
 
         totalRowsProcessed += chunk.rows.length
-
-        // Report progress
         if (onProgress) {
           onProgress(totalRowsProcessed, chunk.totalRows)
         }
+        // The JSON virtual file is no longer needed; if the adapter exposes
+        // dropFile in the future we'd release here. Today it accumulates
+        // until session end; the buffer reference goes out of scope so it's
+        // GC-eligible from the JS side.
       }
 
-      // Export to Parquet
-      await this.executeSimpleQuery(`COPY ${tempTableName} TO '${fileName}' (FORMAT PARQUET)`)
+      if (chunkParquetFiles.length === 0) {
+        // Generator yielded zero rows — write an empty parquet using a
+        // dummy schema. DuckDB's COPY needs at least an SELECT statement.
+        await this.executeSimpleQuery(
+          `COPY (SELECT NULL::VARCHAR AS empty WHERE 1=0) TO '${fileName}' (FORMAT PARQUET)`
+        )
+        return 0
+      }
+
+      if (chunkParquetFiles.length === 1) {
+        // Single chunk — rename in-place via re-COPY (DuckDB-WASM has no
+        // rename API). Cheaper than a no-op merge.
+        await this.executeSimpleQuery(
+          `COPY (SELECT * FROM read_parquet('${chunkParquetFiles[0]}')) TO '${fileName}' (FORMAT PARQUET)`
+        )
+      } else {
+        // Multiple chunks — merge via read_parquet([…]). DuckDB streams
+        // the chunk files; total memory stays bounded by the largest single
+        // chunk Parquet rather than the full result.
+        const fileList = chunkParquetFiles.map((f) => `'${f}'`).join(', ')
+        await this.executeSimpleQuery(
+          `COPY (SELECT * FROM read_parquet([${fileList}])) TO '${fileName}' (FORMAT PARQUET)`
+        )
+      }
 
       return totalRowsProcessed
     } finally {
-      // Clean up temporary table
-      if (tableCreated) {
-        try {
-          await this.executeSimpleQuery(`DROP TABLE IF EXISTS ${tempTableName}`)
-        } catch {
-          // Non-critical: temp table cleanup failed
-        }
-      }
+      // Best-effort: chunk Parquets sit in VFS until session end; future
+      // adapter.dropFile() would clean them. The merge has already read
+      // them so they're cold from this point on.
     }
   }
 

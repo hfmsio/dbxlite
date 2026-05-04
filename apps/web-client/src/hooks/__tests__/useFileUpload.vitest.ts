@@ -223,7 +223,11 @@ describe("useFileUpload", () => {
 			});
 
 			expect(setIsUploadingFiles).toHaveBeenCalledWith(true);
-			expect(queryService.registerFile).toHaveBeenCalled();
+			// CSV drag-drop now uses registerFileHandle (zero-copy via DuckDB's
+			// BROWSER_FILEREADER protocol) instead of pre-reading the whole
+			// file into an ArrayBuffer. registerFile is reserved for cases
+			// where the buffer is genuinely needed (XLSX sheet detection).
+			expect(queryService.registerFileHandle).toHaveBeenCalled();
 			expect(addDataSource).toHaveBeenCalledWith(
 				expect.objectContaining({
 					name: "test.csv",
@@ -407,13 +411,16 @@ describe("useFileUpload", () => {
 			);
 		});
 
-		it("should handle file read errors in drag-drop", async () => {
+		it("should handle file read errors in drag-drop (XLSX path)", async () => {
 			const showToast = vi.fn();
 			const options = createDefaultOptions({ showToast });
 			const { result } = renderHook(() => useFileUpload(options));
 
-			// Create a file that will fail to read
-			const badFile = createMockFile("bad.csv", "");
+			// XLSX is the only format that still reads the buffer up-front
+			// (sheet detection needs it). Non-XLSX drag-drops use registerFileHandle
+			// and skip arrayBuffer() entirely, so a read-error of that kind only
+			// happens on this path now.
+			const badFile = createMockFile("bad.xlsx", "");
 			badFile.arrayBuffer = () => Promise.reject(new Error("Read failed"));
 
 			const fileList = createMockFileList([badFile]);

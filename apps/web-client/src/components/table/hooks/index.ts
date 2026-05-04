@@ -12,9 +12,8 @@ export { useTableScroll } from "./useTableScroll";
 export type { CellPosition } from "./useTableSelection";
 export { useTableSelection } from "./useTableSelection";
 
-// ResultPane-specific hooks
+// Pagination / sorting / column-resize: still used by other hooks
 export type { SortDirection } from "./useSorting";
 export { useSorting } from "./useSorting";
 export { usePagination } from "./usePagination";
-export { useResultExport } from "./useResultExport";
 export { useResultColumnResize } from "./useResultColumnResize";

@@ -1,0 +1,96 @@
+/**
+ * DuckDB-COPY export strategy.
+ *
+ * Uses `COPY (sql) TO 'file' (FORMAT X)` against the DuckDB-WASM engine.
+ * Fastest path because everything runs inside the WASM engine — no JS-
+ * level row materialization, no Parquet round-trip through JS objects.
+ *
+ * Applies when the active connector is DuckDB and the user's SQL is
+ * available. For Snowflake/BigQuery the COPY-subquery syntax is rejected
+ * so this strategy steps aside and the cloud-streaming strategy takes over.
+ */
+import { queryService } from "../../../services/streaming-query-service";
+import { createLogger } from "../../../utils/logger";
+import {
+	formatFileSize,
+	getDuckDBFormatOption,
+	saveToFileHandle,
+	showExportFilePicker,
+} from "../exportUtils";
+import type { ExportContext, ExportResult, ExportStrategy } from "./types";
+
+const logger = createLogger("export:duckdbCopy");
+
+export const duckdbCopyStrategy: ExportStrategy = {
+	name: "duckdb-copy",
+
+	canHandle(ctx: ExportContext): boolean {
+		return (
+			!!ctx.sql && queryService.getActiveConnectorType() === "duckdb"
+		);
+	},
+
+	async execute(ctx: ExportContext): Promise<ExportResult> {
+		const cleanSql = (ctx.sql ?? "").trim().replace(/;+$/, "");
+
+		ctx.onProgress({
+			currentStage: "Step 1/3: Choose where to save...",
+			currentStep: 1,
+			totalSteps: 3,
+		});
+		const fileHandle = await showExportFilePicker(ctx.fileName, ctx.format);
+
+		try {
+			const formatOption = getDuckDBFormatOption(ctx.format);
+			ctx.onProgress({
+				currentStage: `Step 2/3: Exporting to ${ctx.format.toUpperCase()} (DuckDB processing)...`,
+				currentStep: 2,
+				totalSteps: 3,
+			});
+
+			await queryService.executeQuery(
+				`COPY (${cleanSql}) TO '${ctx.fileName}' (FORMAT ${formatOption})`,
+				ctx.signal,
+			);
+
+			if (ctx.signal.aborted) throw new Error("Export cancelled by user");
+
+			ctx.onProgress({
+				currentStage: "Step 3/3: Downloading file...",
+				currentStep: 3,
+				totalSteps: 3,
+			});
+			const buffer = await queryService.copyFileToBuffer(ctx.fileName);
+			if (ctx.signal.aborted) throw new Error("Export cancelled by user");
+
+			const fileSizeStr = formatFileSize(buffer.byteLength);
+
+			if (fileHandle) {
+				await saveToFileHandle(fileHandle, buffer);
+				return {
+					fileHandleName: fileHandle.name,
+					rowsExported: 0, // DuckDB-COPY doesn't surface row count cheaply
+					fileSizeStr,
+				};
+			}
+			// File System Access API not available — fall back to download
+			const { downloadAsBlob } = await import("../exportUtils");
+			downloadAsBlob(buffer, ctx.fileName, mimeFor(ctx.format));
+			return {
+				fileHandleName: ctx.fileName,
+				rowsExported: 0,
+				fileSizeStr,
+			};
+		} finally {
+			queryService.dropFile(ctx.fileName).catch((e) => {
+				logger.warn("Failed to drop export file:", e);
+			});
+		}
+	},
+};
+
+function mimeFor(format: ExportContext["format"]): string {
+	if (format === "csv") return "text/csv";
+	if (format === "json") return "application/json";
+	return "application/octet-stream";
+}

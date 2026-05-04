@@ -3,6 +3,8 @@
  * These are pure/simple utilities that can be safely extracted
  */
 
+export type ExportFormat = "csv" | "json" | "parquet";
+
 /**
  * Get MIME type for export format
  */

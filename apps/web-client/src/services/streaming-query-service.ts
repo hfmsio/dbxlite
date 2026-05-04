@@ -856,6 +856,24 @@ class StreamingQueryService {
 	}
 
 	// Utility methods
+
+	/**
+	 * Set the active connector. This is the user's "current selection" — the
+	 * connector the editor's Run button targets, the catalog explorer
+	 * displays, etc. It is NOT a request-scoped scope.
+	 *
+	 * **Do NOT** use this in a try/finally swap-and-restore pattern. Errors,
+	 * hot-reloads, navigations, and concurrent operations all orphan the
+	 * restore and leave the global pointing at the wrong connector. Two
+	 * production regressions in v0.4 came from exactly this anti-pattern.
+	 *
+	 * If you need to run an operation against a specific connector
+	 * regardless of the active selection, use:
+	 *   - `queryService.executeQueryOnConnector(type, sql, signal)`
+	 *   - `queryService.getConnector(type)` (then call methods on it)
+	 *   - the strategy registry under `components/table/exporters/` for
+	 *     export work
+	 */
 	setActiveConnector(type: ConnectorType) {
 		if (!this.connectors.has(type)) {
 			throw new Error(`Connector ${type} not initialized`);
