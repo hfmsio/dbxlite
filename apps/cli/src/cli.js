@@ -165,15 +165,36 @@ console.log(`Assets directory: ${ASSETS_DIR}`);
 // index.html so the React router can handle it (mirrors the Vercel rewrite).
 const ASSET_PREFIXES = ['/assets/', '/duckdb/', '/sql-templates/', '/logo/', '/screenshots/'];
 const ASSET_FILES = ['/robots.txt', '/sitemap.xml', '/favicon.ico'];
+// API prefixes never fall back to index.html — they're CORS-proxy paths
+// (Snowflake, BigQuery) that exist in the Vercel deployment but not here.
+// Returning index.html for these breaks the connector with "Unexpected
+// token '<'" when it tries to JSON.parse the HTML response.
+const API_PREFIXES = ['/api/'];
 
 function isAssetPath(urlPath) {
   return ASSET_PREFIXES.some(p => urlPath.startsWith(p)) || ASSET_FILES.includes(urlPath);
+}
+
+function isApiPath(urlPath) {
+  return API_PREFIXES.some(p => urlPath.startsWith(p));
 }
 
 // Create asset server
 const server = createServer((req, res) => {
   let urlPath = req.url.split('?')[0];
   if (urlPath === '/') urlPath = '/index.html';
+
+  // Cloud API proxy paths (Snowflake / BigQuery CORS proxies) only exist in
+  // the Vercel deployment. Locally we 501 with a JSON body so the connector
+  // can show a clear error instead of choking on HTML.
+  if (isApiPath(urlPath)) {
+    res.writeHead(501, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: 'cloud_proxy_unavailable',
+      message: `${urlPath} requires the dbxlite-cloud proxy. Use sql.dbxlite.com for Snowflake/BigQuery, or run dbxlite locally only for DuckDB.`,
+    }));
+    return;
+  }
 
   let filePath = join(ASSETS_DIR, urlPath);
 

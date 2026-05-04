@@ -1,6 +1,6 @@
 {
   "name": "dbxlite-ui",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Local UI for DuckDB - replaces duckdb -ui with dbxlite",
   "homepage": "https://github.com/hfmsio/dbxlite",
   "bugs": "https://github.com/hfmsio/dbxlite/issues",
