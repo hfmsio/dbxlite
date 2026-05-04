@@ -3,7 +3,7 @@ import { Logo, Wordmark } from "../Logo";
 
 // Hard-coded to match the workspace package.json. Kept here rather than
 // imported because the package.json import path differs across vite/test.
-const VERSION = "0.3.0";
+const VERSION = "0.3.6";
 const REPO_URL = "https://github.com/hfmsio/dbxlite";
 
 const linkStyle: React.CSSProperties = {
