@@ -73,7 +73,19 @@ export class BrowserTransport implements RequestTransport {
 				const body = (await cloned.json()) as { error?: string }
 				if (body?.error === "cloud_proxy_unavailable") {
 					throw new CloudProxyUnavailableError(
-						"Cloud connector requires the dbxlite-cloud proxy. Use sql.dbxlite.com or self-host dbxlite-cloud.",
+						[
+							"Snowflake and BigQuery need a CORS proxy that this npm build doesn't ship with.",
+							"DuckDB and local files work fine here. To use cloud connectors, pick one:",
+							"",
+							"1. Hosted (no install): https://sql.dbxlite.com",
+							"",
+							"2. Run dev locally (Vite handles the proxy):",
+							"     git clone https://github.com/hfmsio/dbxlite",
+							"     cd dbxlite && pnpm install && pnpm dev",
+							"     # then open http://localhost:5174",
+							"",
+							"3. Self-host the proxy (dbxlite-cloud repo, Vercel Edge Functions).",
+						].join("\n"),
 					)
 				}
 			} catch (e) {
