@@ -18,6 +18,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { CloudProxyUnavailableError } from "@ide/connectors"
 import type { CatalogProvider, ComputeStatus, ComputeStatusState } from "../types"
 
 interface ComputeStatusBadgeProps {
@@ -75,15 +76,29 @@ export default function ComputeStatusBadge({
 	const [resuming, setResuming] = useState(false)
 	const quietUntilRef = useRef<number>(0)
 	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+	// Permanent disable when the cloud proxy isn't deployed (npx dbxlite-ui
+	// or self-hosted without dbxlite-cloud). One failed call is enough -
+	// no point polling forever.
+	const proxyDownRef = useRef(false)
 
 	const fetchStatus = useCallback(async () => {
 		if (!provider.getComputeStatus) return
+		if (proxyDownRef.current) return
 		if (Date.now() < quietUntilRef.current) return
 		try {
 			const next = await provider.getComputeStatus(name)
 			setStatus(next)
 			onStatusChange?.(next)
-		} catch {
+		} catch (err) {
+			if (err instanceof CloudProxyUnavailableError) {
+				proxyDownRef.current = true
+				if (intervalRef.current != null) {
+					clearInterval(intervalRef.current)
+					intervalRef.current = null
+				}
+				setStatus({ state: "unknown", lastChecked: new Date() })
+				return
+			}
 			// Failure is non-fatal — show UNKNOWN; permission errors common
 			setStatus({ state: "unknown", lastChecked: new Date() })
 		}

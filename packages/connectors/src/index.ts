@@ -23,7 +23,7 @@ export { SnowflakeConnector } from './snowflake-connector'
 export type { SnowflakeConnectorConfig } from './snowflake-connector'
 
 // Export transport seam (used by Snowflake; will be adopted by BigQuery in Phase 3b)
-export { BrowserTransport } from './transport'
+export { BrowserTransport, CloudProxyUnavailableError } from './transport'
 export type { RequestTransport, BrowserTransportOptions } from './transport'
 
 // Export Snowflake helpers

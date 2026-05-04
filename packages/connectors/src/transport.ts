@@ -12,6 +12,21 @@ export interface RequestTransport {
 	request(url: string, init?: RequestInit): Promise<Response>
 }
 
+/**
+ * Thrown when a `/api/*` proxy path returns 501 with the
+ * `cloud_proxy_unavailable` body — i.e. we're running on a host (e.g.
+ * `npx dbxlite-ui`) that doesn't have the dbxlite-cloud Edge Functions
+ * deployed. Callers (catalog provider, ComputeStatusBadge) check via
+ * `instanceof` so they can stop polling and surface a single banner
+ * instead of a parse error every 30 seconds.
+ */
+export class CloudProxyUnavailableError extends Error {
+	constructor(message: string) {
+		super(message)
+		this.name = "CloudProxyUnavailableError"
+	}
+}
+
 export interface BrowserTransportOptions {
 	/**
 	 * If true (default for localhost), Snowflake REST URLs are rewritten
@@ -45,7 +60,28 @@ export class BrowserTransport implements RequestTransport {
 
 	async request(url: string, init?: RequestInit): Promise<Response> {
 		const finalUrl = this.useSnowflakeProxy ? this.maybeProxyUrl(url) : url
-		return fetch(finalUrl, init)
+		const res = await fetch(finalUrl, init)
+		// 501 + cloud_proxy_unavailable means we hit the npx CLI server (or
+		// any non-dbxlite-cloud host) where the proxy doesn't exist. Surface
+		// as typed error so the UI can stop retrying.
+		if (
+			res.status === 501 &&
+			res.headers.get("content-type")?.includes("application/json")
+		) {
+			const cloned = res.clone()
+			try {
+				const body = (await cloned.json()) as { error?: string }
+				if (body?.error === "cloud_proxy_unavailable") {
+					throw new CloudProxyUnavailableError(
+						"Cloud connector requires the dbxlite-cloud proxy. Use sql.dbxlite.com or self-host dbxlite-cloud.",
+					)
+				}
+			} catch (e) {
+				if (e instanceof CloudProxyUnavailableError) throw e
+				// non-JSON or shape mismatch — fall through to return the response
+			}
+		}
+		return res
 	}
 
 	/**

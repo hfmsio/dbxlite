@@ -553,9 +553,23 @@ export default function CatalogExplorer({
 							</NodeRow>
 						)}
 						{catalogs.status === "error" && (
-							<NodeRow indent={0} muted>
-								⚠️ {catalogs.error}
-							</NodeRow>
+							<div
+								style={{
+									padding: "8px 12px",
+									margin: "4px 8px",
+									fontSize: 11,
+									lineHeight: 1.5,
+									color: "var(--text-muted)",
+									background: "rgba(245, 158, 11, 0.08)",
+									border: "1px solid rgba(245, 158, 11, 0.25)",
+									borderRadius: 4,
+									whiteSpace: "normal",
+									wordBreak: "break-word",
+								}}
+							>
+								<span style={{ marginRight: 6 }} aria-hidden>⚠️</span>
+								{catalogs.error}
+							</div>
 						)}
 						{catalogs.status === "loaded" &&
 							catalogs.data.length === 0 && (
