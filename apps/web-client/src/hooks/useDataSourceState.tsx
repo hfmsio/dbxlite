@@ -571,8 +571,13 @@ export function useDataSourceState({
 					iconColor: "#6b7280", // Neutral gray for section icon
 					isCollapsed: collapsedSections.has("session-tables"),
 					nodes: filteredLocalDbNodes,
-					// Legend hint for temp tables
-					hint: '<span style="color:#f59e0b">●</span> temp',
+					// Legend hint for temp tables — JSX, not an HTML string,
+					// so the renderer doesn't need dangerouslySetInnerHTML.
+					hint: (
+						<>
+							<span style={{ color: "#f59e0b" }}>●</span> temp
+						</>
+					),
 					className: "session-tables-section",
 					actions: [
 						{

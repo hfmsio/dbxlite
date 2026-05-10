@@ -1,10 +1,36 @@
-import {
-	getCachedSchema,
-	makeCacheKey,
-	setCachedSchema,
-} from "@ide/schema-cache";
 import type { DataSource } from "../types/data-source";
 import { createLogger } from "../utils/logger";
+
+// Lightweight in-memory schema cache. Was @ide/schema-cache (an
+// over-engineered standalone package); the only consumer was
+// getSchemaStub here. The shared in-memory cache is sufficient and
+// removes the package dependency.
+type SchemaForCompletionLike = unknown;
+interface CacheEntry {
+	value: SchemaForCompletionLike;
+	expiresAt: number;
+}
+const schemaCache = new Map<string, CacheEntry>();
+
+function makeCacheKey(...parts: (string | number)[]): string {
+	return parts.join(":");
+}
+async function getCachedSchema(key: string): Promise<SchemaForCompletionLike | null> {
+	const entry = schemaCache.get(key);
+	if (!entry) return null;
+	if (Date.now() > entry.expiresAt) {
+		schemaCache.delete(key);
+		return null;
+	}
+	return entry.value;
+}
+async function setCachedSchema(
+	key: string,
+	value: SchemaForCompletionLike,
+	ttlMs: number,
+): Promise<void> {
+	schemaCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+}
 
 const logger = createLogger("SchemaService");
 

@@ -217,5 +217,33 @@ SELECT * FROM cte;`;
 			const result = extractQueryAtCursor(fullText, 20);
 			expect(result).toBe("SELECT * FROM users");
 		});
+
+		test("should not split on semicolons inside line comments", () => {
+			// The bug: previously this split on the `;` inside the comment and
+			// fed `order 104 drops out (no user).` to the engine as its own
+			// statement. The /examples Joins query hit this exact shape.
+			const fullText = `-- Carol and Dave drop out (no orders); order 104 drops out (no user).
+SELECT 1;`;
+			const result = extractQueryAtCursor(fullText, fullText.length);
+			expect(result).toBe("SELECT 1");
+		});
+
+		test("should not split on semicolons inside block comments", () => {
+			const fullText = `/* multi; statement; comment */ SELECT 1;`;
+			const result = extractQueryAtCursor(fullText, 5);
+			expect(result).toBe("SELECT 1");
+		});
+
+		test("should not split on semicolons inside string literals", () => {
+			const fullText = `SELECT 'a;b;c' AS s;`;
+			const result = extractQueryAtCursor(fullText, 5);
+			expect(result).toBe("SELECT 'a;b;c' AS s");
+		});
+
+		test("should handle quoted identifier with semicolon", () => {
+			const fullText = `SELECT 1 AS "weird;name";`;
+			const result = extractQueryAtCursor(fullText, 5);
+			expect(result).toBe(`SELECT 1 AS "weird;name"`);
+		});
 	});
 });

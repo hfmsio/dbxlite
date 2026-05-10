@@ -22,7 +22,6 @@ import React, {
 	useRef,
 	useState,
 } from "react";
-import DOMPurify from "dompurify";
 import type { TreeSection, UnifiedTreeNode } from "../types/tree";
 import { formatBytes } from "../utils/treeConverters";
 import {
@@ -963,7 +962,9 @@ function UnifiedTreeView({
 							</span>
 						)}
 
-						{/* Section Hint (subtle legend) */}
+						{/* Section Hint (subtle legend) — accepts a string or
+						    React node. Static config or programmatically-built
+						    JSX only; do not pass HTML strings. */}
 						{section.hint && (
 							<span
 								className="tree-section-hint"
@@ -973,9 +974,9 @@ function UnifiedTreeView({
 									marginLeft: "8px",
 									opacity: 0.8,
 								}}
-								// biome-ignore lint/security/noDangerouslySetInnerHtml: DOMPurify sanitizes the content
-								dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(section.hint) }}
-							/>
+							>
+								{section.hint}
+							</span>
 						)}
 
 						{/* Node Count and Size */}

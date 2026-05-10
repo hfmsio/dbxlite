@@ -358,8 +358,29 @@ export function useQueryExecution({
 					return;
 				}
 
-			// Check BigQuery cost before execution
-			const shouldProceed = await checkCost(sql);
+			// Check BigQuery cost before execution. Pass the same abort
+			// signal so a Stop Query during the dialog wait propagates
+			// down (rejects with AbortError; we treat that the same as
+			// "user cancelled").
+			let shouldProceed: boolean;
+			try {
+				shouldProceed = await checkCost(
+					sql,
+					abortControllerRef.current?.signal,
+				);
+			} catch (err) {
+				if (err instanceof Error && err.name === "AbortError") {
+					updateTab(activeTabId, {
+						loading: false,
+						error: null,
+						result: null,
+					});
+					setIsQueryExecuting(false);
+					showToast("Query cancelled", "info", 2000);
+					return;
+				}
+				throw err;
+			}
 			if (!shouldProceed) {
 				// User cancelled due to high cost
 				updateTab(activeTabId, {
@@ -725,6 +746,18 @@ export function useQueryExecution({
 		isConnectorAvailable,
 		onSchemaChanged,
 		onDatabaseSchemaChanged,
+		// Previously missing — handleRunQuery captured first-render
+		// closures of these callbacks even when App.tsx supplied
+		// re-bound versions. Now that App.tsx wraps each in
+		// useCallback (see App.tsx:272-369), adding them here keeps
+		// the latest stable refs in scope.
+		onDatabaseAttached,
+		onDatabaseDetached,
+		// Cost-warning hook also needs to be a dep — it now changes
+		// when warnThreshold or showToast change (post v0.3.8 abort
+		// rewrite); the previous omission produced stale-closure bugs
+		// on threshold edits.
+		checkCost,
 	]);
 
 	return {

@@ -1,7 +1,9 @@
 /**
- * Sync test: the connector package duplicates a few OAuth callback constants
- * (so it remains app-agnostic). This test asserts the values stay in sync —
- * if you rename one, the other will fail this test on CI.
+ * Value-pinning test: catches an accidental rename that would break
+ * cross-tab OAuth callbacks. Constants now live in a single file
+ * (packages/connectors/src/oauth-constants.ts); this test imports them
+ * via the re-export at apps/web-client/src/utils/oauth-constants.ts to
+ * confirm the package + the historical app import path agree.
  */
 import { describe, expect, it } from "vitest"
 import {
@@ -12,9 +14,7 @@ import {
 	SNOWFLAKE_OAUTH_AUTO_CONNECT_KEY,
 } from "../utils/oauth-constants"
 
-// Mirror constants — these MUST equal the values hardcoded inside
-// packages/connectors/src/snowflake-connector.ts
-describe("Snowflake OAuth constants are in sync between connector and app", () => {
+describe("Snowflake OAuth constants pin to known values", () => {
 	it("response localStorage key", () => {
 		expect(SNOWFLAKE_OAUTH_RESPONSE_KEY).toBe("snowflake_oauth_response")
 	})

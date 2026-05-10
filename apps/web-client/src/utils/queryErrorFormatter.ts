@@ -14,6 +14,15 @@ interface FormattedQueryError {
 }
 
 /**
+ * Hint appended to DuckDB parser/unknown-function errors. The most
+ * common cause of these on /examples is the user clicking a BigQuery
+ * or Snowflake example with the active connector still on DuckDB. We
+ * don't try to detect the foreign dialect; the prompt is enough.
+ */
+const ENGINE_MISMATCH_HINT =
+	"\n\n💡 Tip: check that the active connector matches your query's dialect. If this query was written for BigQuery or Snowflake, switch the connector in Settings → Connections.";
+
+/**
  * Formats query execution errors into user-friendly messages with actionable solutions
  */
 export function formatQueryError(ctx: QueryErrorContext): FormattedQueryError {
@@ -22,34 +31,29 @@ export function formatQueryError(ctx: QueryErrorContext): FormattedQueryError {
 	let userMsg = errorMessage || "Query execution failed";
 	let catalogName: string | undefined;
 
-	// DuckDB-specific catalog error
+	// DuckDB-specific catalog error (database not attached). Scoped to the
+	// actual `Catalog "name" does not exist` shape so it doesn't swallow
+	// the unrelated `Catalog Error: Scalar Function ... does not exist`
+	// and `Catalog Error: Type with name ... does not exist` cases, which
+	// are dialect-mismatch indicators handled at the bottom of this fn.
+	const catalogMatch = errorMessage.match(
+		/Catalog ["']?(\w+)["']? does not exist/i,
+	);
 	if (
 		connectorType === "duckdb" &&
-		errorMessage.includes("Catalog") &&
-		errorMessage.includes("does not exist")
+		catalogMatch &&
+		!errorMessage.includes("Scalar Function") &&
+		!errorMessage.includes("Function with name") &&
+		!errorMessage.includes("Type with name")
 	) {
-		const catalogMatch = errorMessage.match(
-			/Catalog ["']?(\w+)["']? does not exist/i,
-		);
-		catalogName = catalogMatch ? catalogMatch[1] : undefined;
-
-		if (catalogName) {
-			userMsg =
-				`❌ Database catalog "${catalogName}" is not attached!\n\n` +
-				`The query references a catalog/database that isn't loaded.\n\n` +
-				`💡 Solutions:\n` +
-				`1. Re-upload the ${catalogName}.duckdb file (will auto-attach)\n` +
-				`2. Manual: Run this first → ATTACH '${catalogName}.duckdb' AS ${catalogName};\n` +
-				`3. Or remove "${catalogName}." prefix from your query if not needed`;
-		} else {
-			userMsg =
-				`❌ Database catalog not found!\n\n` +
-				`The query references a catalog/database that isn't loaded.\n\n` +
-				`💡 Solutions:\n` +
-				`1. Re-upload the .duckdb file (will auto-attach)\n` +
-				`2. Or check the catalog name in your query`;
-		}
-
+		catalogName = catalogMatch[1];
+		userMsg =
+			`❌ Database catalog "${catalogName}" is not attached!\n\n` +
+			`The query references a catalog/database that isn't loaded.\n\n` +
+			`💡 Solutions:\n` +
+			`1. Re-upload the ${catalogName}.duckdb file (will auto-attach)\n` +
+			`2. Manual: Run this first → ATTACH '${catalogName}.duckdb' AS ${catalogName};\n` +
+			`3. Or remove "${catalogName}." prefix from your query if not needed`;
 		return { userMessage: userMsg, catalogName };
 	}
 
@@ -179,6 +183,19 @@ export function formatQueryError(ctx: QueryErrorContext): FormattedQueryError {
 	if (errorMessage.includes("maximum call stack")) {
 		userMsg = `Query too large: This query processes too much data. Try limiting results with LIMIT clause.`;
 		return { userMessage: userMsg };
+	}
+
+	// Fall-through hint for DuckDB parser / unknown-function / unknown-type
+	// errors: most often the user has loaded a BigQuery or Snowflake example
+	// while DuckDB is the active connector. Append a generic "check the
+	// engine" prompt rather than trying to detect the foreign dialect.
+	if (
+		connectorType === "duckdb" &&
+		(errorMessage.includes("Parser Error") ||
+			errorMessage.includes("Scalar Function") ||
+			errorMessage.includes("Type with name"))
+	) {
+		userMsg = `${userMsg}${ENGINE_MISMATCH_HINT}`;
 	}
 
 	return { userMessage: userMsg };

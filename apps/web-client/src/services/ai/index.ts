@@ -16,7 +16,7 @@ export {
 	getDefaultProvider,
 	getProvider,
 } from "./provider-registry";
-export { buildSystemPrompt } from "./system-prompt";
+export { buildSystemPrompt, scrubCredentials } from "./system-prompt";
 export type {
 	AIMessage,
 	AIModelInfo,

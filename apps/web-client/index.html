@@ -7,6 +7,30 @@
     <meta name="description" content="Lightweight browser-native SQL utility powered by DuckDB. No install, just query. Run SQL queries entirely in your browser with zero setup.">
     <meta name="keywords" content="sql, duckdb, browser, database, query, data analysis, wasm, browser-native, no install">
 
+    <!--
+      Content Security Policy. Always-on baseline; HTTP-header CSP from
+      cli.js / vercel.json takes precedence when present and adds
+      frame-ancestors (which is meta-incompatible).
+        - 'wasm-unsafe-eval' is required by DuckDB-WASM
+        - connect-src https: is required for DuckDB httpfs (queries against
+          arbitrary remote CSV/Parquet URLs); known endpoints listed
+          explicitly for documentation even though https: subsumes them
+        - blob: for DuckDB worker module URLs
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self' 'wasm-unsafe-eval';
+      style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+      font-src 'self' data: https://fonts.gstatic.com;
+      img-src 'self' data: blob:;
+      connect-src 'self' https: blob: data:;
+      worker-src 'self' blob:;
+      object-src 'none';
+      base-uri 'self';
+      form-action 'self';
+    ">
+    <meta name="referrer" content="no-referrer">
+
     <!-- Google Fonts for editor font options -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

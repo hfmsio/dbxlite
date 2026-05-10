@@ -1,13 +1,20 @@
 import { describe, test, expect, vi, beforeEach } from 'vitest'
-import { EncryptionManager, CredentialStore } from '../index'
+import { EncryptionManager } from '../index'
+// CredentialStore is no longer exported from the package barrel
+// (would mislead app code into picking the plaintext adapter). The
+// test still exercises the localStorage byte-level behaviour by
+// importing from the internal file directly.
+import { CredentialStore } from '../_credential-store-internal'
 
-// Mock argon2-browser
+// Mock argon2-browser. Capture the params it's called with so we can
+// assert OWASP minimums (t=3, m=65536, p=1).
+const argon2HashSpy = vi.fn(async ({ pass: _pass, salt: _salt }) => ({
+  hash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+  encoded: 'encoded-hash'
+}))
 vi.mock('argon2-browser', () => ({
   default: {
-    hash: vi.fn(async ({ pass, salt }) => ({
-      hash: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
-      encoded: 'encoded-hash'
-    }))
+    hash: argon2HashSpy,
   }
 }))
 
@@ -49,8 +56,23 @@ describe('EncryptionManager', () => {
     expect(aesKey).toBeDefined()
     expect(salt).toBeInstanceOf(Uint8Array)
     expect(salt.length).toBe(16)
+    // After the v0.3.7 hardening pass we import the Argon2 output
+    // directly as an AES-GCM key. The prior PBKDF2 deriveKey step is
+    // gone — just one importKey call.
     expect(mockCrypto.subtle.importKey).toHaveBeenCalled()
-    expect(mockCrypto.subtle.deriveKey).toHaveBeenCalled()
+    expect(mockCrypto.subtle.deriveKey).not.toHaveBeenCalled()
+  })
+
+  test('should pass OWASP-minimum Argon2id parameters', async () => {
+    await em.deriveKey('test-passphrase')
+    expect(argon2HashSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        time: 3,
+        mem: 65536,
+        parallelism: 1,
+        hashLen: 32,
+      }),
+    )
   })
 
   test('should use provided salt when deriving key', async () => {

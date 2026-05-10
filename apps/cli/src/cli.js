@@ -228,6 +228,28 @@ const server = createServer((req, res) => {
       'Content-Type': contentType,
       'Content-Length': content.length,
       'Cache-Control': 'no-cache',
+      // Security headers - mirror the production posture (sql.dbxlite.com)
+      // so the npm-distributed build doesn't have a weaker baseline than
+      // the hosted version. CSP also lives in index.html as a meta tag;
+      // the HTTP header here adds frame-ancestors (which meta CSP can't
+      // express) and ensures any non-HTML asset (JS, WASM) is served with
+      // a CSP too.
+      'Content-Security-Policy':
+        "default-src 'self'; " +
+        "script-src 'self' 'wasm-unsafe-eval'; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+        "font-src 'self' data: https://fonts.gstatic.com; " +
+        "img-src 'self' data: blob:; " +
+        "connect-src 'self' https: blob: data:; " +
+        "worker-src 'self' blob:; " +
+        "object-src 'none'; " +
+        "base-uri 'self'; " +
+        "form-action 'self'; " +
+        "frame-ancestors 'none';",
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
     });
     res.end(content);
   } catch (err) {

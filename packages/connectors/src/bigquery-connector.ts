@@ -48,52 +48,14 @@ interface BigQueryRow {
   f: BigQueryRowValue[];
 }
 
-// Utility functions for OAuth PKCE
-function base64url(buffer: Uint8Array): string {
-  let s = ''
-  for (let i = 0; i < buffer.length; i++) s += String.fromCharCode(buffer[i])
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
-}
-
-async function sha256(text: string): Promise<Uint8Array> {
-  const enc = new TextEncoder().encode(text)
-  const hash = await crypto.subtle.digest('SHA-256', enc)
-  return new Uint8Array(hash)
-}
-
-// Cache for catalog metadata
-interface CacheEntry<T> {
-  data: T
-  timestamp: number
-}
-
-class MetadataCache {
-  private cache = new Map<string, CacheEntry<unknown>>()
-  private ttl = 5 * 60 * 1000 // 5 minutes
-
-  get<T>(key: string): T | null {
-    const entry = this.cache.get(key)
-    if (!entry) return null
-
-    if (Date.now() - entry.timestamp > this.ttl) {
-      this.cache.delete(key)
-      return null
-    }
-
-    return entry.data as T
-  }
-
-  set<T>(key: string, data: T): void {
-    this.cache.set(key, {
-      data,
-      timestamp: Date.now()
-    })
-  }
-
-  clear(): void {
-    this.cache.clear()
-  }
-}
+// PKCE helpers + metadata cache live in connector-utils so the
+// Snowflake connector reuses the same implementations.
+import { base64url, sha256, MetadataCache, WorkerParsePool } from './connector-utils'
+import {
+  parseBigQueryRows,
+  type BigQueryRowLite,
+  type BigQuerySchemaLite,
+} from './bigquery-parse-shared'
 
 /**
  * Enhanced BigQuery connector with full catalog discovery and query optimization
@@ -111,6 +73,12 @@ export class BigQueryConnector implements CloudConnector {
   private credsKey = 'bigquery-token'
   private defaultProjectKey = 'bigquery-default-project'
   private cache = new MetadataCache()
+  // Lazily-created Web Worker for row-typing pages off the main thread.
+  // Falls back to main-thread parsing if Worker construction fails.
+  private parserPool: WorkerParsePool<
+    { type: 'parseRows'; rows: BigQueryRowLite[]; schema: BigQuerySchemaLite },
+    { id: string; rows: Record<string, unknown>[] }
+  > | null = null
   private activeJobs = new Map<string, string>() // queryId -> jobId mapping
   private defaultProject: string | null = null
 
@@ -1060,8 +1028,10 @@ export class BigQueryConnector implements CloudConnector {
       }
     }
 
-    // Parse and yield first batch of rows
-    const rows = this.parseRows(initialData.rows || [], initialData.schema)
+    // Parse and yield first batch of rows. parseRowsAsync routes large
+    // batches to a Web Worker (≥2000 rows; postMessage overhead would
+    // dominate below that) so the main thread stays free for UI updates.
+    const rows = await this.parseRowsAsync(initialData.rows || [], initialData.schema)
     logger.debug('First batch', {
       rowCount: rows.length,
       hasPageToken: !!initialData.pageToken,
@@ -1090,7 +1060,7 @@ export class BigQueryConnector implements CloudConnector {
       )
 
       const pageData = await pageResponse.json()
-      const pageRows = this.parseRows(pageData.rows || [], pageData.schema)
+      const pageRows = await this.parseRowsAsync(pageData.rows || [], pageData.schema)
 
       logger.debug('Page fetched', {
         pageRowCount: pageRows.length,
@@ -1108,182 +1078,55 @@ export class BigQueryConnector implements CloudConnector {
   }
 
   /**
-   * Parse BigQuery rows into JavaScript objects
+   * Sync parser — main-thread fallback for small batches and for the
+   * test environment (jsdom has no Worker).
    */
   private parseRows(rows: BigQueryRow[], schema: BigQuerySchema): Record<string, unknown>[] {
-    if (!rows || rows.length === 0) return []
-    if (!schema?.fields) return rows as unknown as Record<string, unknown>[]
-
-    return rows.map(row => {
-      const obj: Record<string, unknown> = {}
-      const values = row.f || []
-
-      schema.fields.forEach((field, index: number) => {
-        const value = values[index]?.v
-        obj[field.name] = this.parseValue(value, field)
-      })
-
-      return obj
-    })
+    return parseBigQueryRows(
+      rows as unknown as BigQueryRowLite[],
+      schema as unknown as BigQuerySchemaLite,
+    )
   }
 
   /**
-   * Parse BigQuery value based on field type
-   * Keeps values in appropriate formats for type-aware formatters
+   * Async parser. Routes large batches (≥2000 rows) to a Web Worker
+   * via WorkerParsePool; small batches stay on the main thread. Worker
+   * is lazily constructed; falls back permanently to main-thread on
+   * Worker construction failure.
    */
-  private parseValue(value: unknown, field: BigQueryField | string): unknown {
-    if (value === null || value === undefined) return null
+  private async parseRowsAsync(
+    rows: BigQueryRow[],
+    schema: BigQuerySchema,
+  ): Promise<Record<string, unknown>[]> {
+    if (!rows || rows.length === 0) return []
+    if (!schema?.fields) return rows as unknown as Record<string, unknown>[]
 
-    // Support both field object and string type for backwards compatibility
-    const fieldObj = typeof field === 'string' ? { name: '', type: field } : field
-    const upperType = fieldObj.type.toUpperCase()
-    const isRepeated = fieldObj.mode?.toUpperCase() === 'REPEATED'
-
-    // Handle REPEATED mode (arrays) - BigQuery arrays have mode="REPEATED" with type=element_type
-    if (isRepeated && Array.isArray(value)) {
-      // Create element field with same type but without REPEATED mode
-      const elementField: BigQueryField = {
-        name: fieldObj.name,
-        type: fieldObj.type,
-        fields: fieldObj.fields  // For arrays of structs
-      }
-      return value.map((item: unknown) => {
-        // Each array element is wrapped in {v: ...}
-        let unwrapped = item
-        if (item && typeof item === 'object') {
-          const obj = item as Record<string, unknown>
-          // BigQuery wraps values in {v: value}
-          if ('v' in obj) {
-            unwrapped = obj.v
-          }
-        }
-        return this.parseValue(unwrapped, elementField)
-      })
+    const SMALL_THRESHOLD = 2000
+    if (rows.length < SMALL_THRESHOLD) {
+      return this.parseRows(rows, schema)
     }
 
-    // Also handle arrays that aren't marked as REPEATED but contain {v: ...} wrapped values
-    if (Array.isArray(value)) {
-      return value.map((item: unknown) => {
-        if (item && typeof item === 'object' && 'v' in item) {
-          return (item as { v: unknown }).v
-        }
-        return item
-      })
+    if (!this.parserPool) {
+      this.parserPool = new WorkerParsePool<
+        { type: 'parseRows'; rows: BigQueryRowLite[]; schema: BigQuerySchemaLite },
+        { id: string; rows: Record<string, unknown>[] }
+      >(
+        () => new Worker(new URL('./bigquery-parse.worker.ts', import.meta.url), { type: 'module' }),
+        (req) =>
+          parseBigQueryRows(req.rows, req.schema),
+        logger,
+      )
     }
 
-    const stringValue = String(value)
-
-    switch (upperType) {
-      case 'INTEGER':
-      case 'INT64':
-        // Parse as integer, keep as number
-        return parseInt(stringValue)
-
-      case 'FLOAT':
-      case 'FLOAT64':
-        // Parse as float
-        return parseFloat(stringValue)
-
-      case 'NUMERIC':
-      case 'BIGNUMERIC':
-      case 'DECIMAL':
-        // Keep as string to preserve precision (formatters will handle display)
-        return stringValue
-
-      case 'BOOLEAN':
-      case 'BOOL':
-        return value === 'true' || value === true
-
-      case 'TIMESTAMP':
-        // BigQuery timestamps are Unix seconds (can have fractional seconds)
-        // Return as Date object for formatters to handle
-        return new Date(parseFloat(stringValue) * 1000)
-
-      case 'DATE':
-        // BigQuery DATE format is YYYY-MM-DD string
-        // Return as-is, formatters will parse
-        return value
-
-      case 'DATETIME':
-        // BigQuery DATETIME format is YYYY-MM-DD HH:MM:SS[.SSSSSS]
-        // Parse to Date object
-        try {
-          return new Date(stringValue)
-        } catch {
-          return value
-        }
-
-      case 'TIME':
-        // BigQuery TIME format is HH:MM:SS[.SSSSSS]
-        // Keep as string, formatters will handle
-        return value
-
-      case 'BYTES':
-        // Return as-is (base64 encoded string)
-        return value
-
-      case 'STRING':
-        return value
-
-      case 'GEOGRAPHY':
-      case 'GEOMETRY':
-        // Spatial types - return as-is (WKT or GeoJSON string)
-        return value
-
-      case 'JSON':
-        // Try to parse JSON, but keep as string if parsing fails
-        try {
-          return JSON.parse(stringValue)
-        } catch {
-          return value
-        }
-
-      case 'ARRAY':
-        // Fallback for explicit ARRAY type (shouldn't normally hit this in BigQuery)
-        // BigQuery uses mode="REPEATED" which is handled above
-        if (Array.isArray(value)) {
-          const elementField = fieldObj.fields?.[0] || { name: '', type: 'STRING' }
-          return value.map((item: unknown) => {
-            const unwrapped = (item && typeof item === 'object' && 'v' in item)
-              ? (item as { v: unknown }).v
-              : item
-            return this.parseValue(unwrapped, elementField)
-          })
-        }
-        return value
-
-      case 'STRUCT':
-      case 'RECORD':
-        // BigQuery structs come as {f: [{v: value}, {v: value}, ...]}
-        // Need to map to field names
-        if (value && typeof value === 'object' && 'f' in value && fieldObj.fields) {
-          const structValue = value as { f: Array<{ v: unknown }> }
-          const result: Record<string, unknown> = {}
-          fieldObj.fields.forEach((subField, index) => {
-            const subValue = structValue.f[index]?.v
-            result[subField.name] = this.parseValue(subValue, subField)
-          })
-          return result
-        }
-        // Already a plain object
-        if (typeof value === 'object') {
-          return value
-        }
-        try {
-          return JSON.parse(stringValue)
-        } catch {
-          return value
-        }
-
-      case 'INTERVAL':
-        // Keep interval as string
-        return value
-
-      default:
-        // For any unknown types, return as-is
-        return value
-    }
+    const response = await this.parserPool.send({
+      type: 'parseRows',
+      rows: rows as unknown as BigQueryRowLite[],
+      schema: schema as unknown as BigQuerySchemaLite,
+    })
+    return response.rows
   }
+
+  // parseValue moved to bigquery-parse-shared.ts so the worker can call it.
 
   /**
    * Cancel a running query
@@ -1337,6 +1180,9 @@ export class BigQueryConnector implements CloudConnector {
     this.token = null
     this.cache.clear()
     this.activeJobs.clear()
+    // Tear down the parse worker so we don't leak it across reconnects.
+    this.parserPool?.terminate()
+    this.parserPool = null
   }
 
   /**

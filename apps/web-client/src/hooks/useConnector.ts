@@ -68,22 +68,19 @@ export function useConnector({
 		}
 	}, [activeConnector]);
 
-	// Check connection status periodically
+	// Check connection status periodically. isSnowflakeConnected is now
+	// a public typed method on StreamingQueryService — call it directly,
+	// no `as unknown as { … }` escape hatch.
 	useEffect(() => {
 		const check = () => {
 			setIsBigQueryConnected(queryService.isBigQueryConnected());
-			// Snowflake is optional on queryService until Phase 2 wires it.
-			const sfCheck = (
-				queryService as unknown as {
-					isSnowflakeConnected?: () => boolean;
-				}
-			).isSnowflakeConnected;
-			setIsSnowflakeConnected(typeof sfCheck === "function" ? sfCheck.call(queryService) : false);
+			setIsSnowflakeConnected(queryService.isSnowflakeConnected());
 		};
 
 		check();
 
-		// Check every 2 seconds
+		// Check every 2 seconds. Will be replaced with event subscription
+		// in Phase 4.2 alongside the App.tsx context-poll retirement.
 		const interval = setInterval(check, 2000);
 		return () => clearInterval(interval);
 	}, []);

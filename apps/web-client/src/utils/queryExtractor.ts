@@ -1,4 +1,74 @@
 /**
+ * Split SQL on `;` characters that are at top level — i.e. NOT inside a
+ * line comment (`-- ...`), block comment (`/* ... *\/`), single-quoted
+ * string, or double-quoted identifier. Returns parts in the same shape as
+ * `String.split(";")` so caller position-math stays valid.
+ *
+ * Doesn't try to parse fully (no dollar-quoted strings, no escape rules
+ * beyond standard SQL `''` doubling) — the goal is just to stop comments
+ * with embedded `;` from corrupting the split.
+ */
+function splitOnTopLevelSemicolons(sql: string): string[] {
+	const parts: string[] = [];
+	let buf = "";
+	let i = 0;
+	const n = sql.length;
+	while (i < n) {
+		const c = sql[i];
+		const next = i + 1 < n ? sql[i + 1] : "";
+
+		if (c === "-" && next === "-") {
+			// Line comment — consume to end of line.
+			while (i < n && sql[i] !== "\n") {
+				buf += sql[i++];
+			}
+			continue;
+		}
+		if (c === "/" && next === "*") {
+			// Block comment — consume to */
+			buf += sql[i++];
+			buf += sql[i++];
+			while (i < n && !(sql[i] === "*" && sql[i + 1] === "/")) {
+				buf += sql[i++];
+			}
+			if (i < n) {
+				buf += sql[i++]; // *
+				buf += sql[i++]; // /
+			}
+			continue;
+		}
+		if (c === "'" || c === '"') {
+			// Quoted string / identifier. SQL doubles the quote to escape.
+			const quote = c;
+			buf += sql[i++];
+			while (i < n) {
+				if (sql[i] === quote) {
+					if (sql[i + 1] === quote) {
+						// Escaped quote — keep both, advance two.
+						buf += sql[i++];
+						buf += sql[i++];
+						continue;
+					}
+					buf += sql[i++]; // closing quote
+					break;
+				}
+				buf += sql[i++];
+			}
+			continue;
+		}
+		if (c === ";") {
+			parts.push(buf);
+			buf = "";
+			i++;
+			continue;
+		}
+		buf += sql[i++];
+	}
+	parts.push(buf);
+	return parts;
+}
+
+/**
  * Remove SQL comments from a query
  * Handles both single-line (--) and multi-line (/* *\/) comments
  */
@@ -45,8 +115,13 @@ export function extractQueryAtCursor(
 		return stripSQLComments(selectedText.trim());
 	}
 
-	// Split by semicolon to get all queries
-	// Track both the end of the text AND the position including the semicolon
+	// Split into statements at semicolons that are OUTSIDE line comments,
+	// block comments, single-quoted strings, and double-quoted identifiers.
+	// A naive `fullText.split(";")` would slice through `;` characters that
+	// appear inside `-- ... ;` comments and feed the post-semicolon comment
+	// tail to the engine as its own statement, which the parser rejects.
+	const parts = splitOnTopLevelSemicolons(fullText);
+
 	const queries: Array<{
 		start: number; // Start of raw part in original string
 		textStart: number; // Start of actual text (after leading whitespace)
@@ -56,21 +131,15 @@ export function extractQueryAtCursor(
 	}> = [];
 	let currentStart = 0;
 
-	// Find all queries separated by semicolons
-	const parts = fullText.split(";");
-
 	for (let i = 0; i < parts.length; i++) {
 		const part = parts[i];
 		const trimmedPart = part.trim();
 
 		if (trimmedPart) {
-			// Calculate the actual position in the original string
 			const start = currentStart;
-			// Calculate where actual text begins (after leading whitespace)
 			const leadingWhitespace = part.length - part.trimStart().length;
 			const textStart = start + leadingWhitespace;
 			const end = start + part.length;
-			// Include the semicolon position (except for the last part which may not have one)
 			const hasSemicolon = i < parts.length - 1;
 			const endWithSemicolon = hasSemicolon ? end + 1 : end;
 
@@ -83,7 +152,6 @@ export function extractQueryAtCursor(
 			});
 		}
 
-		// Move to next part (+ 1 for the semicolon)
 		currentStart += part.length + 1;
 	}
 

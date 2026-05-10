@@ -6,13 +6,35 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 
-A SQL workbench for DuckDB. Run it with your local DuckDB CLI for full power, or in-browser with zero install. Connectors for BigQuery and Snowflake; an AI assistant (BYO key or Snowflake Cortex) for writing and fixing SQL.
+A SQL workbench that handles real data, in your browser. OPFS-backed WASM mode opens files limited only by your disk size. The result grid streams arbitrarily large sets via virtual scrolling. One UI for DuckDB, BigQuery, and Snowflake. Server mode is a drop-in replacement for `duckdb -ui`.
 
-**Try it now (no install):** [sql.dbxlite.com](https://sql.dbxlite.com) — runs entirely in your browser via DuckDB WASM. Your data never leaves your machine.
+**Try it now (no install):** [sql.dbxlite.com](https://sql.dbxlite.com)
+
+## Highlights
+
+- **Disk-sized files in WASM mode.** OPFS-backed persistence opens multi-gigabyte CSV / Parquet / JSON files in the browser without hitting the 2-4 GB RAM ceiling that kills other in-browser tools.
+- **Virtual-scrolled result grid.** Streams arbitrarily large result sets without freezing the renderer.
+- **One UI for three engines.** DuckDB, BigQuery, and Snowflake share the same explorer, query editor, grid, and export flow. The Snowflake explorer mirrors Snowsight (databases, schemas, tables, column preview, compute status, query history).
+- **Server mode is a drop-in for `duckdb -ui`.** Run dbxlite as the UI for your local DuckDB CLI. Full extensions, unlimited memory, direct filesystem access.
+- **Cross-engine Parquet export.** Pull data out of BigQuery or Snowflake into a portable Parquet file. Same export path for every engine.
+- **Excel sheets as first-class.** Multi-sheet `.xlsx` files appear in the explorer with every sheet's columns and types surfaced as proper tables.
+- **Cell viewer for large values.** Press `Enter` on any cell with long text or structured data to open it in an inline viewer.
+- **Polished by default.** Ten color themes, light/dark modes, multi-level explorer, configurable layout, fast keyboard navigation.
+
+## Privacy & license
+
+- **Local files stay local.** The File System Access API gives DuckDB a handle, not an upload. The browser never copies your file off your machine.
+- **Credentials encrypted at rest** in IndexedDB (AES-GCM). Threat model: protects against casual localStorage reads, not XSS or filesystem access on your machine.
+- **No account, no signup, no telemetry.**
+- **Open source, MIT.**
 
 ## Quick Start
 
-### Server Mode (Recommended)
+### WASM Mode (zero install)
+
+The hosted version at **[sql.dbxlite.com](https://sql.dbxlite.com)** is the same app served as static assets, with DuckDB compiled to WebAssembly. The URL serves UI only; queries run locally on your machine. Or run a copy yourself: `pnpm dev`.
+
+### Server Mode (full DuckDB power)
 
 Use dbxlite as a drop-in replacement for `duckdb -ui`:
 
@@ -32,17 +54,13 @@ Open http://localhost:4213 in your browser. You get full native DuckDB with all 
 duckdb mydata.duckdb -unsigned -ui
 ```
 
-> The `-unsigned` flag is required for custom UI URLs. This is a DuckDB security measure.
-
-### WASM Mode (Zero Install)
-
-No DuckDB CLI? Try the hosted version at **[sql.dbxlite.com](https://sql.dbxlite.com)** — it's the same app served as static assets, with DuckDB compiled to WebAssembly running entirely in your browser. The URL only serves UI; queries run locally on your machine. Or run a copy yourself: `pnpm dev` and open the local URL.
+> The `-unsigned` flag is required for custom UI URLs (DuckDB security measure).
 
 ### Mode Comparison
 
 | | Server Mode | WASM Mode |
 |---|-------------|-----------|
-| **Memory** | Unlimited | ~2-4GB browser limit |
+| **Memory** | Unlimited | ~2-4GB browser limit (OPFS extends file storage to disk size) |
 | **Extensions** | All (httpfs, spatial, iceberg, etc.) | Limited subset |
 | **Filesystem** | Direct access | File handles only |
 | **BigQuery** | Via DuckDB extension | Browser OAuth connector |
@@ -52,17 +70,25 @@ No DuckDB CLI? Try the hosted version at **[sql.dbxlite.com](https://sql.dbxlite
 
 ---
 
-## What it does
+## How to use it
 
-Query CSV, Parquet, Excel, JSON, and JSONL — local files via the File System Access API (so they stay on disk), or remote URLs via DuckDB's `httpfs` extension. Server mode gives you full native DuckDB with every extension; WASM mode runs the same engine in a Web Worker, with a smaller extension set that works offline.
+### Local files (the core)
 
-The editor is Monaco with SQL autocomplete. Results stream via Arrow IPC.
+Query CSV, Parquet, Excel, JSON, and JSONL. Local files via the File System Access API stay on disk; remote URLs are read via DuckDB's `httpfs` extension. The editor is Monaco with SQL autocomplete; results stream via Arrow IPC.
 
-BigQuery and Snowflake connect from the browser too. BigQuery talks to GCP directly because Google APIs serve CORS. Snowflake doesn't, so it routes through a thin proxy that strips response headers Snowflake adds (CSRF cookies, content-encoding) and rewrites the URL. The Snowflake explorer is the part that took the most work: a vendor-neutral `CatalogProvider` interface drives the same UI Snowsight has (databases, schemas, tables, column preview, compute status, query history), and both OAuth 2.0 PKCE and Programmatic Access Tokens are supported. PATs are the lower-friction path for users who don't have ACCOUNTADMIN.
+Server mode gives you full native DuckDB with every extension. WASM mode runs the same engine in a Web Worker; with OPFS persistence it can open files much larger than browser RAM.
 
-The AI assistant is opt-in. Bring your own key for OpenAI, Anthropic, Gemini, or Groq; or use Snowflake Cortex if you're already on Snowflake. Keys are encrypted with AES-GCM, and a one-time consent dialog gates the first send to each external provider. Toggle with `Cmd/Ctrl+Shift+A`.
+### Warehouses (optional)
 
-Queries are shareable as URLs that run on click — `?example=`, `?sql=`, `?share=gist:...`, plus `&theme=` and `&run=true`.
+BigQuery and Snowflake connect directly from the browser. BigQuery talks to GCP because Google APIs serve CORS. Snowflake doesn't, so it routes through a thin proxy that strips response headers Snowflake adds (CSRF cookies, content-encoding) and rewrites the URL. Both OAuth 2.0 PKCE and Programmatic Access Tokens are supported. PATs are the lower-friction path for users without ACCOUNTADMIN.
+
+### AI assistant (optional, opt-in)
+
+Bring your own key for OpenAI, Anthropic, Gemini, or Groq, or use Snowflake Cortex if you're already on Snowflake. Keys are encrypted with AES-GCM, and a one-time consent dialog gates the first send to each external provider. Toggle with `Cmd/Ctrl+Shift+A`. **AI is off until you enable it.**
+
+### Sharing
+
+Queries are shareable as URLs that run on click: `?example=`, `?sql=`, `?share=gist:...`, plus `&theme=` and `&run=true`.
 
 ---
 
@@ -108,11 +134,11 @@ Requirements: Node.js 18+, pnpm 8+.
 ![Server Settings](apps/web-client/public/screenshots/server-settings.png)
 
 ## Core Commands
-- `pnpm dev` — start the web client locally
-- `pnpm build` — build all workspaces
-- `pnpm lint` / `pnpm lint:fix` — Biome lint (errors only) and auto-fix
-- `pnpm test` — Vitest suite
-- `pnpm e2e` / `pnpm e2e:headed` / `pnpm e2e:ui` — Playwright end-to-end runs
+- `pnpm dev`: start the web client locally
+- `pnpm build`: build all workspaces
+- `pnpm lint` / `pnpm lint:fix`: Biome lint (errors only) and auto-fix
+- `pnpm test`: Vitest suite
+- `pnpm e2e` / `pnpm e2e:headed` / `pnpm e2e:ui`: Playwright end-to-end runs
 
 ## Project Structure
 ```
@@ -191,4 +217,4 @@ What's next: Supabase (via PostgREST, since that's HTTP-shaped), native Parquet 
 - Security issues: report privately via [SECURITY](SECURITY.md).
 
 ## License
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).

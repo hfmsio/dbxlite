@@ -147,7 +147,6 @@ export default defineConfig({
       '@ide/connectors': path.resolve(__dirname, '../../packages/connectors/src/index.ts'),
       '@ide/storage': path.resolve(__dirname, '../../packages/storage/src/index.ts'),
       '@ide/duckdb-adapter': path.resolve(__dirname, '../../packages/duckdb-wasm-adapter/src/index.ts'),
-      '@ide/schema-cache': path.resolve(__dirname, '../../packages/schema-cache/src/index.ts'),
       '@ide/plugins': path.resolve(__dirname, '../../packages/plugins/src/index.ts'),
     }
   },

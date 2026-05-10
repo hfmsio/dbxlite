@@ -239,13 +239,17 @@ export function useFileUpload({
 
 			const isHttpMode = queryService.isHttpMode();
 
-			// In HTTP mode, check if we have file paths available
+			// In HTTP mode, filter to files that have full filesystem paths.
+			// Use a fresh local array rather than reassigning the parameter —
+			// the previous implementation mutated `files` in place which
+			// confused the summary toast / connector-restore branches that
+			// re-read the array later in the function.
+			let filesToProcess = files;
 			if (isHttpMode) {
 				const filesWithPaths = files.filter((f) => f.fullPath);
 				const filesWithoutPaths = files.filter((f) => !f.fullPath);
 
 				if (filesWithoutPaths.length > 0) {
-					// Some files don't have paths - warn user
 					logger.warn(
 						"HTTP mode: Some files don't have full paths available",
 						filesWithoutPaths.map((f) => f.name),
@@ -259,7 +263,6 @@ export function useFileUpload({
 					);
 
 					if (filesWithPaths.length === 0) {
-						// No files have paths, abort
 						setIsUploadingFiles(false);
 						setUploadProgress({
 							currentFile: "",
@@ -270,8 +273,7 @@ export function useFileUpload({
 					}
 				}
 
-				// Only process files that have paths
-				files = filesWithPaths;
+				filesToProcess = filesWithPaths;
 			}
 
 			// Switch to DuckDB for file operations
@@ -283,13 +285,13 @@ export function useFileUpload({
 			}
 
 			// Process each file sequentially
-			for (let i = 0; i < files.length; i++) {
-				const fileData = files[i];
+			for (let i = 0; i < filesToProcess.length; i++) {
+				const fileData = filesToProcess[i];
 
 				setUploadProgress({
 					currentFile: fileData.name,
 					currentIndex: i + 1,
-					totalFiles: files.length,
+					totalFiles: filesToProcess.length,
 				});
 
 				try {
@@ -350,11 +352,14 @@ export function useFileUpload({
 			}
 
 			// Show summary toast
-			if (files.length > 0 && !files.some((f) => f.type === "duckdb")) {
-				const fileNames = files.map((f) => f.name).join(", ");
+			if (
+				filesToProcess.length > 0 &&
+				!filesToProcess.some((f) => f.type === "duckdb")
+			) {
+				const fileNames = filesToProcess.map((f) => f.name).join(", ");
 				const modeNote = isHttpMode ? " (using local paths)" : "";
 				showToast(
-					`${files.length} file${files.length > 1 ? "s" : ""} ready${modeNote}!\n${fileNames}`,
+					`${filesToProcess.length} file${filesToProcess.length > 1 ? "s" : ""} ready${modeNote}!\n${fileNames}`,
 					"success",
 					6000,
 				);

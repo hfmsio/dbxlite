@@ -279,78 +279,94 @@ function AppContent() {
 		activeTabId,
 		updateTab,
 		showToast,
-		addRemoteURL: async (url: string, type: string) => {
-			const result = await addRemoteURL(url, type as "parquet" | "csv" | "json");
-			if (!result) {
-				throw new Error(`Failed to add remote URL: ${url}`);
-			}
-			return result;
-		},
+		addRemoteURL: useCallback(
+			async (url: string, type: string) => {
+				const result = await addRemoteURL(
+					url,
+					type as "parquet" | "csv" | "json",
+				);
+				if (!result) {
+					throw new Error(`Failed to add remote URL: ${url}`);
+				}
+				return result;
+			},
+			[addRemoteURL],
+		),
 		dataSources,
 		engineDetectionMode,
 		switchConnector,
 		isConnectorAvailable,
-		onSchemaChanged: async () => {
+		// Stable callbacks. Previously inline lambdas, which meant
+		// useQueryExecution's useCallback dep array couldn't reference them
+		// without recreating handleRunQuery on every render. Stabilising
+		// here lets handleRunQuery's deps array include them properly.
+		onSchemaChanged: useCallback(async () => {
 			await localDatabaseRefreshRef.current?.();
-		},
-		onDatabaseSchemaChanged: async (dbName: string) => {
-			// Find the database by its attachedAs alias
-			const db = dataSources.find((ds) => ds.attachedAs === dbName);
-			if (db) {
-				await introspectSchema(db.id);
-			}
-		},
-		onDatabaseAttached: async ({ path, alias, readOnly }) => {
-			// In HTTP mode, refresh server databases to reflect the ATTACH
-			if (serverDatabaseRefreshRef.current) {
-				await serverDatabaseRefreshRef.current();
-				showToast(`Database "${alias}" attached`, "success", 3000);
-				return;
-			}
+		}, []),
+		onDatabaseSchemaChanged: useCallback(
+			async (dbName: string) => {
+				const db = dataSources.find((ds) => ds.attachedAs === dbName);
+				if (db) {
+					await introspectSchema(db.id);
+				}
+			},
+			[dataSources, introspectSchema],
+		),
+		onDatabaseAttached: useCallback(
+			async ({ path, alias, readOnly }: { path: string; alias: string; readOnly: boolean }) => {
+				// In HTTP mode, refresh server databases to reflect the ATTACH
+				if (serverDatabaseRefreshRef.current) {
+					await serverDatabaseRefreshRef.current();
+					showToast(`Database "${alias}" attached`, "success", 3000);
+					return;
+				}
 
-			// In WASM mode, add to dataSources
-			// Check if database is already in explorer
-			const existing = dataSources.find(
-				(ds) => ds.attachedAs === alias || ds.filePath === path
-			);
-			if (existing) {
-				// Just refresh the schema
-				await introspectSchema(existing.id);
-				return;
-			}
+				// In WASM mode, add to dataSources
+				const existing = dataSources.find(
+					(ds) => ds.attachedAs === alias || ds.filePath === path,
+				);
+				if (existing) {
+					await introspectSchema(existing.id);
+					return;
+				}
 
-			// Extract filename from path
-			const fileName = path.split("/").pop() || path;
+				const fileName = path.split("/").pop() || path;
 
-			// Add as new data source
-			await addDataSource({
-				name: fileName.replace(/\.duckdb$/i, "") + " (database)",
-				type: "duckdb",
-				filePath: path,
-				isAttached: true,
-				attachedAs: alias,
-				isReadOnly: readOnly,
-				hasFileHandle: false,
-			});
+				await addDataSource({
+					name: fileName.replace(/\.duckdb$/i, "") + " (database)",
+					type: "duckdb",
+					filePath: path,
+					isAttached: true,
+					attachedAs: alias,
+					isReadOnly: readOnly,
+					hasFileHandle: false,
+				});
 
-			showToast(`Database "${alias}" added to explorer`, "success", 3000);
-		},
-		onDatabaseDetached: async (alias) => {
-			// In HTTP mode, refresh server databases to reflect the DETACH
-			if (serverDatabaseRefreshRef.current) {
-				await serverDatabaseRefreshRef.current();
-				showToast(`Database "${alias}" detached`, "success", 3000);
-				return;
-			}
+				showToast(`Database "${alias}" added to explorer`, "success", 3000);
+			},
+			[dataSources, introspectSchema, addDataSource, showToast],
+		),
+		onDatabaseDetached: useCallback(
+			async (alias: string) => {
+				// In HTTP mode, refresh server databases to reflect the DETACH
+				if (serverDatabaseRefreshRef.current) {
+					await serverDatabaseRefreshRef.current();
+					showToast(`Database "${alias}" detached`, "success", 3000);
+					return;
+				}
 
-			// In WASM mode, find the database by its attachedAs alias and remove
-			const db = dataSources.find((ds) => ds.attachedAs === alias);
-			if (db) {
-				// Remove from explorer (skipDetach: true because DETACH was already executed)
-				await removeDataSource(db.id, { skipDetach: true });
-				showToast(`Database "${alias}" removed from explorer`, "success", 3000);
-			}
-		},
+				const db = dataSources.find((ds) => ds.attachedAs === alias);
+				if (db) {
+					await removeDataSource(db.id, { skipDetach: true });
+					showToast(
+						`Database "${alias}" removed from explorer`,
+						"success",
+						3000,
+					);
+				}
+			},
+			[dataSources, removeDataSource, showToast],
+		),
 	});
 
 	// Keep the ref aligned with the latest handleStopQuery so closeTabWithAbort

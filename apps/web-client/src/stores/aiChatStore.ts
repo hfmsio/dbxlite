@@ -12,6 +12,7 @@ import {
 	type ChatMessage,
 	getDefaultModel,
 	getDefaultProvider,
+	scrubCredentials,
 	type SQLBlock,
 } from "../services/ai";
 import { queryService } from "../services/streaming-query-service";
@@ -122,11 +123,15 @@ export const useAIChatStore = create<AIChatStore>()(
 				// Re-check after async gap
 				if (currentGeneration !== streamGeneration) return;
 
-				// Add user message
+				// Add user message. Scrub credential-shaped substrings BEFORE
+				// persisting so they don't sit in chat history (which is
+				// re-sent on every subsequent turn) and don't get
+				// rehydrated from localStorage on next session.
+				const { cleaned: scrubbedContent } = scrubCredentials(content);
 				const userMessage: ChatMessage = {
 					id: crypto.randomUUID(),
 					role: "user",
-					content,
+					content: scrubbedContent,
 					timestamp: Date.now(),
 				};
 
@@ -166,13 +171,17 @@ export const useAIChatStore = create<AIChatStore>()(
 					backendLabel: backend.label,
 					modelId: model,
 				});
+				// Defence-in-depth: also scrub each historical message before
+				// forwarding. The persistence-time scrub above stops new
+				// secrets from entering history; this catches secrets that
+				// landed before the scrub was added (legacy chat data).
 				const apiMessages = [
 					{ role: "system" as const, content: systemPrompt },
 					...get()
 						.messages.filter((m) => !m.isStreaming)
 						.map((m) => ({
 							role: m.role as "user" | "assistant",
-							content: m.content,
+							content: scrubCredentials(m.content).cleaned,
 						})),
 				];
 

@@ -15,7 +15,6 @@
     "@ide/connectors": "workspace:*",
     "@ide/duckdb-adapter": "workspace:*",
     "@ide/plugins": "workspace:*",
-    "@ide/schema-cache": "workspace:*",
     "@ide/storage": "workspace:*",
     "@vercel/analytics": "^1.6.1",
     "@vercel/speed-insights": "^1.3.1",

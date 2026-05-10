@@ -1,10 +1,13 @@
-import { CredentialStore, EncryptionManager } from "@ide/storage";
+import { EncryptedCredentialStore, EncryptionManager } from "@ide/storage";
 import { useEffect, useState } from "react";
 import { useLock } from "../state/lock";
 import { createLogger } from "../utils/logger";
 
 const logger = createLogger("ConnectionVault");
-const store = new CredentialStore();
+// Was `new CredentialStore()` (plaintext); now uses the encrypted store
+// so the export-passphrase wrapping operates on already-encrypted-at-rest
+// values rather than freshly exposed plaintext.
+const store = new EncryptedCredentialStore();
 const em = new EncryptionManager();
 
 export default function ConnectionVault() {

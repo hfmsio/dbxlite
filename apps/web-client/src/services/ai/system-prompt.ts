@@ -9,6 +9,45 @@
 
 const MAX_EDITOR_LINES = 200;
 
+/**
+ * Patterns that look like credentials. Conservative: only matches
+ * shapes that are unlikely to occur in real SQL/data. False positives
+ * here are recoverable (the user sees the redaction note inline);
+ * false negatives are not.
+ */
+const CREDENTIAL_PATTERNS: { name: string; re: RegExp }[] = [
+	{ name: "private-key", re: /-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----/g },
+	{ name: "openai-style", re: /\bsk-[A-Za-z0-9_-]{20,}\b/g },
+	{ name: "slack-bot", re: /\bxoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+\b/g },
+	{ name: "google-api", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+	{ name: "aws-access", re: /\bAKIA[0-9A-Z]{16}\b/g },
+	{ name: "github-pat", re: /\bghp_[A-Za-z0-9]{36}\b/g },
+	{ name: "jwt", re: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g },
+];
+
+export interface ScrubResult {
+	cleaned: string;
+	matches: { pattern: string; count: number }[];
+}
+
+/**
+ * Strip credential-shaped substrings out of arbitrary text before
+ * sending to a third-party LLM. Returns the cleaned text plus a
+ * summary of what was redacted (so the chat panel can warn inline).
+ */
+export function scrubCredentials(text: string): ScrubResult {
+	let cleaned = text;
+	const matches: { pattern: string; count: number }[] = [];
+	for (const { name, re } of CREDENTIAL_PATTERNS) {
+		const found = cleaned.match(re);
+		if (found && found.length > 0) {
+			matches.push({ pattern: name, count: found.length });
+			cleaned = cleaned.replace(re, `[REDACTED:${name}]`);
+		}
+	}
+	return { cleaned, matches };
+}
+
 export type SystemPromptConnectorType = "duckdb" | "bigquery" | "snowflake";
 
 interface DialectProfile {
@@ -113,11 +152,17 @@ ${guidelinesBlock}`;
 	if (editorContent) {
 		const lines = editorContent.split("\n");
 		const truncated = lines.length > MAX_EDITOR_LINES;
-		const content = truncated
+		const sliced = truncated
 			? lines.slice(0, MAX_EDITOR_LINES).join("\n") + "\n-- ... (truncated)"
 			: editorContent;
 
-		prompt += `\n\nThe user's current SQL editor contains:\n\`\`\`sql\n${content}\n\`\`\``;
+		// Scrub credential-shaped substrings before sending to the LLM.
+		// Anything matched is replaced with [REDACTED:<pattern>] in the
+		// prompt; the chat panel can read the matches via
+		// scrubCredentials() if it wants to warn inline.
+		const { cleaned } = scrubCredentials(sliced);
+
+		prompt += `\n\nThe user's current SQL editor contains:\n\`\`\`sql\n${cleaned}\n\`\`\``;
 	}
 
 	return prompt;

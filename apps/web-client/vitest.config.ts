@@ -9,6 +9,10 @@ export default defineConfig({
       // Pick up unit tests in shared connector packages too — keeps
       // snowflake-connector tests live.
       '../../packages/connectors/src/**/*.{test,spec,vitest}.{ts,tsx}',
+      // @ide/storage tests (EncryptionManager, CredentialStore). Added
+      // in v0.3.7 when Argon2 params were hardened — the existing test
+      // file was previously dormant.
+      '../../packages/storage/src/**/*.{test,spec,vitest}.{ts,tsx}',
     ],
     exclude: [
       'node_modules',
@@ -46,7 +50,6 @@ export default defineConfig({
       '@ide/connectors': path.resolve(__dirname, '../../packages/connectors/src/index.ts'),
       '@ide/storage': path.resolve(__dirname, '../../packages/storage/src/index.ts'),
       '@ide/duckdb-adapter': path.resolve(__dirname, '../../packages/duckdb-wasm-adapter/src/index.ts'),
-      '@ide/schema-cache': path.resolve(__dirname, '../../packages/schema-cache/src/index.ts'),
       '@ide/plugins': path.resolve(__dirname, '../../packages/plugins/src/index.ts'),
       'test': path.resolve(__dirname, './test'),
     },

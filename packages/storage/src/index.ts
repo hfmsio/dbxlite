@@ -1,21 +1,36 @@
-// Encryption helpers using AES-GCM with keys derived from Argon2id
+// Encryption helpers using AES-GCM with keys derived from Argon2id.
+//
+// Parameters: t=3, m=65536 (64 MiB), p=1 — OWASP minimum for Argon2id
+// password hashing as of 2024. The Argon2 output is imported directly
+// as the AES-GCM key (32 bytes); no PBKDF2 chain. The previous
+// double-derivation produced a key no stronger than the weaker
+// primitive while adding cost.
 export class EncryptionManager {
   async deriveKey(passphrase: string, salt?: Uint8Array){
     // Dynamic import to avoid bundling issues with argon2-browser's WASM
     const argon2 = (await import('argon2-browser')).default
     salt = salt || crypto.getRandomValues(new Uint8Array(16))
-    const res = await argon2.hash({ pass: passphrase, salt, time: 2, mem: 1024 })
-    // argon2-browser returns a hex string; convert to raw bytes
+    const res = await argon2.hash({
+      pass: passphrase,
+      salt,
+      time: 3,        // OWASP min t for Argon2id
+      mem: 65536,     // 64 MiB - OWASP min m
+      parallelism: 1, // explicit p=1
+      hashLen: 32,    // AES-256 key length
+    })
+    // argon2-browser returns a hex string; convert to raw bytes.
     const hex = res.hash
     const keyBytes = new Uint8Array(hex.match(/.{1,2}/g)!.map(h=>parseInt(h,16)))
-    const key = await crypto.subtle.importKey('raw', keyBytes, 'PBKDF2', false, ['deriveKey'])
-    // Derive AES-GCM key using PBKDF2 (we reuse this path since WebCrypto can't import raw AES key easily from arbitrary bytes)
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
-      key,
+    // Import the Argon2 output directly as an AES-GCM key. WebCrypto
+    // accepts raw bytes for AES-GCM via importKey; the prior PBKDF2
+    // re-derivation comment ("WebCrypto can't import raw AES key") was
+    // wrong and the round-trip wasted ~100 ms with no security benefit.
+    const aesKey = await crypto.subtle.importKey(
+      'raw',
+      keyBytes,
       { name: 'AES-GCM', length: 256 },
       true,
-      ['encrypt','decrypt']
+      ['encrypt', 'decrypt'],
     )
     return { aesKey, salt }
   }
@@ -42,49 +57,15 @@ export class EncryptionManager {
   }
 }
 
-/**
- * Common interface for credential persistence. Both `CredentialStore`
- * (plaintext) and `EncryptedCredentialStore` (AES-GCM device-bound) implement
- * this. Connectors take this interface so callers can choose the storage
- * mode appropriate to their environment.
- */
-export interface CredentialStoreLike {
-  save(id: string, payload: unknown): Promise<void>
-  load(id: string): Promise<unknown>
-  listKeys(): string[]
-}
+// Public credential-store contract is re-exported from ./types.
+export type { CredentialStoreLike } from "./types"
+import type { CredentialStoreLike } from "./types"
 
-export class CredentialStore implements CredentialStoreLike {
-  constructor() {}
-
-  async save(id: string, payload: unknown): Promise<void> {
-    if (payload == null) {
-      localStorage.removeItem('cred:' + id)
-      return
-    }
-    localStorage.setItem('cred:' + id, JSON.stringify(payload))
-  }
-
-  async load(id: string): Promise<unknown> {
-    const x = localStorage.getItem('cred:' + id)
-    if (!x) return null
-    try {
-      return JSON.parse(x)
-    } catch (e) {
-      return null
-    }
-  }
-
-  // helper to list cred ids
-  listKeys(): string[] {
-    const res: string[] = []
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i)
-      if (k && k.startsWith('cred:')) res.push(k.slice('cred:'.length))
-    }
-    return res
-  }
-}
+// Plaintext localStorage adapter intentionally NOT exported from the
+// package surface. It lives in ./_credential-store-internal and is
+// used as EncryptedCredentialStore's byte-level backing store only.
+// App code uses EncryptedCredentialStore exclusively.
+import { CredentialStore } from "./_credential-store-internal"
 
 /**
  * EncryptedCredentialStore — wraps `CredentialStore` with AES-GCM encryption
@@ -192,9 +173,23 @@ export class EncryptedCredentialStore implements CredentialStoreLike {
       combined.set(iv)
       combined.set(new Uint8Array(encrypted), iv.length)
       return this.store.save(id, btoa(String.fromCharCode(...combined)))
-    } catch {
+    } catch (err) {
       // Fallback: if crypto isn't available (very old browser, no IndexedDB),
       // fall through to plaintext rather than block the save entirely.
+      // The warning is essential — without it, a programming mistake or
+      // device-key corruption silently downgrades security.
+      try {
+        // Use the dev-time console rather than the project's logger so
+        // this warning surfaces even in environments where the logger
+        // module isn't initialized yet (early-startup credential reads).
+        console.warn(
+          "[@ide/storage] EncryptedCredentialStore.save fell back to plaintext;",
+          "value will be stored unencrypted. Cause:",
+          err,
+        )
+      } catch {
+        // logging failure is itself non-critical
+      }
       return this.store.save(id, payload)
     }
   }
@@ -219,7 +214,22 @@ export class EncryptedCredentialStore implements CredentialStoreLike {
           ciphertext,
         )
         return JSON.parse(new TextDecoder().decode(decrypted))
-      } catch {
+      } catch (err) {
+        // Most common case: legacy plaintext value from before this wrapper
+        // existed (heuristic length > 24 happens to also accept long
+        // plaintext strings). The warn fires for genuine decrypt failures
+        // — device-key corruption / rotation / data tampering — which
+        // would otherwise be silent.
+        try {
+          console.warn(
+            "[@ide/storage] EncryptedCredentialStore.load decrypt failed;",
+            "returning raw value (likely legacy plaintext, possibly key loss):",
+            id,
+            err,
+          )
+        } catch {
+          // non-critical
+        }
         return raw
       }
     }

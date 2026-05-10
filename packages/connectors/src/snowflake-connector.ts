@@ -157,46 +157,11 @@ type StoredConfig = {
 }
 
 // ---------------------------------------------------------------------------
-// Cache (5-min TTL, mirrors BigQueryConnector's MetadataCache)
+// Shared utilities (cache + PKCE helpers) live in connector-utils so the
+// BigQuery connector reuses the same implementations.
 // ---------------------------------------------------------------------------
 
-interface CacheEntry<T> {
-	data: T
-	timestamp: number
-}
-
-class MetadataCache {
-	private cache = new Map<string, CacheEntry<unknown>>()
-	private ttl = 5 * 60 * 1000
-
-	get<T>(key: string): T | null {
-		const entry = this.cache.get(key)
-		if (!entry) return null
-		if (Date.now() - entry.timestamp > this.ttl) {
-			this.cache.delete(key)
-			return null
-		}
-		return entry.data as T
-	}
-
-	set<T>(key: string, data: T): void {
-		this.cache.set(key, { data, timestamp: Date.now() })
-	}
-
-	clear(): void {
-		this.cache.clear()
-	}
-}
-
-// ---------------------------------------------------------------------------
-// PKCE helpers
-// ---------------------------------------------------------------------------
-
-function base64url(bytes: Uint8Array): string {
-	let s = ""
-	for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
-	return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-}
+import { MetadataCache, base64url } from "./connector-utils"
 
 /**
  * Quote a Snowflake identifier (database/schema/table/column name) as
@@ -232,14 +197,17 @@ async function generatePKCE(): Promise<{ verifier: string; challenge: string }> 
 // ---------------------------------------------------------------------------
 // OAuth-callback channel constants — duplicated from
 // apps/web-client/src/utils/oauth-constants.ts to keep the connector package
-// app-agnostic. A unit test asserts both files agree.
+// constants live in ./oauth-constants and are re-exported via the
+// package index so the web-client imports from @ide/connectors.
 // ---------------------------------------------------------------------------
 
-const OAUTH_RESPONSE_LSKEY = "snowflake_oauth_response"
-const OAUTH_ERROR_LSKEY = "snowflake_oauth_error"
-const OAUTH_AUTO_CONNECT_LSKEY = "snowflake-auto-connect"
-const OAUTH_BROADCAST_CHANNEL = "snowflake_oauth"
-const OAUTH_CALLBACK_PATH = "/oauth-callback.html"
+import {
+	SNOWFLAKE_OAUTH_RESPONSE_KEY as OAUTH_RESPONSE_LSKEY,
+	SNOWFLAKE_OAUTH_ERROR_KEY as OAUTH_ERROR_LSKEY,
+	SNOWFLAKE_OAUTH_AUTO_CONNECT_KEY as OAUTH_AUTO_CONNECT_LSKEY,
+	SNOWFLAKE_OAUTH_BROADCAST_CHANNEL as OAUTH_BROADCAST_CHANNEL,
+	SNOWFLAKE_OAUTH_CALLBACK_PATH as OAUTH_CALLBACK_PATH,
+} from "./oauth-constants"
 
 // ---------------------------------------------------------------------------
 // Retry policy for transient API failures

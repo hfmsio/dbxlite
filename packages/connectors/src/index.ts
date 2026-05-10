@@ -33,6 +33,25 @@ export type { RequestTransport, BrowserTransportOptions } from './transport'
 export { parseSnowflakeAccount } from './snowflake-account'
 export type { SnowflakeAccount } from './snowflake-account'
 
+// OAuth callback constants — single source of truth across the
+// connectors package and the web-client app.
+export {
+  SNOWFLAKE_OAUTH_RESPONSE_KEY,
+  SNOWFLAKE_OAUTH_ERROR_KEY,
+  SNOWFLAKE_OAUTH_AUTO_CONNECT_KEY,
+  SNOWFLAKE_TOKEN_KEY,
+  SNOWFLAKE_CONFIG_KEY,
+  SNOWFLAKE_PKCE_VERIFIER_KEY,
+  SNOWFLAKE_OAUTH_STATE_KEY,
+  SNOWFLAKE_OAUTH_BROADCAST_CHANNEL,
+  SNOWFLAKE_OAUTH_CALLBACK_PATH,
+} from './oauth-constants'
+export type {
+  OAuthCodeMessage,
+  OAuthErrorMessage,
+  OAuthMessage,
+} from './oauth-constants'
+
 // Export mode detection utility
 export {
   detectMode,

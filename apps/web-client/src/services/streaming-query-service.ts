@@ -14,7 +14,7 @@ import {
 	detectMode,
 	type DbxliteMode,
 } from "@ide/connectors";
-import type { CredentialStore } from "@ide/storage";
+import type { EncryptedCredentialStore } from "@ide/storage";
 import type { ConnectorType } from "../types/data-source";
 import type { TableRow } from "../types/table";
 import { createLogger } from "../utils/logger";
@@ -248,21 +248,44 @@ class ResultCache {
 	}
 
 	async cleanOldCache() {
-		// Remove entries older than 1 hour
+		// Remove entries older than 1 hour. Errors here are non-fatal but
+		// were previously swallowed silently — log them so quota-exceeded
+		// or private-mode failures show up in DevTools.
 		const cutoff = Date.now() - 3600000;
 
 		const tx = this.db?.transaction([this.STORE_NAME], "readwrite");
 		if (!tx) return;
+		tx.onerror = () => {
+			logger.warn(
+				"[ResultCache] cleanOldCache transaction error",
+				tx.error,
+			);
+		};
+		tx.onabort = () => {
+			logger.warn("[ResultCache] cleanOldCache transaction aborted", tx.error);
+		};
 		const store = tx.objectStore(this.STORE_NAME);
 		const index = store.index("timestamp");
 
 		const range = IDBKeyRange.upperBound(cutoff);
 		const request = index.openCursor(range);
 
+		request.onerror = () => {
+			logger.warn(
+				"[ResultCache] cleanOldCache cursor error",
+				request.error,
+			);
+		};
 		request.onsuccess = (event) => {
 			const cursor = (event.target as IDBRequest).result;
 			if (cursor) {
-				cursor.delete();
+				const deleteReq = cursor.delete();
+				deleteReq.onerror = () => {
+					logger.warn(
+						"[ResultCache] cleanOldCache delete failed",
+						deleteReq.error,
+					);
+				};
 				cursor.continue();
 			}
 		};
@@ -275,7 +298,7 @@ class ResultCache {
 class StreamingQueryService {
 	private connectors: Map<ConnectorType, BaseConnector> = new Map();
 	private activeConnector: ConnectorType = "duckdb";
-	private credentialStore: CredentialStore | null = null;
+	private credentialStore: EncryptedCredentialStore | null = null;
 	private cache = new ResultCache();
 	private activeQueries = new Map<string, AbortController>();
 	// Count cache with 5-minute TTL to avoid repeated COUNT queries
@@ -313,7 +336,7 @@ class StreamingQueryService {
 		return hash.toString(36);
 	}
 
-	async initialize(credentialStore: CredentialStore) {
+	async initialize(credentialStore: EncryptedCredentialStore) {
 		this.credentialStore = credentialStore;
 		await this.cache.init();
 
@@ -689,7 +712,7 @@ class StreamingQueryService {
 	 */
 	async getRowCount(
 		sql: string,
-		_signal?: AbortSignal,
+		signal?: AbortSignal,
 		_timeoutMs: number = 30000,
 	): Promise<{ count: number; isEstimated: boolean }> {
 		// Check cache first
@@ -777,9 +800,25 @@ class StreamingQueryService {
 					() => countCtl.abort(),
 					COUNT_TIMEOUT_MS,
 				);
+				// Combine the internal timeout signal with the caller's
+				// signal so a Stop Query during the COUNT terminates the
+				// Snowflake-side query (real billing-leak fix). Falls back
+				// to AbortController.abort()-on-listener for older browsers
+				// without AbortSignal.any.
+				const combinedSignal: AbortSignal = signal
+					? typeof AbortSignal.any === "function"
+						? AbortSignal.any([countCtl.signal, signal])
+						: (() => {
+								const ctl = new AbortController();
+								const onAbort = () => ctl.abort();
+								countCtl.signal.addEventListener("abort", onAbort);
+								signal.addEventListener("abort", onAbort);
+								return ctl.signal;
+							})()
+					: countCtl.signal;
 				try {
 					for await (const chunk of connector.query(countSql, {
-						signal: countCtl.signal,
+						signal: combinedSignal,
 					})) {
 						const row = chunk.rows?.[0];
 						if (row !== undefined) {
@@ -1652,18 +1691,11 @@ class StreamingQueryService {
 		schema?: string;
 		role?: string;
 	}): Promise<void> {
-		const connector = this.connectors.get("snowflake");
-		if (!connector) {
+		const sf = this.getSnowflakeConnector();
+		if (!sf) {
 			throw new Error("Snowflake connector not initialized");
 		}
-		if (
-			"updateConfig" in connector &&
-			typeof (connector as { updateConfig?: unknown }).updateConfig === "function"
-		) {
-			await (connector as unknown as {
-				updateConfig: (c: typeof config) => Promise<void>;
-			}).updateConfig(config);
-		}
+		await sf.updateConfig(config);
 	}
 
 	/**

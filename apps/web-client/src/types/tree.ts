@@ -111,6 +111,6 @@ export interface TreeSection {
 	actions?: TreeNodeAction[]; // Section-level actions (e.g., Refresh for Local Database)
 	badge?: string; // Badge text (e.g., "Session Only")
 	badgeColor?: string; // Badge color
-	hint?: string; // Subtle hint text shown after title
+	hint?: string | import("react").ReactNode; // Subtle hint shown after title (plain string or React node; do not use HTML strings)
 	className?: string; // Custom CSS class for styling (e.g., background tint)
 }

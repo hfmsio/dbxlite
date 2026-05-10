@@ -345,4 +345,76 @@ describe("queryErrorFormatter", () => {
 			expect(result.userMessage).toContain("b.csv");
 		});
 	});
+
+	describe("engine-mismatch hint for DuckDB parser/function errors", () => {
+		test("appends hint on DuckDB parser error", () => {
+			const result = formatQueryError(
+				createContext({
+					errorMessage: 'Parser Error: syntax error at or near "<"',
+					sql: "SELECT ARRAY<STRING>['a', 'b'] AS arr",
+					connectorType: "duckdb",
+				}),
+			);
+			expect(result.userMessage).toContain("active connector matches");
+			expect(result.userMessage).toContain("Settings");
+		});
+
+		test("appends hint on DuckDB unknown-function error", () => {
+			const result = formatQueryError(
+				createContext({
+					errorMessage:
+						"Catalog Error: Scalar Function with name format_date does not exist!",
+					sql: "SELECT FORMAT_DATE('%Y-%m-%d', CURRENT_DATE())",
+					connectorType: "duckdb",
+				}),
+			);
+			expect(result.userMessage).toContain("active connector matches");
+		});
+
+		test("appends hint on DuckDB unknown-type error", () => {
+			const result = formatQueryError(
+				createContext({
+					errorMessage: 'Type with name "r" does not exist',
+					sql: "SELECT REGEXP_CONTAINS('abc', r'\\d+')",
+					connectorType: "duckdb",
+				}),
+			);
+			expect(result.userMessage).toContain("active connector matches");
+		});
+
+		test("does not append hint when connector is BigQuery", () => {
+			const result = formatQueryError(
+				createContext({
+					errorMessage: "Parser Error: something",
+					sql: "SELECT FORMAT_DATE('%Y-%m-%d', CURRENT_DATE())",
+					connectorType: "bigquery",
+				}),
+			);
+			expect(result.userMessage).not.toContain("active connector matches");
+		});
+
+		test("does not append hint on unrelated DuckDB errors (e.g. file access)", () => {
+			const result = formatQueryError(
+				createContext({
+					errorMessage: "Permission denied: file foo.csv",
+					sql: "SELECT * FROM 'foo.csv'",
+					connectorType: "duckdb",
+				}),
+			);
+			expect(result.userMessage).not.toContain("active connector matches");
+		});
+
+		test("preserves the original error text alongside the hint", () => {
+			const original = 'Parser Error: syntax error at or near "LIMIT"';
+			const result = formatQueryError(
+				createContext({
+					errorMessage: original,
+					sql: "SELECT ARRAY_AGG(x LIMIT 2) FROM t",
+					connectorType: "duckdb",
+				}),
+			);
+			expect(result.userMessage).toContain(original);
+			expect(result.userMessage).toContain("active connector matches");
+		});
+	});
 });
