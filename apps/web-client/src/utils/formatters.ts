@@ -561,11 +561,15 @@ function formatDate(
  * Format time portion
  */
 function formatTime(date: Date, format: string = "24h", timezone: "utc" | "local" = "local", ianaTimezone?: string): string {
+	// Use explicit hourCycle rather than `hour12`. Newer ICU/V8 versions
+	// emit `24:00:00` for midnight under `hour12: false` (an h24 cycle),
+	// while older runtimes emitted `00:00:00` (h23). Pinning the cycle
+	// keeps the output stable across Node.js versions and CI images.
 	const options: Intl.DateTimeFormatOptions = {
 		hour: "2-digit",
 		minute: "2-digit",
 		second: "2-digit",
-		hour12: format === "12h",
+		hourCycle: format === "12h" ? "h12" : "h23",
 	};
 	if (timezone === "utc") {
 		options.timeZone = "UTC";

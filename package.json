@@ -29,7 +29,7 @@
   ],
  "scripts": {
     "dev": "pnpm -C apps/web-client dev",
-    "build": "pnpm -r --parallel build",
+    "build": "pnpm -C apps/web-client build && pnpm -C apps/cli build",
     "test": "pnpm -r test",
     "lint": "biome lint . --diagnostic-level=error",
     "lint:fix": "biome check --write .",
