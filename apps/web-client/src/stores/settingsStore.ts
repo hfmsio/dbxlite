@@ -11,7 +11,42 @@ import { applyTheme } from "../themes";
 // Types
 export type ExplorerSortOrder = "none" | "name" | "type" | "size";
 export type SaveStrategy = "auto" | "manual" | "prompt";
-export type AutocompleteMode = "off" | "default" | "experimental" | "word";
+/**
+ * Autocomplete mode (v0.4 redesign):
+ *   - "off"  : disable the custom provider entirely (Monaco word-match only).
+ *   - "lite" : keywords + function names + table names. No column dump, no
+ *              alias dot-resolution. Safe default for new users.
+ *   - "full" : everything: dialect-aware keywords/functions, dot completion,
+ *              alias resolution, FROM-clause column filtering.
+ *
+ * Legacy values from earlier releases ("default", "experimental", "word") are
+ * migrated transparently on first load — see migration in this store below.
+ */
+export type AutocompleteMode = "off" | "lite" | "full";
+
+/** Legacy values still present in some users' localStorage; migrated on load. */
+type LegacyAutocompleteMode = "default" | "experimental" | "word";
+
+export function migrateAutocompleteMode(
+	value: string | undefined,
+): AutocompleteMode {
+	switch (value) {
+		case "off":
+			return "off";
+		case "lite":
+			return "lite";
+		case "full":
+			return "full";
+		// Legacy migrations (see SQL_AUTOCOMPLETE_PLAN.md, Axis 5).
+		case "experimental":
+			return "full"; // user opted in; reward with full capability
+		case "default":
+		case "word":
+			return "lite"; // factory default users get the safe step up
+		default:
+			return "lite";
+	}
+}
 export type EngineDetectionMode = "off" | "suggest" | "auto";
 
 interface SettingsState {
@@ -57,7 +92,7 @@ const DEFAULT_SETTINGS: SettingsState = {
 	editorTheme: "vs-dark",
 	editorFontSize: 14,
 	editorFontFamily: 'Menlo, Monaco, "Courier New", monospace',
-	autocompleteMode: "word",
+	autocompleteMode: "lite",
 	showExamplesButton: true,
 	gridFontSize: 12,
 	gridRowHeight: 32,
@@ -110,6 +145,17 @@ export const useSettingsStore = create<SettingsStore>()(
 				if (state) {
 					// Apply theme on initial load (injects CSS variables)
 					applyTheme(state.editorTheme);
+
+					// Migrate legacy autocomplete-mode values to the v0.4 taxonomy.
+					// Cast through `string` because TS doesn't know about the legacy
+					// literal values once the type narrowed to the new union.
+					const legacyMode = state.autocompleteMode as
+						| AutocompleteMode
+						| LegacyAutocompleteMode;
+					const migratedMode = migrateAutocompleteMode(legacyMode);
+					if (migratedMode !== legacyMode) {
+						state.hydrate({ autocompleteMode: migratedMode });
+					}
 
 					// Migrate from legacy individual localStorage keys if this is first run
 					const hasLegacyKeys = localStorage.getItem("data-ide-theme") !== null;
