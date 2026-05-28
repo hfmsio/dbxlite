@@ -47,7 +47,7 @@ export ui_remote_url="http://localhost:8080"
 duckdb -unsigned -ui
 ```
 
-Open http://localhost:4213 in your browser. You get full native DuckDB with all extensions, unlimited memory, and direct filesystem access.
+Open http://localhost:4213 in your browser. (DuckDB's `ui` extension serves its UI on port 4213 by default; `ui_remote_url` points it at dbxlite's assets on 8080.) You get full native DuckDB with all extensions, unlimited memory, and direct filesystem access.
 
 **With an existing database:**
 ```bash
@@ -108,7 +108,7 @@ cd apps/cli && node scripts/build.js && node dist/cli.js
 pnpm dev  # Opens http://localhost:5173
 ```
 
-Requirements: Node.js 18+, pnpm 8+.
+Requirements: Node.js 18+, pnpm 10+ (the `packageManager` field pins the exact version; run `corepack enable` to use it automatically). On pnpm 11+, dependency build scripts (`esbuild`, `@swc/core`) are pre-approved via `allowBuilds` in `pnpm-workspace.yaml` — no manual `pnpm approve-builds` step needed.
 
 ## Screenshots
 
@@ -153,7 +153,7 @@ dbxlite/
 │  │  │  ├─ services/       # Data services (data-source-store, settings-store, ai/)
 │  │  │  ├─ stores/         # Zustand stores (settingsStore, aiChatStore)
 │  │  │  └─ utils/          # Utilities (formatters, dataTypes, logger)
-│  │  └─ App.tsx            # Main orchestrator (~860 lines)
+│  │  └─ App.tsx            # Main orchestrator
 │  └─ cli/                  # dbxlite-ui npm package (for duckdb -ui integration)
 ├─ packages/
 │  ├─ connectors/           # Data connectors (DuckDB, BigQuery, Snowflake)

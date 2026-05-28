@@ -40,14 +40,14 @@
     "smoke:examples": "node scripts/smoke-examples.mjs",
     "postinstall": "bash scripts/download-duckdb-wasm.sh"
   },
+  "packageManager": "pnpm@11.4.0",
+  "engines": {
+    "node": ">=18",
+    "pnpm": ">=10"
+  },
   "devDependencies": {
     "@biomejs/biome": "^2.3.8",
     "@duckdb/node-api": "^1.5.2-r.1",
     "typescript": "^5.9.3"
-  },
-  "pnpm": {
-    "overrides": {
-      "dompurify": "^3.4.0"
-    }
   }
 }

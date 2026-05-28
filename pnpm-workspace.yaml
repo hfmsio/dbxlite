@@ -1,3 +1,11 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+# pnpm 11 reads dependency overrides here, not from the package.json "pnpm" field.
+overrides:
+  dompurify: '^3.4.0'
+# pnpm 11 blocks dependency build scripts unless explicitly allowed.
+# (Replaces the removed onlyBuiltDependencies setting from pnpm 10.)
+allowBuilds:
+  esbuild: true
+  '@swc/core': true
