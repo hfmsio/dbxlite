@@ -35,6 +35,13 @@ import QueryHistoryModal from "./components/QueryHistoryModal"
 import SessionChipRenderer from "./components/SessionChipRenderer"
 import { searchTree } from "./searchTree"
 import { createLogger } from "../../utils/logger"
+import {
+	notifyCatalogsLoaded,
+	notifyColumnsLoaded,
+	notifyTablesLoaded,
+	registerCatalogProvider,
+	resetProviderData,
+} from "../../services/catalog-schema-bridge"
 
 const logger = createLogger("CatalogExplorer")
 
@@ -121,6 +128,9 @@ export default function CatalogExplorer({
 		setCatalogs({ status: "loading" })
 		try {
 			const list = await provider.listCatalogs()
+			// Surface the catalog list to the SQL autocomplete bridge so
+			// typing `FROM ` suggests known top-level databases.
+			notifyCatalogsLoaded(provider.id, list)
 			setCatalogs({
 				status: "loaded",
 				data: list.map((info) => ({
@@ -137,9 +147,21 @@ export default function CatalogExplorer({
 	}, [provider])
 
 	useEffect(() => {
+		// Register the provider with the autocomplete bridge so the SQL
+		// completion subsystem can see whatever tables/columns the user
+		// expands here. provider.id is the bridge's namespace key.
+		const sourceType: "snowflake" | "bigquery" =
+			provider.id === "bigquery" ? "bigquery" : "snowflake"
+		registerCatalogProvider(provider.id, sourceType)
+		// Deliberately no cleanup here. This component unmounts whenever the
+		// sidebar is collapsed (ResizableExplorer renders null when hidden),
+		// and collapsing the sidebar to get more editor room must not wipe
+		// autocomplete's schema. Eviction is keyed to events that actually
+		// invalidate the data instead: refresh (below) and disconnect (the
+		// connection poll in useConnector).
 		// Reload whenever the provider changes (or on mount).
 		loadCatalogs()
-	}, [loadCatalogs])
+	}, [provider, loadCatalogs])
 
 	// Periodically refresh session-context chips so they reflect edits.
 	useEffect(() => {
@@ -152,6 +174,12 @@ export default function CatalogExplorer({
 
 	const refresh = useCallback(() => {
 		provider.refresh()
+		// The tree collapses back to `idle` here, so the bridge's cached
+		// tables/columns no longer reflect anything on screen — and may name
+		// tables the refresh just dropped from the source. Forget them;
+		// loadCatalogs() re-seeds the catalog list right away, and
+		// tables/columns return as the user re-expands.
+		resetProviderData(provider.id)
 		loadCatalogs()
 	}, [provider, loadCatalogs])
 
@@ -250,6 +278,9 @@ export default function CatalogExplorer({
 
 			try {
 				const tables = await provider.listTables(catalogId, schemaId)
+				// Surface the table list to the autocomplete bridge so dot-
+				// completion (`DB.SCHEMA.`) and alias resolution work.
+				notifyTablesLoaded(provider.id, catalogId, schemaId, tables)
 				updateSchema(catalogId, schemaId, (s) => ({
 					...s,
 					tables: { status: "loaded", data: tables },
@@ -987,6 +1018,15 @@ function TableRow(props: TableRowProps) {
 					catalogName,
 					schemaName,
 					table.name,
+				)
+				// Surface columns to the autocomplete bridge so typing
+				// `<alias>.` after JOIN <table> <alias> resolves columns.
+				notifyColumnsLoaded(
+					provider.id,
+					catalogName,
+					schemaName,
+					table.id,
+					meta.columns ?? [],
 				)
 				setColumns({
 					status: "loaded",

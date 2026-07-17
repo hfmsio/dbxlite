@@ -16,8 +16,15 @@
  * minimal shape the provider reads.
  */
 
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { DataSource } from "../../../types/data-source";
+import {
+	__resetCatalogBridgeForTests,
+	notifyCatalogsLoaded,
+	notifyColumnsLoaded,
+	notifyTablesLoaded,
+	registerCatalogProvider,
+} from "../../catalog-schema-bridge";
 import { createCompletionProvider } from "../provider";
 
 // ---------------------------------------------------------------------
@@ -290,6 +297,94 @@ describe("provider — file-path quoting in insertText", () => {
 		expect(fileSuggestion).toBeDefined();
 		// insertText should be single-quoted so DuckDB accepts the hyphen.
 		expect(fileSuggestion?.insertText).toBe("'export-foo.parquet'");
+	});
+});
+
+describe("provider — Snowflake catalog bridge", () => {
+	afterEach(() => __resetCatalogBridgeForTests());
+
+	test("alias-dot resolves columns sourced from the catalog bridge (Snowflake)", async () => {
+		// Simulate the explorer having loaded CUSTOMER's tables + columns
+		// for SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.
+		registerCatalogProvider("snowflake", "snowflake");
+		notifyCatalogsLoaded("snowflake", [
+			{ id: "SNOWFLAKE_SAMPLE_DATA", name: "SNOWFLAKE_SAMPLE_DATA", type: "database" },
+		]);
+		notifyTablesLoaded("snowflake", "SNOWFLAKE_SAMPLE_DATA", "TPCH_SF1", [
+			{
+				id: "CUSTOMER",
+				name: "CUSTOMER",
+				catalog: "SNOWFLAKE_SAMPLE_DATA",
+				schema: "TPCH_SF1",
+			},
+		]);
+		notifyColumnsLoaded(
+			"snowflake",
+			"SNOWFLAKE_SAMPLE_DATA",
+			"TPCH_SF1",
+			"CUSTOMER",
+			[
+				{ name: "C_CUSTKEY", type: "NUMBER" },
+				{ name: "C_NAME", type: "VARCHAR" },
+				{ name: "C_MKTSEGMENT", type: "VARCHAR" },
+			],
+		);
+
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "snowflake",
+		});
+		const model = makeFakeModel({
+			text:
+				"SELECT * FROM SNOWFLAKE_SAMPLE_DATA.TPCH_SF1.CUSTOMER c WHERE c.",
+		});
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
+		expect(labels).toContain("C_CUSTKEY");
+		expect(labels).toContain("C_NAME");
+		expect(labels).toContain("C_MKTSEGMENT");
+	});
+
+	test("table list arrives before columns: tables appear with empty columns", async () => {
+		registerCatalogProvider("snowflake", "snowflake");
+		notifyCatalogsLoaded("snowflake", [
+			{ id: "DEV", name: "DEV", type: "database" },
+		]);
+		notifyTablesLoaded("snowflake", "DEV", "PUBLIC", [
+			{ id: "ORDERS", name: "ORDERS", catalog: "DEV", schema: "PUBLIC" },
+		]);
+		// User has not yet expanded ORDERS, so no columns.
+
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "snowflake",
+		});
+		// Type `DEV.PUBLIC.` to enumerate tables in that schema.
+		const model = makeFakeModel({ text: "SELECT * FROM DEV.PUBLIC." });
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
+		expect(labels).toContain("ORDERS");
+	});
+
+	test("top-level Snowflake databases appear in FROM context", async () => {
+		registerCatalogProvider("snowflake", "snowflake");
+		notifyCatalogsLoaded("snowflake", [
+			{ id: "DEV", name: "DEV", type: "database" },
+			{ id: "SNOWFLAKE_SAMPLE_DATA", name: "SNOWFLAKE_SAMPLE_DATA", type: "database" },
+		]);
+
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "snowflake",
+		});
+		const model = makeFakeModel({ text: "SELECT * FROM " });
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
+		expect(labels).toContain("DEV");
+		expect(labels).toContain("SNOWFLAKE_SAMPLE_DATA");
 	});
 });
 

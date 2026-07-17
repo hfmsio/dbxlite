@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { clearProviderState } from "../services/catalog-schema-bridge";
 import {
 	type ConnectorType,
 	queryService,
@@ -42,6 +43,11 @@ export function useConnector({
 		useState<ConnectorType>("duckdb");
 	const [isBigQueryConnected, setIsBigQueryConnected] = useState(false);
 	const [isSnowflakeConnected, setIsSnowflakeConnected] = useState(false);
+	// Previous poll's connection state, so `check` can spot the
+	// connected → disconnected edge. Refs, not state: the edge is derived
+	// during the poll and must not itself trigger a render.
+	const prevBigQueryConnected = useRef(false);
+	const prevSnowflakeConnected = useRef(false);
 
 	// Load connector from localStorage on mount
 	useEffect(() => {
@@ -73,8 +79,24 @@ export function useConnector({
 	// no `as unknown as { … }` escape hatch.
 	useEffect(() => {
 		const check = () => {
-			setIsBigQueryConnected(queryService.isBigQueryConnected());
-			setIsSnowflakeConnected(queryService.isSnowflakeConnected());
+			const bq = queryService.isBigQueryConnected();
+			const sf = queryService.isSnowflakeConnected();
+
+			// A connection ending is the one event that truly invalidates the
+			// catalog metadata autocomplete has cached, so evict on the
+			// connected → disconnected edge. This poll is the only place that
+			// sees every such ending: the settings Disconnect button, an
+			// expired token, or a dropped session all land here. The catalog
+			// explorer's own unmount is not a substitute — it also fires when
+			// the sidebar is merely collapsed.
+			if (prevBigQueryConnected.current && !bq) clearProviderState("bigquery");
+			if (prevSnowflakeConnected.current && !sf)
+				clearProviderState("snowflake");
+			prevBigQueryConnected.current = bq;
+			prevSnowflakeConnected.current = sf;
+
+			setIsBigQueryConnected(bq);
+			setIsSnowflakeConnected(sf);
 		};
 
 		check();

@@ -13,7 +13,7 @@
 
 import type * as monaco from "monaco-editor";
 import {
-	getSchemaFromDataSources,
+	getSchemaFromAllSources,
 	getSchemaStub,
 } from "../schema-service";
 import type { AutocompleteMode } from "../../stores/settingsStore";
@@ -100,11 +100,15 @@ export function createCompletionProvider(
 				triggerCharacter: context.triggerCharacter,
 			});
 
-			// Use actual data sources if available, fallback to stub.
-			const dataSources = getDataSources();
+			// Merge the data-source store's view with anything the catalog
+			// explorer has loaded into the bridge (Snowflake tables/columns
+			// live there, not in dataSourceStore). Fall back to the stub
+			// only when BOTH sources are empty (true cold start).
+			const dataSources = getDataSources() ?? [];
+			const merged = getSchemaFromAllSources(dataSources);
 			const schema =
-				dataSources && dataSources.length > 0
-					? getSchemaFromDataSources(dataSources)
+				merged.tables.length > 0 || merged.topLevelSources.length > 0
+					? merged
 					: await getSchemaStub();
 
 			// Debug: Log the actual schema object

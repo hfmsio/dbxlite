@@ -1,5 +1,6 @@
 import type { DataSource } from "../types/data-source";
 import { createLogger } from "../utils/logger";
+import { getCatalogProviderSchemas } from "./catalog-schema-bridge";
 
 // Lightweight in-memory schema cache. Was @ide/schema-cache (an
 // over-engineered standalone package); the only consumer was
@@ -35,7 +36,7 @@ async function setCachedSchema(
 const logger = createLogger("SchemaService");
 
 /** Source type for connector-specific formatting */
-export type SourceType = "duckdb" | "bigquery" | "file";
+export type SourceType = "duckdb" | "bigquery" | "snowflake" | "file";
 
 /** Top-level data source for FROM autocomplete */
 export interface TopLevelSource {
@@ -138,6 +139,56 @@ export function getSchemaFromDataSources(
 	logger.debug("getSchemaFromDataSources returning", tables.length, "tables,", topLevelSources.length, "top-level sources");
 
 	return { tables, topLevelSources };
+}
+
+/**
+ * Merge the data-source store's view with anything the catalog
+ * explorer has loaded into the catalog-schema bridge. The bridge
+ * holds Snowflake (and eventually BigQuery via CatalogProvider)
+ * tables that aren't represented in `DataSource[]`.
+ *
+ * Tables / top-level sources contributed by the bridge are appended;
+ * a name collision with an existing entry favours the data-source
+ * entry (it was registered via the canonical explicit path).
+ */
+export function getSchemaFromAllSources(
+	dataSources: DataSource[],
+): SchemaForCompletion {
+	const fromStore = getSchemaFromDataSources(dataSources);
+	const fromBridge = getCatalogProviderSchemas();
+
+	// Append bridge top-level sources that aren't already present.
+	const existingTopLevel = new Set(fromStore.topLevelSources.map((s) => s.name));
+	for (const src of fromBridge.topLevelSources) {
+		if (existingTopLevel.has(src.name)) continue;
+		fromStore.topLevelSources.push({
+			name: src.name,
+			sourceType: src.sourceType,
+			displayName: src.displayName,
+		});
+	}
+
+	// Append bridge tables. Compose a "fully-qualified" key (db.schema.table)
+	// so a Snowflake CUSTOMER in one database doesn't shadow another with the
+	// same name in a different database/schema.
+	const existingTables = new Set(
+		fromStore.tables.map(
+			(t) => `${t.databaseName ?? ""}::${t.schemaName ?? ""}::${t.name}`,
+		),
+	);
+	for (const t of fromBridge.tables) {
+		const key = `${t.databaseName ?? ""}::${t.schemaName ?? ""}::${t.name}`;
+		if (existingTables.has(key)) continue;
+		fromStore.tables.push({
+			name: t.name,
+			columns: t.columns,
+			databaseName: t.databaseName,
+			schemaName: t.schemaName,
+			sourceType: t.sourceType,
+		});
+	}
+
+	return fromStore;
 }
 
 // Stubbed schema service. Now uses cache and a simple connector-stub.
