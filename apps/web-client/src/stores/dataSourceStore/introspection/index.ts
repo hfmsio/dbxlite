@@ -5,4 +5,4 @@
 
 export { introspectDuckDBSchema } from "./duckdb";
 export { introspectFileSchema } from "./file";
-export { introspectSheetColumns } from "./xlsx";
+export { detectSheetDataRange, introspectSheetColumns } from "./xlsx";

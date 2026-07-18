@@ -15,7 +15,11 @@ import {
 	buildSelectFromFile,
 } from "../utils/sqlSanitizer";
 import { createLogger } from "../utils/logger";
-import { isDuckDBFile, isSQLFile, shouldUseZeroCopy } from "../utils/fileConstants";
+import {
+	chooseRegistrationMode,
+	isDuckDBFile,
+	isSQLFile,
+} from "../utils/fileConstants";
 import { buildFileTypeFilter, getFileExtension } from "../utils/fileTypeFilter";
 
 const logger = createLogger("FileReload");
@@ -92,40 +96,41 @@ function categorizeError(err: unknown): "permission" | "not_found" | "other" {
 }
 
 /**
- * Check and request permission for a file handle.
- * Returns true if permission is granted.
+ * Whether a handle ALREADY has read permission, without prompting.
+ *
+ * This is the automatic-reload check, and it deliberately never calls
+ * requestPermission(). The reload runs from a page-load effect (App.tsx),
+ * which carries no transient user activation, and the File System Access API
+ * only lets requestPermission() prompt from within a user gesture. Calling it
+ * here cannot grant anything — it just returns the current state after a
+ * misleading "requesting… / denied" round-trip, which is what this code used
+ * to do and why restored files silently never registered.
+ *
+ * When this returns false the file is marked for click-to-restore, which
+ * routes to handleRestoreFileAccess — there the click supplies the activation
+ * that lets requestPermission() actually prompt.
  */
-async function checkAndRequestPermission(
+async function hasReadPermission(
 	handle: FileSystemFileHandle,
 	fileName: string,
 ): Promise<boolean> {
-	const permissionState = await handle.queryPermission({ mode: "read" });
-	logger.info(`Permission state for ${fileName}: "${permissionState}"`);
-
-	if (permissionState === "granted") {
-		return true;
-	}
-
-	// Try requestPermission - may work in same session without user gesture
-	logger.info(`Attempting requestPermission for ${fileName}`);
-	try {
-		const requestResult = await handle.requestPermission({ mode: "read" });
-		logger.info(`requestPermission result for ${fileName}: "${requestResult}"`);
-		return requestResult === "granted";
-	} catch (permErr) {
-		logger.debug(`requestPermission failed for ${fileName}:`, permErr);
-		return false;
-	}
+	// Delegates to the store's typed, query-only wrapper — never requests.
+	const granted = await fileHandleStore.queryPermission(handle);
+	logger.info(`Permission for ${fileName}: ${granted ? "granted" : "prompt"}`);
+	return granted;
 }
 
 /**
- * Register a file with DuckDB using appropriate method based on size.
+ * Register a file with DuckDB, choosing buffer vs. File handle by format and
+ * size (see chooseRegistrationMode). This is the one registration path for
+ * every reload and restore flow, so XLSX can't slip back onto the slow
+ * File-handle path in one of them.
  */
 async function registerFileWithDuckDB(
 	fileName: string,
 	file: File,
 ): Promise<void> {
-	if (shouldUseZeroCopy(file.size)) {
+	if (chooseRegistrationMode(fileName, file.size) === "handle") {
 		await queryService.registerFileHandle(fileName, file);
 	} else {
 		const buffer = await file.arrayBuffer();
@@ -218,7 +223,7 @@ export function useFileReload({
 	const processDataFileHandle = useCallback(
 		async (stored: StoredHandle): Promise<ReloadResult> => {
 			const file = await stored.handle.getFile();
-			await queryService.registerFileHandle(stored.name, file);
+			await registerFileWithDuckDB(stored.name, file);
 
 			// Verify file is accessible
 			await queryService.executeQueryOnConnector(
@@ -322,11 +327,16 @@ export function useFileReload({
 				setReloadProgress((prev) => ({ ...prev, currentLoadingFile: stored.name }));
 
 				try {
-					// Check permission
-					const hasPermission = await checkAndRequestPermission(stored.handle, stored.name);
+					// Query-only: prompting needs a user gesture we don't have here.
+					const hasPermission = await hasReadPermission(
+						stored.handle,
+						stored.name,
+					);
 
 					if (!hasPermission) {
-						logger.info(`Permission denied for ${stored.name}, marking for re-auth`);
+						logger.info(
+							`${stored.name} not yet authorized this session, marking for click-to-restore`,
+						);
 						permissionDenied.push(stored.name);
 
 						const existingDataSource = dataSourcesRef.current.find(
@@ -489,7 +499,9 @@ export function useFileReload({
 			try {
 				const isDatabase = isDuckDBFile(fileData.name);
 
-				// Register file
+				// Register file. Databases and buffer-only inputs go straight to
+				// registerFile; anything with a File handle (including XLSX, which
+				// must be buffered) routes through the canonical chooser.
 				if (isDatabase || !fileData.file) {
 					let buffer = fileData.buffer;
 					if (fileData.file && buffer.byteLength === 0) {
@@ -497,7 +509,7 @@ export function useFileReload({
 					}
 					await queryService.registerFile(fileData.name, buffer);
 				} else {
-					await queryService.registerFileHandle(fileData.name, fileData.file);
+					await registerFileWithDuckDB(fileData.name, fileData.file);
 				}
 
 				let isAttached = false;
@@ -566,7 +578,7 @@ export function useFileReload({
 
 					if (hasPermission) {
 						const file = await storedHandle.handle.getFile();
-						await queryService.registerFileHandle(dataSource.name, file);
+						await registerFileWithDuckDB(dataSource.name, file);
 
 						updateDataSource(dataSource.id, {
 							restoreFailed: false,
@@ -619,7 +631,7 @@ export function useFileReload({
 				}
 
 				await fileHandleStore.storeHandle(dataSource.id, dataSource.name, fileHandle);
-				await queryService.registerFileHandle(dataSource.name, file);
+				await registerFileWithDuckDB(dataSource.name, file);
 
 				updateDataSource(dataSource.id, {
 					restoreFailed: false,
