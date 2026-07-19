@@ -478,7 +478,11 @@ self.addEventListener('message', async (ev) => {
         duckdb = _duck;
         DuckDBDataProtocol = _duck.DuckDBDataProtocol; // Import the protocol enum
       }
-      const logger = new duckdb.ConsoleLogger();
+      // WARNING threshold, not the default INFO: DuckDB logs an INFO event on
+      // every conn.query()/send(), which floods the browser console (the
+      // `{timestamp, level:2, origin:4, topic:4, event:4}` spam). WARNING keeps
+      // genuine DuckDB warnings/errors visible while dropping the per-query noise.
+      const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
 
       // Create bundle configurations for each base URL
       const bundleConfigs = baseUrls.map((url: string) => createBundleConfig(url));

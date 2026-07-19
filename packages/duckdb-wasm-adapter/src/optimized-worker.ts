@@ -317,7 +317,9 @@ self.addEventListener('message', async (ev) => {
           duckdb = _duck;
         }
 
-        const logger = new duckdb.ConsoleLogger();
+        // WARNING threshold: DuckDB logs an INFO event per query, which floods
+        // the console. Keep warnings/errors, drop the per-query noise.
+        const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING);
         const bundleConfigs = baseUrls.map((url: string) => createBundleConfig(url));
 
         let selectedBundles = await tryLoadBundles(bundleConfigs);

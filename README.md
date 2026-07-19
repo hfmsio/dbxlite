@@ -159,7 +159,6 @@ dbxlite/
 │  ├─ connectors/           # Data connectors (DuckDB, BigQuery, Snowflake)
 │  ├─ duckdb-wasm-adapter/  # Worker/engine bridge
 │  ├─ storage/              # Credential and handle storage
-│  ├─ schema-cache/         # Metadata caching
 │  └─ plugins/              # Extensible plugin surface
 ├─ docs/                    # Architecture and usage docs
 └─ scripts/                 # Tooling (e.g., download DuckDB WASM)

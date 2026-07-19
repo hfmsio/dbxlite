@@ -33,8 +33,24 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 	error: 3,
 };
 
+/**
+ * Resolve the default minimum log level.
+ *
+ * Dev defaults to `info`, not `debug`: the per-keystroke SQL-completion and
+ * per-query schema logs are all `debug`, and at that level they flood the
+ * console. Set `VITE_LOG_LEVEL=debug` (any valid level) to opt back into the
+ * verbose output when you're actually debugging — no code change needed.
+ */
+function resolveDefaultMinLevel(): LogLevel {
+	const envLevel = import.meta.env.VITE_LOG_LEVEL as string | undefined;
+	if (envLevel && envLevel in LOG_LEVELS) {
+		return envLevel as LogLevel;
+	}
+	return import.meta.env.DEV ? "info" : "warn";
+}
+
 const DEFAULT_CONFIG: LoggerConfig = {
-	minLevel: import.meta.env.DEV ? "debug" : "warn",
+	minLevel: resolveDefaultMinLevel(),
 	enableTimestamps: false,
 	enableInProduction: false,
 };
