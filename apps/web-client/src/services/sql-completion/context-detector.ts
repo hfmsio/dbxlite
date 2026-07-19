@@ -28,7 +28,13 @@ export type SQLContext =
  * Uses the full text up to cursor position for accurate detection.
  */
 export function detectSQLContext(textUntilCursor: string): SQLContext {
-	const upper = textUntilCursor.toUpperCase().trim();
+	// NB: do NOT trim. Every clause pattern below is anchored with `\s+$`
+	// (cursor sitting just after a keyword + space), so trimming the trailing
+	// whitespace would make them all miss and the function would always return
+	// "all" — which dumped the whole dialect keyword list (ATTACH, DETACH, …)
+	// into the FROM/SELECT/WHERE positions. Leading whitespace is irrelevant
+	// because the patterns use `\b` boundaries, not `^`.
+	const upper = textUntilCursor.toUpperCase();
 
 	// Check what the last significant keyword is
 	// Pattern: find the last occurrence of key SQL keywords

@@ -31,11 +31,7 @@
  * refresh or disconnect to drop everything they registered.
  */
 
-import type {
-	CatalogInfo,
-	ColumnInfo,
-	TableMetadata,
-} from "../../../../packages/connectors/src/base";
+import type { CatalogInfo, ColumnInfo, TableMetadata } from "@ide/connectors";
 
 /** Stable identifier the provider uses to namespace its data in this module. */
 export type ProviderId = string;

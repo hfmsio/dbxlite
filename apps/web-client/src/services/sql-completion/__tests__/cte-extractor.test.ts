@@ -41,7 +41,7 @@ describe("parseCTENames", () => {
 		expect(result.has("SELECT")).toBe(false);
 	});
 
-	test("handles whitespace and multiline formatting", () => {
+	test("captures a CTE whose body has a nested SELECT (multiline)", () => {
 		const sql = `
 			WITH
 				monthly_revenue AS (
@@ -51,29 +51,31 @@ describe("parseCTENames", () => {
 				)
 			SELECT * FROM monthly_revenue
 		`;
-		// NOTE: the current regex breaks on this case (lazy `.+?` terminates
-		// at the inner SELECT inside the CTE body). Phase 4 fixes this with
-		// a paren-depth walker. Phase 1 documents the current behavior.
-		const result = parseCTENames(sql);
-		// Phase 1: regex either captures monthly_revenue or misses it
-		// depending on the inner SELECT match. Document whichever the current
-		// implementation produces; fix in Phase 4.
-		expect(result instanceof Set).toBe(true);
+		// The paren-depth walker reaches the top-level close paren regardless
+		// of the SELECT inside the body — the case the old lazy regex missed.
+		expect(parseCTENames(sql)).toEqual(new Set(["monthly_revenue"]));
 	});
 
-	test("returns empty when WITH appears without a recognizable closing keyword", () => {
-		// Regex requires a closing SELECT/INSERT/UPDATE/DELETE; without one,
-		// no CTEs are extracted.
-		expect(parseCTENames("WITH a AS (")).toEqual(new Set());
+	test("captures multiple CTEs even when each body contains a SELECT", () => {
+		// The exact bug: the old regex stopped at the first inner SELECT and
+		// dropped `b`. The walker gets both.
+		const result = parseCTENames(
+			"WITH a AS (SELECT 1), b AS (SELECT 2) SELECT * FROM a JOIN b",
+		);
+		expect(result).toEqual(new Set(["a", "b"]));
 	});
 
-	test("extracts CTE name when WITH-body uses RECURSIVE alongside multiple CTEs", () => {
+	test("recognises a CTE name while its body is still being typed", () => {
+		// Autocomplete wants `a` the moment it's declared, before the body or
+		// the closing SELECT exist.
+		expect(parseCTENames("WITH a AS (")).toEqual(new Set(["a"]));
+	});
+
+	test("extracts all CTE names with RECURSIVE alongside multiple CTEs", () => {
 		const result = parseCTENames(
 			"WITH RECURSIVE n AS (SELECT 1), m AS (SELECT 2) SELECT * FROM n, m",
 		);
-		// Document current behavior: regex may catch only `n` due to inner
-		// SELECT in `m`'s body. We assert on what the implementation produces.
-		expect(result.has("n")).toBe(true);
+		expect(result).toEqual(new Set(["n", "m"]));
 	});
 
 	test("handles UPDATE/INSERT/DELETE as terminators", () => {

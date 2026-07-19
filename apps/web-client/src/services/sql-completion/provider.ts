@@ -31,6 +31,9 @@ import { applyRanking } from "./ranking";
 
 const logger = createLogger("SQLCompletion");
 
+/** A Snowflake identifier safe to leave unquoted: bare uppercase token. */
+const SNOWFLAKE_SAFE_BARE = /^[A-Z_][A-Z0-9_$]*$/;
+
 /**
  * Wrap an identifier in the quoting style required by the source's dialect:
  *   - BigQuery: backticks (`proj.dataset.table`)
@@ -39,10 +42,16 @@ const logger = createLogger("SQLCompletion");
  *     DuckDB's bare-identifier lexer rejects. Without quoting, the user
  *     accepts a suggestion like `export_foo-bar.parquet` and DuckDB then
  *     parses the hyphen as subtraction and errors.
+ *   - Snowflake: double quotes, but only when needed. Snowflake folds an
+ *     unquoted identifier to UPPERCASE, so an already-uppercase name resolves
+ *     fine bare; a name with lowercase or special characters was created as a
+ *     quoted identifier and must be double-quoted to match its stored form,
+ *     else the fold makes the reference miss. Embedded quotes are doubled.
  *   - Everything else: bare identifier.
  *
- * `sourceType` here is the schema-service classification, not the active
- * connector dialect.
+ * `sourceType` here is the schema-service classification (which includes
+ * `file`, not a dialect), so this stays keyed on the source rather than
+ * living in the dialect registry.
  */
 function quoteIdentifier(
 	name: string,
@@ -50,6 +59,11 @@ function quoteIdentifier(
 ): string {
 	if (sourceType === "bigquery") return `\`${name}\``;
 	if (sourceType === "file") return `'${name}'`;
+	if (sourceType === "snowflake") {
+		return SNOWFLAKE_SAFE_BARE.test(name)
+			? name
+			: `"${name.replace(/"/g, '""')}"`;
+	}
 	return name;
 }
 
@@ -105,7 +119,9 @@ export function createCompletionProvider(
 			// live there, not in dataSourceStore). Fall back to the stub
 			// only when BOTH sources are empty (true cold start).
 			const dataSources = getDataSources() ?? [];
-			const merged = getSchemaFromAllSources(dataSources);
+			// Scope the bridge to the active dialect: DuckDB mode must not
+			// suggest Snowflake tables the active engine can't run.
+			const merged = getSchemaFromAllSources(dataSources, getDialect());
 			const schema =
 				merged.tables.length > 0 || merged.topLevelSources.length > 0
 					? merged
@@ -164,9 +180,14 @@ export function createCompletionProvider(
 				return ranked as unknown as monaco.languages.CompletionItem[];
 			};
 
-			// Parse CTE names and table aliases from the SQL query
-			const cteNames = parseCTENames(textUntilPosition);
-			const aliases = parseTableAliases(textUntilPosition, cteNames);
+			// Parse CTE names and table aliases from the WHOLE query, not just
+			// text-before-cursor: a column reference in the SELECT list
+			// (`SELECT a.|`) is typed before its FROM-clause alias, so a
+			// cursor-bounded view can't yet see that `a` aliases which table.
+			// Context detection and dot-prefix parsing stay cursor-based above.
+			const fullText = model.getValue();
+			const cteNames = parseCTENames(fullText);
+			const aliases = parseTableAliases(fullText, cteNames);
 			const aliasMap = new Map(aliases.map((a) => [a.alias, a]));
 
 			// Build sets of known names for matching
@@ -259,7 +280,7 @@ export function createCompletionProvider(
 								suggestions.push({
 									label: c,
 									kind: m.languages.CompletionItemKind.Field,
-									insertText: c,
+									insertText: quoteIdentifier(c, table.sourceType),
 									detail: `Column (${aliasInfo.tableName})`,
 									documentation: `Column from ${aliasInfo.tableName} (alias: ${prefix})`,
 									range,
@@ -328,7 +349,7 @@ export function createCompletionProvider(
 								suggestions.push({
 									label: c,
 									kind: m.languages.CompletionItemKind.Field,
-									insertText: c,
+									insertText: quoteIdentifier(c, table.sourceType),
 									detail: "Column",
 									documentation: `Column: ${prefix}.${c}`,
 									range,
@@ -368,7 +389,7 @@ export function createCompletionProvider(
 							suggestions.push({
 								label: c,
 								kind: m.languages.CompletionItemKind.Field,
-								insertText: c,
+								insertText: quoteIdentifier(c, table.sourceType),
 								detail: `Column (${tableName})`,
 								documentation: `Column: ${dbName}.${schemaName}.${tableName}.${c}`,
 								range,
@@ -379,132 +400,6 @@ export function createCompletionProvider(
 				}
 
 				// Dot notation detected but prefix not recognized.
-				// Return empty suggestions: don't fall through to SQL keywords.
-				return { suggestions: rank(suggestions) };
-			} else if (word.includes(".") && isFullMode) {
-				// Handle case where user is typing after the dot (e.g., "data.us|", "data.main.tab|")
-				// Lite mode skips this drilling-through-schema path.
-				const parts = word.split(".");
-				// Remove the last part (what user is typing) to get the prefix parts
-				const prefixParts = parts.slice(0, -1);
-
-				// Single prefix part: data.us| -> prefix is "data"
-				if (prefixParts.length === 1) {
-					const prefix = prefixParts[0];
-
-					// Check alias first
-					const aliasInfo = aliasMap.get(prefix);
-					if (aliasInfo) {
-						// If alias points to a CTE, no column info: return empty
-						if (aliasInfo.isCTE) {
-							return { suggestions: [] };
-						}
-						const table = findTable(
-							aliasInfo.tableName,
-							aliasInfo.databaseName,
-						);
-						if (table) {
-							for (const c of table.columns) {
-								suggestions.push({
-									label: c,
-									kind: m.languages.CompletionItemKind.Field,
-									insertText: c,
-									detail: `Column (${aliasInfo.tableName})`,
-									documentation: `Column from ${aliasInfo.tableName}`,
-									range,
-								});
-							}
-							return { suggestions: rank(suggestions) };
-						}
-						// Alias found but table not in schema: return empty
-						return { suggestions: [] };
-					}
-
-					if (
-						databaseNames.has(prefix) ||
-						topLevelSourceNames.has(prefix)
-					) {
-						// Check if database has schemas
-						const schemasInDb = new Set<string>();
-						for (const t of schema.tables) {
-							if (t.databaseName === prefix && t.schemaName) {
-								schemasInDb.add(t.schemaName);
-							}
-						}
-
-						if (schemasInDb.size > 0) {
-							// Show schemas
-							for (const schemaName of schemasInDb) {
-								suggestions.push({
-									label: schemaName,
-									kind: m.languages.CompletionItemKind.Module,
-									insertText: schemaName,
-									detail: `Schema (${prefix})`,
-									documentation: `Schema: ${prefix}.${schemaName}`,
-									range,
-								});
-							}
-						} else {
-							// Show tables
-							for (const t of schema.tables) {
-								if (t.databaseName === prefix) {
-									const insertText =
-										quoteIdentifier(t.name, t.sourceType);
-									suggestions.push({
-										label: t.name,
-										kind: m.languages.CompletionItemKind.Class,
-										insertText,
-										detail: `Table (${prefix})`,
-										documentation: `Table: ${prefix}.${t.name}`,
-										range,
-									});
-								}
-							}
-						}
-						return { suggestions: rank(suggestions) };
-					}
-				}
-
-				// Two prefix parts: data.main.tab| -> prefix is "data.main"
-				if (prefixParts.length === 2) {
-					const [dbName, schemaName] = prefixParts;
-					for (const t of schema.tables) {
-						if (t.databaseName === dbName && t.schemaName === schemaName) {
-							const insertText =
-								quoteIdentifier(t.name, t.sourceType);
-							suggestions.push({
-								label: t.name,
-								kind: m.languages.CompletionItemKind.Class,
-								insertText,
-								detail: `Table (${dbName}.${schemaName})`,
-								documentation: `Table: ${dbName}.${schemaName}.${t.name}`,
-								range,
-							});
-						}
-					}
-					return { suggestions: rank(suggestions) };
-				}
-
-				// Three prefix parts: data.main.table.col| -> show columns
-				if (prefixParts.length === 3) {
-					const [dbName, schemaName, tableName] = prefixParts;
-					const table = findTable(tableName, dbName, schemaName);
-					if (table) {
-						for (const c of table.columns) {
-							suggestions.push({
-								label: c,
-								kind: m.languages.CompletionItemKind.Field,
-								insertText: c,
-								detail: `Column (${tableName})`,
-								documentation: `Column: ${dbName}.${schemaName}.${tableName}.${c}`,
-								range,
-							});
-						}
-					}
-					return { suggestions: rank(suggestions) };
-				}
-
-				// Word contains dot but prefix not recognized.
 				// Return empty suggestions: don't fall through to SQL keywords.
 				return { suggestions: rank(suggestions) };
 			}
@@ -575,7 +470,7 @@ export function createCompletionProvider(
 						suggestions.push({
 							label: c,
 							kind: m.languages.CompletionItemKind.Field,
-							insertText: c,
+							insertText: quoteIdentifier(c, t.sourceType),
 							detail: `Column from ${t.name}`,
 							documentation: `Column: ${t.name}.${c}`,
 							range,
@@ -603,7 +498,7 @@ export function createCompletionProvider(
 						suggestions.push({
 							label: c,
 							kind: m.languages.CompletionItemKind.Field,
-							insertText: c,
+							insertText: quoteIdentifier(c, t.sourceType),
 							detail: `Column from ${t.name}`,
 							documentation: `Column: ${t.name}.${c}`,
 							range,

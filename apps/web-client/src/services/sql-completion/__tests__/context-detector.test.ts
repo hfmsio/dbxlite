@@ -5,18 +5,11 @@ import {
 } from "../context-detector";
 
 /**
- * NOTE on pre-existing bug discovered through these tests:
- *
- * `detectSQLContext` calls `.trim()` on its input before testing the
- * regexes — but every context-detecting regex (`fromJoin`, `select`,
- * `where`, `groupBy`, `orderBy`, etc.) requires `\s+$` (trailing
- * whitespace) to match. After the trim, no input ever has trailing
- * whitespace, so none of these patterns ever fire. The function
- * effectively always returns `"all"`.
- *
- * Phase 1 is byte-faithful: tests assert the actual current behavior.
- * Phase 4 will fix this alongside the other regex-vs-real-parsing bugs
- * (the CTE multi-CTE-with-nested-SELECT issue at `cte-extractor.ts`).
+ * The clause patterns are anchored with `\s+$` (cursor just after a keyword
+ * and space). The detector must NOT trim its input, or the trailing space is
+ * lost and every pattern misses — the old bug that made this always return
+ * "all" and leak the whole dialect keyword list (ATTACH, DETACH, …) into the
+ * FROM/SELECT/WHERE positions.
  */
 describe("detectSQLContext", () => {
 	test("returns 'all' for empty input", () => {
@@ -27,94 +20,91 @@ describe("detectSQLContext", () => {
 		expect(detectSQLContext("SEL")).toBe("all");
 	});
 
-	test("returns 'all' after FROM (preexisting bug: trim removes trailing space)", () => {
-		// Aspirationally: should be "table". Actually: trim() strips the trailing
-		// space that the regex requires. Phase 4 fixes the trim/regex mismatch.
-		expect(detectSQLContext("SELECT * FROM ")).toBe("all");
+	test("returns 'table' immediately after FROM", () => {
+		expect(detectSQLContext("SELECT * FROM ")).toBe("table");
 	});
 
-	test("returns 'all' after JOIN (same trim/regex mismatch)", () => {
-		expect(detectSQLContext("SELECT * FROM users JOIN ")).toBe("all");
+	test("returns 'table' after JOIN", () => {
+		expect(detectSQLContext("SELECT * FROM users JOIN ")).toBe("table");
 	});
 
-	test("returns 'all' after INSERT INTO / UPDATE / DELETE FROM (same)", () => {
-		expect(detectSQLContext("INSERT INTO ")).toBe("all");
-		expect(detectSQLContext("UPDATE ")).toBe("all");
-		expect(detectSQLContext("DELETE FROM ")).toBe("all");
+	test("returns 'table' after INSERT INTO / UPDATE / DELETE FROM", () => {
+		expect(detectSQLContext("INSERT INTO ")).toBe("table");
+		expect(detectSQLContext("UPDATE ")).toBe("table");
+		expect(detectSQLContext("DELETE FROM ")).toBe("table");
 	});
 
-	test("returns 'all' after SELECT (same trim/regex mismatch)", () => {
-		expect(detectSQLContext("SELECT ")).toBe("all");
+	test("returns 'column' after SELECT", () => {
+		expect(detectSQLContext("SELECT ")).toBe("column");
 	});
 
-	test("returns 'all' after SELECT DISTINCT (same)", () => {
-		expect(detectSQLContext("SELECT DISTINCT ")).toBe("all");
+	test("returns 'column' after SELECT DISTINCT", () => {
+		expect(detectSQLContext("SELECT DISTINCT ")).toBe("column");
 	});
 
-	test("returns 'all' after WHERE (same)", () => {
-		expect(detectSQLContext("SELECT * FROM t WHERE ")).toBe("all");
+	test("returns 'column' after WHERE", () => {
+		expect(detectSQLContext("SELECT * FROM t WHERE ")).toBe("column");
 	});
 
-	test("returns 'all' after AND / OR continuation (same)", () => {
-		expect(detectSQLContext("SELECT * FROM t WHERE x = 1 AND ")).toBe("all");
-		expect(detectSQLContext("SELECT * FROM t WHERE x = 1 OR ")).toBe("all");
+	test("returns 'column' after AND / OR continuation", () => {
+		expect(detectSQLContext("SELECT * FROM t WHERE x = 1 AND ")).toBe("column");
+		expect(detectSQLContext("SELECT * FROM t WHERE x = 1 OR ")).toBe("column");
 	});
 
-	test("returns 'all' after ORDER BY / GROUP BY / HAVING / SET / ON (same)", () => {
-		expect(detectSQLContext("SELECT * FROM t ORDER BY ")).toBe("all");
-		expect(detectSQLContext("SELECT * FROM t GROUP BY ")).toBe("all");
-		expect(detectSQLContext("SELECT * FROM t GROUP BY a HAVING ")).toBe("all");
-		expect(detectSQLContext("UPDATE t SET ")).toBe("all");
-		expect(detectSQLContext("SELECT * FROM a JOIN b ON ")).toBe("all");
+	test("returns 'column' after ORDER BY / GROUP BY / HAVING / SET / ON", () => {
+		expect(detectSQLContext("SELECT * FROM t ORDER BY ")).toBe("column");
+		expect(detectSQLContext("SELECT * FROM t GROUP BY ")).toBe("column");
+		expect(detectSQLContext("SELECT * FROM t GROUP BY a HAVING ")).toBe("column");
+		expect(detectSQLContext("UPDATE t SET ")).toBe("column");
+		expect(detectSQLContext("SELECT * FROM a JOIN b ON ")).toBe("column");
 	});
 
-	test("returns 'column' after a comma — these regexes use `,\\s*$` so survive the trim", () => {
-		// The `selectAfterComma`, `orderByAfterComma`, and `groupByAfterComma`
-		// patterns terminate with `,\s*$` (zero-or-more trailing whitespace),
-		// so they DO match after trim() removes the trailing space. These are
-		// the only context branches that currently work.
+	test("returns 'column' after a comma in a projection / ORDER BY / GROUP BY list", () => {
 		expect(detectSQLContext("SELECT id, ")).toBe("column");
 		expect(detectSQLContext("SELECT * FROM t ORDER BY a, ")).toBe("column");
 		expect(detectSQLContext("SELECT * FROM t GROUP BY a, ")).toBe("column");
 	});
 
-	test("returns 'all' after FROM <table> with trailing space (same)", () => {
-		expect(detectSQLContext("SELECT * FROM users ")).toBe("all");
+	test("returns 'keyword' after FROM <table> and a trailing space", () => {
+		// Table already typed; the next thing is a clause keyword (WHERE, JOIN…).
+		expect(detectSQLContext("SELECT * FROM users ")).toBe("keyword");
 	});
 
-	test("is case-insensitive in input handling (still always returns 'all')", () => {
-		expect(detectSQLContext("select * from t where ")).toBe("all");
-		expect(detectSQLContext("Select Distinct ")).toBe("all");
+	test("is case-insensitive", () => {
+		expect(detectSQLContext("select * from t where ")).toBe("column");
+		expect(detectSQLContext("select * from ")).toBe("table");
+		expect(detectSQLContext("Select Distinct ")).toBe("column");
 	});
 });
 
 describe("getContextualCompletions", () => {
-	// Because detectSQLContext always returns "all", the getContextualCompletions
-	// function effectively always falls through to the default branch
-	// (`getAllSQLCompletions`), regardless of cursor position. These tests
-	// document that current reality.
-
-	test("returns full catalog for FROM context (because detector returns 'all')", () => {
+	test("returns no keywords/functions in FROM (table) context — only tables belong there", () => {
+		// This is the ATTACH/DETACH regression: table context must be empty so
+		// the provider shows only table names after FROM.
 		const result = getContextualCompletions("SELECT * FROM ", "SELECT * FROM ");
-		expect(result.length).toBeGreaterThan(50);
-		expect(result.some((c) => c.label === "SELECT")).toBe(true);
+		expect(result).toEqual([]);
 	});
 
-	test("returns full catalog for column context (same reason)", () => {
+	test("returns functions but not clause keywords in column context", () => {
 		const result = getContextualCompletions("SELECT ", "SELECT ");
-		expect(result.length).toBeGreaterThan(50);
 		expect(result.some((c) => c.label === "COUNT")).toBe(true);
+		expect(result.some((c) => c.label === "SELECT")).toBe(false);
+		expect(result.some((c) => c.label === "FROM")).toBe(false);
 	});
 
-	test("returns full catalog for keyword-after-FROM context (same reason)", () => {
+	test("returns clause keywords after FROM <table> (keyword context)", () => {
 		const result = getContextualCompletions(
 			"SELECT * FROM users ",
 			"SELECT * FROM users ",
 		);
-		expect(result.length).toBeGreaterThan(50);
+		const labels = result.map((c) => c.label);
+		expect(labels).toContain("WHERE");
+		expect(labels.some((l) => l.includes("JOIN"))).toBe(true);
+		// Not the whole catalog — statement keywords like SELECT don't belong here.
+		expect(labels).not.toContain("SELECT");
 	});
 
-	test("returns full catalog for default 'all' context (correctly)", () => {
+	test("returns the full catalog at the start of a query (all context)", () => {
 		const result = getContextualCompletions("", "");
 		expect(result.length).toBeGreaterThan(50);
 		expect(result.some((c) => c.label === "SELECT")).toBe(true);

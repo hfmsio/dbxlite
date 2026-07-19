@@ -48,8 +48,15 @@ export function parseTableAliases(
 	//      — these can contain hyphens, slashes, and dots in the
 	//      extension, none of which the bare-identifier form accepts.
 	//   3. Bare identifiers with optional dot-qualification: db.schema.table
+	// The alias group carries a negative lookahead for reserved keywords. The
+	// `,\s*` branch also fires on projection-list commas, so `SELECT a, b FROM`
+	// matches `, b` — without the lookahead the alias group would swallow the
+	// following `FROM` (recording a phantom `{tableName: b, alias: FROM}` AND
+	// consuming the FROM so the real `FROM orders o` never matches). Refusing a
+	// keyword in the alias slot both drops the phantom and leaves the clause
+	// boundary intact for the next iteration.
 	const tableRefPattern =
-		/(?:\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+(?:OUTER\s+)?JOIN|RIGHT\s+(?:OUTER\s+)?JOIN|FULL\s+(?:OUTER\s+)?JOIN|CROSS\s+JOIN)\s+|,\s*)(`[^`]+`|'[^']+'|[\w.]+)(?:\s+(?:AS\s+)?(\w+))?/gi;
+		/(?:\b(?:FROM|JOIN|INNER\s+JOIN|LEFT\s+(?:OUTER\s+)?JOIN|RIGHT\s+(?:OUTER\s+)?JOIN|FULL\s+(?:OUTER\s+)?JOIN|CROSS\s+JOIN)\s+|,\s*)(`[^`]+`|'[^']+'|[\w.]+)(?:\s+(?:AS\s+)?(?!(?:FROM|SELECT|WHERE|JOIN|INNER|LEFT|RIGHT|FULL|CROSS|ON|USING|AND|OR|ORDER|GROUP|BY|HAVING|LIMIT|OFFSET|UNION|EXCEPT|INTERSECT|INTO|VALUES)\b)(\w+))?/gi;
 
 	let match: RegExpExecArray | null;
 
@@ -60,10 +67,17 @@ export function parseTableAliases(
 		// Skip if no alias provided
 		if (!alias) continue;
 
-		// Skip SQL keywords that might match as aliases
+		// Skip SQL keywords that might match as aliases. The `,\s*` branch of
+		// the pattern also fires on projection-list commas, so a query like
+		// `SELECT a, b FROM orders o` matches `, b FROM` and would otherwise
+		// record `{tableName: "b", alias: "FROM"}`. FROM/SELECT and the other
+		// clause starters below are reserved words that can never be a real
+		// unquoted alias, so excluding them only removes false positives.
 		const upperAlias = alias.toUpperCase();
 		if (
 			[
+				"SELECT",
+				"FROM",
 				"WHERE",
 				"JOIN",
 				"INNER",
@@ -72,6 +86,7 @@ export function parseTableAliases(
 				"FULL",
 				"CROSS",
 				"ON",
+				"USING",
 				"AND",
 				"OR",
 				"ORDER",
@@ -82,6 +97,8 @@ export function parseTableAliases(
 				"UNION",
 				"EXCEPT",
 				"INTERSECT",
+				"INTO",
+				"VALUES",
 			].includes(upperAlias)
 		) {
 			continue;

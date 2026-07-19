@@ -147,19 +147,30 @@ export function getSchemaFromDataSources(
  * holds Snowflake (and eventually BigQuery via CatalogProvider)
  * tables that aren't represented in `DataSource[]`.
  *
+ * The bridge's contribution is scoped to `activeSourceType`: its tables
+ * are only queryable when that provider is the active connector, so a
+ * DuckDB-mode session must NOT autocomplete Snowflake tables — accepting
+ * one builds a query the active engine can't run ("table not found").
+ * When the active connector matches (e.g. Snowflake), only that
+ * provider's bridge entries are merged. `undefined` / DuckDB contributes
+ * no bridge schema, since the bridge never holds DuckDB tables.
+ *
  * Tables / top-level sources contributed by the bridge are appended;
  * a name collision with an existing entry favours the data-source
  * entry (it was registered via the canonical explicit path).
  */
 export function getSchemaFromAllSources(
 	dataSources: DataSource[],
+	activeSourceType?: SourceType,
 ): SchemaForCompletion {
 	const fromStore = getSchemaFromDataSources(dataSources);
 	const fromBridge = getCatalogProviderSchemas();
 
-	// Append bridge top-level sources that aren't already present.
+	// Append bridge top-level sources that aren't already present and belong
+	// to the active connector.
 	const existingTopLevel = new Set(fromStore.topLevelSources.map((s) => s.name));
 	for (const src of fromBridge.topLevelSources) {
+		if (src.sourceType !== activeSourceType) continue;
 		if (existingTopLevel.has(src.name)) continue;
 		fromStore.topLevelSources.push({
 			name: src.name,
@@ -168,15 +179,17 @@ export function getSchemaFromAllSources(
 		});
 	}
 
-	// Append bridge tables. Compose a "fully-qualified" key (db.schema.table)
-	// so a Snowflake CUSTOMER in one database doesn't shadow another with the
-	// same name in a different database/schema.
+	// Append bridge tables for the active connector. Compose a
+	// "fully-qualified" key (db.schema.table) so a Snowflake CUSTOMER in one
+	// database doesn't shadow another with the same name in a different
+	// database/schema.
 	const existingTables = new Set(
 		fromStore.tables.map(
 			(t) => `${t.databaseName ?? ""}::${t.schemaName ?? ""}::${t.name}`,
 		),
 	);
 	for (const t of fromBridge.tables) {
+		if (t.sourceType !== activeSourceType) continue;
 		const key = `${t.databaseName ?? ""}::${t.schemaName ?? ""}::${t.name}`;
 		if (existingTables.has(key)) continue;
 		fromStore.tables.push({

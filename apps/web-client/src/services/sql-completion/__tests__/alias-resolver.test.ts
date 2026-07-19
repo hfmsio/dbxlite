@@ -170,6 +170,28 @@ describe("parseTableAliases", () => {
 		expect(Array.isArray(result)).toBe(true);
 	});
 
+	test("does not invent a phantom alias from a projection-list comma", () => {
+		// The `,\s*` branch also fires on SELECT-list commas: `, b FROM` used
+		// to record {tableName: "b", alias: "FROM"}. FROM is not a real alias.
+		const result = parseTableAliases("SELECT a, b FROM orders o");
+		expect(result.find((r) => r.alias.toUpperCase() === "FROM")).toBeUndefined();
+		expect(result.find((r) => r.tableName === "b")).toBeUndefined();
+		// The genuine FROM-clause alias is still resolved.
+		expect(result).toContainEqual({
+			alias: "o",
+			tableName: "orders",
+			isCTE: false,
+		});
+	});
+
+	test("multi-column projection before FROM produces no phantom aliases", () => {
+		const result = parseTableAliases(
+			"SELECT id, name, created_at FROM users u JOIN orders o ON u.id = o.user_id",
+		);
+		const aliases = result.map((r) => r.alias).sort();
+		expect(aliases).toEqual(["o", "u"]);
+	});
+
 	test("marks aliases that point at CTE names with isCTE: true", () => {
 		const cteNames = new Set(["recent_users"]);
 		const result = parseTableAliases(

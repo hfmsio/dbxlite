@@ -82,6 +82,7 @@ function makeFakeModel(opts: FakeModelOpts) {
 			endColumn: column,
 		}),
 		getValueInRange: () => upToCursor,
+		getValue: () => text,
 		getLineContent: () => lineContent,
 		__position: { lineNumber, column },
 	};
@@ -346,6 +347,70 @@ describe("provider — Snowflake catalog bridge", () => {
 		expect(labels).toContain("C_MKTSEGMENT");
 	});
 
+	test("resolves an alias defined in FROM even when the cursor is back in SELECT", async () => {
+		// `SELECT a.| FROM salesops.main.accounts AS a` — the alias `a` is
+		// defined after the cursor, so parsing only text-before-cursor would
+		// miss it. Parsing the whole query resolves it.
+		registerCatalogProvider("snowflake", "snowflake");
+		notifyCatalogsLoaded("snowflake", [
+			{ id: "SALESOPS", name: "SALESOPS", type: "database" },
+		]);
+		notifyTablesLoaded("snowflake", "SALESOPS", "MAIN", [
+			{ id: "ACCOUNTS", name: "ACCOUNTS", catalog: "SALESOPS", schema: "MAIN" },
+		]);
+		notifyColumnsLoaded("snowflake", "SALESOPS", "MAIN", "ACCOUNTS", [
+			{ name: "ACCOUNT_ID", type: "NUMBER" },
+			{ name: "NAME", type: "VARCHAR" },
+		]);
+
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "snowflake",
+		});
+		const text = "SELECT a. FROM SALESOPS.MAIN.ACCOUNTS AS a";
+		const model = makeFakeModel({
+			text,
+			// Cursor immediately after `SELECT a.`
+			cursorOffset: "SELECT a.".length,
+		});
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
+		expect(labels).toContain("ACCOUNT_ID");
+		expect(labels).toContain("NAME");
+	});
+
+	test("Snowflake column insertText: uppercase bare, mixed-case double-quoted", async () => {
+		// Snowflake folds unquoted identifiers to uppercase, so an all-uppercase
+		// column resolves bare while a mixed-case one (created as a quoted
+		// identifier) must be double-quoted to match its stored form.
+		registerCatalogProvider("snowflake", "snowflake");
+		notifyCatalogsLoaded("snowflake", [
+			{ id: "DEV", name: "DEV", type: "database" },
+		]);
+		notifyTablesLoaded("snowflake", "DEV", "PUBLIC", [
+			{ id: "EVENTS", name: "EVENTS", catalog: "DEV", schema: "PUBLIC" },
+		]);
+		notifyColumnsLoaded("snowflake", "DEV", "PUBLIC", "EVENTS", [
+			{ name: "EVENT_ID", type: "NUMBER" },
+			{ name: "userName", type: "VARCHAR" },
+		]);
+
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "snowflake",
+		});
+		const model = makeFakeModel({
+			text: "SELECT * FROM DEV.PUBLIC.EVENTS e WHERE e.",
+		});
+		const suggestions = await getSuggestions(provider, model);
+		const byLabel = (l: string) => suggestions.find((s) => s.label === l);
+
+		expect(byLabel("EVENT_ID")?.insertText).toBe("EVENT_ID");
+		expect(byLabel("userName")?.insertText).toBe('"userName"');
+	});
+
 	test("table list arrives before columns: tables appear with empty columns", async () => {
 		registerCatalogProvider("snowflake", "snowflake");
 		notifyCatalogsLoaded("snowflake", [
@@ -366,6 +431,29 @@ describe("provider — Snowflake catalog bridge", () => {
 		const suggestions = await getSuggestions(provider, model);
 		const labels = suggestions.map((s) => s.label);
 		expect(labels).toContain("ORDERS");
+	});
+
+	test("DuckDB mode does NOT surface Snowflake bridge tables (can't run them)", async () => {
+		// The bridge holds a Snowflake table, but the active connector is DuckDB.
+		// Suggesting it would let the user build a query DuckDB can't run.
+		registerCatalogProvider("snowflake", "snowflake");
+		notifyCatalogsLoaded("snowflake", [
+			{ id: "SALESOPS", name: "SALESOPS", type: "database" },
+		]);
+		notifyTablesLoaded("snowflake", "SALESOPS", "RAW", [
+			{ id: "RYAN_CLASSIFIED", name: "RYAN_CLASSIFIED", catalog: "SALESOPS", schema: "RAW" },
+		]);
+
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "duckdb",
+		});
+		const model = makeFakeModel({ text: "SELECT * FROM " });
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
+		expect(labels).not.toContain("SALESOPS");
+		expect(labels).not.toContain("RYAN_CLASSIFIED");
 	});
 
 	test("top-level Snowflake databases appear in FROM context", async () => {
