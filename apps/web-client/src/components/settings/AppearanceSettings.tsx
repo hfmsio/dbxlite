@@ -194,10 +194,9 @@ export default function AppearanceSettings({
 							}
 							style={selectStyle}
 						>
-							<option value="off">Off (disabled)</option>
-							<option value="word">Word matching (lightweight)</option>
-							<option value="default">Default (Monaco built-ins)</option>
-							<option value="experimental">Experimental (schema-aware)</option>
+							<option value="off">Off (Monaco word matching only)</option>
+							<option value="lite">Lite (keywords + dialect functions + tables)</option>
+							<option value="full">Full (everything: dot completion, alias resolution, columns)</option>
 						</select>
 					</div>
 

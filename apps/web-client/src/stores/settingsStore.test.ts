@@ -5,7 +5,7 @@
 
 import { act } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useSettingsStore } from "./settingsStore";
+import { migrateAutocompleteMode, useSettingsStore } from "./settingsStore";
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -183,6 +183,34 @@ describe("settingsStore", () => {
 			expect(typeof useEditorTheme).toBe("function");
 			expect(typeof useEditorFontSize).toBe("function");
 			expect(typeof usePageSize).toBe("function");
+		});
+	});
+
+	describe("migrateAutocompleteMode (v0.4 legacy migration)", () => {
+		it('migrates "experimental" to "full"', () => {
+			expect(migrateAutocompleteMode("experimental")).toBe("full");
+		});
+
+		it('migrates "default" to "lite"', () => {
+			expect(migrateAutocompleteMode("default")).toBe("lite");
+		});
+
+		it('migrates "word" to "lite"', () => {
+			expect(migrateAutocompleteMode("word")).toBe("lite");
+		});
+
+		it('preserves "off"', () => {
+			expect(migrateAutocompleteMode("off")).toBe("off");
+		});
+
+		it('preserves new "lite" and "full" as-is', () => {
+			expect(migrateAutocompleteMode("lite")).toBe("lite");
+			expect(migrateAutocompleteMode("full")).toBe("full");
+		});
+
+		it('falls back to "lite" for unknown/undefined values', () => {
+			expect(migrateAutocompleteMode(undefined)).toBe("lite");
+			expect(migrateAutocompleteMode("garbage")).toBe("lite");
 		});
 	});
 });
