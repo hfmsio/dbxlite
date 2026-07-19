@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { fileHandleStore } from "../services/file-handle-store";
 import { detectDataSourceType, openDataFiles } from "../services/file-service";
+import { detectSheetDataRange } from "../stores/dataSourceStore/introspection";
 import { queryService } from "../services/streaming-query-service";
 import type { ConnectorType } from "../services/streaming-query-service";
 import type { DataSource, DataSourceType } from "../types/data-source";
@@ -9,7 +10,10 @@ import {
 	generateDatabaseAlias,
 } from "../utils/duckdbOperations";
 import { errorMonitor } from "../utils/errorMonitor";
-import { ZERO_COPY_THRESHOLD } from "../utils/fileConstants";
+import {
+	requiresFullBuffer,
+	ZERO_COPY_THRESHOLD,
+} from "../utils/fileConstants";
 import { buildAttachSQL } from "../utils/sqlSanitizer";
 import { createLogger } from "../utils/logger";
 
@@ -189,9 +193,23 @@ export function useFileUpload({
 	 */
 	const handleRegularFile = useCallback(
 		async (fileData: DataFileInfo, isDragDrop: boolean) => {
+			// Detect each sheet's data range up front. It has to happen here
+			// rather than lazily on expand: a user can drag a sheet straight
+			// into the editor without ever expanding it, and the generated SQL
+			// needs the range at that moment or the sheet reads as zero rows.
+			// The probe is a bounded 30-row read, and the file is registered by
+			// the time we get here.
 			const sheets =
 				fileData.sheets && fileData.sheets.length > 0
-					? fileData.sheets.map((s) => ({ name: s.name, index: s.index }))
+					? await Promise.all(
+							fileData.sheets.map(async (s) => ({
+								name: s.name,
+								index: s.index,
+								range:
+									(await detectSheetDataRange(fileData.name, s.name)) ??
+									undefined,
+							})),
+						)
 					: undefined;
 
 			const dataSource = await addDataSource({
@@ -309,20 +327,37 @@ export function useFileUpload({
 							`HTTP mode: Using local file path: ${fileData.fullPath}`,
 						);
 					} else {
-						// WASM mode: prefer the zero-copy File handle path whenever
-						// it's available — DuckDB only fetches the bytes it actually
-						// reads (e.g. Parquet metadata footer = a few KB even for
-						// hundred-MB files). The full-buffer registerFile path is a
-						// fallback for: (a) callers that already have only a buffer
-						// (XLSX after sheet extraction) and (b) very-old browsers
-						// without File handles in drag-drop.
-						if (fileData.file) {
+						// WASM mode: prefer the zero-copy File handle path — DuckDB only
+						// fetches the bytes it actually reads (e.g. Parquet metadata
+						// footer = a few KB even for hundred-MB files). XLSX is the
+						// exception and must be materialised; see requiresFullBuffer.
+						//
+						// Mind the placeholder: the file-picker path (openDataFiles)
+						// sets `buffer` to a zero-length ArrayBuffer and carries the
+						// real bytes in `file`, so presence of `buffer` says nothing
+						// about whether it holds anything. Always check byteLength —
+						// registering an empty buffer hands DuckDB 0 bytes and fails
+						// later as "Failed to open zip for reading".
+						const bufferedBytes =
+							fileData.buffer && fileData.buffer.byteLength > 0
+								? fileData.buffer
+								: undefined;
+
+						if (requiresFullBuffer(fileData.extension)) {
+							const bytes = bufferedBytes ?? (await fileData.file?.arrayBuffer());
+							if (!bytes) {
+								throw new Error(
+									`No file handle or buffer for ${fileData.name}`,
+								);
+							}
+							await queryService.registerFile(fileData.name, bytes);
+						} else if (fileData.file) {
 							await queryService.registerFileHandle(
 								fileData.name,
 								fileData.file,
 							);
-						} else if (fileData.buffer) {
-							await queryService.registerFile(fileData.name, fileData.buffer);
+						} else if (bufferedBytes) {
+							await queryService.registerFile(fileData.name, bufferedBytes);
 						} else {
 							throw new Error(
 								`No file handle or buffer for ${fileData.name}`,
@@ -486,12 +521,12 @@ export function useFileUpload({
 					const fileWithPath = file as FileWithPath;
 					const fullPath = fileWithPath.path;
 
-					// XLSX needs the full buffer for sheet detection; everything
-					// else (parquet/csv/json/duckdb) registers via the File handle
-					// so DuckDB only fetches the bytes it actually reads. For a
-					// 600k-row Parquet that's a few KB of footer metadata instead
-					// of 150 MB of full-file read into JS heap.
-					const needsBuffer = extension === "xlsx" || extension === "xls";
+					// XLSX needs the full buffer for sheet detection and for its own
+					// registration; everything else (parquet/csv/json/duckdb)
+					// registers via the File handle so DuckDB only fetches the bytes
+					// it actually reads. For a 600k-row Parquet that's a few KB of
+					// footer metadata instead of 150 MB read into the JS heap.
+					const needsBuffer = requiresFullBuffer(extension);
 					let buffer: ArrayBuffer | undefined;
 					if (needsBuffer) {
 						if (file.size > ZERO_COPY_THRESHOLD) {

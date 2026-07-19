@@ -363,6 +363,12 @@ export async function openDataFiles(): Promise<DataFileInfo[]> {
 
 				// Extract XLSX sheets (Phase 1: only sheet names)
 				if (fileType === "xlsx") {
+					// XLSX is registered from a buffer rather than the File handle
+					// (see requiresFullBuffer), and sheet extraction needs the same
+					// bytes. Read them once here and keep them, instead of leaving
+					// the zero-length placeholder above for both steps to work
+					// around separately.
+					fileInfo.buffer = await file.arrayBuffer();
 					const sheets = await extractXLSXSheets(fileInfo);
 					if (sheets.length > 0) {
 						fileInfo.sheets = sheets;

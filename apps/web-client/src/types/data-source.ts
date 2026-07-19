@@ -45,6 +45,14 @@ export interface SheetInfo {
 	rowCount?: number;
 	columnCount?: number;
 	columns?: Column[]; // Phase 2: Lazy-loaded columns per sheet
+	/**
+	 * Detected data range, e.g. "A3:I1048576". Present when the sheet's data
+	 * does not start at A1 — a report layout with a title row and a blank
+	 * spacer, which a default read_xlsx() reads as zero rows. Undefined means
+	 * an ordinary sheet where DuckDB's defaults are correct. Always pair with
+	 * stop_at_empty=true via buildReadXlsxCall().
+	 */
+	range?: string;
 }
 
 export interface Table {

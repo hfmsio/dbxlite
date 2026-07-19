@@ -35,10 +35,15 @@ vi.mock("../../utils/errorMonitor", () => ({
 	},
 }));
 
+vi.mock("../../stores/dataSourceStore/introspection", () => ({
+	detectSheetDataRange: vi.fn(),
+}));
+
 // Import mocked modules
 import { fileHandleStore } from "../../services/file-handle-store";
 import { queryService } from "../../services/streaming-query-service";
 import { openDataFiles, detectDataSourceType } from "../../services/file-service";
+import { detectSheetDataRange } from "../../stores/dataSourceStore/introspection";
 
 // Default hook options
 const createDefaultOptions = (overrides = {}) => ({
@@ -72,6 +77,10 @@ describe("useFileUpload", () => {
 		vi.mocked(queryService.registerFile).mockResolvedValue(undefined);
 		vi.mocked(queryService.registerFileHandle).mockResolvedValue(undefined);
 		vi.mocked(detectDataSourceType).mockReturnValue("csv");
+		// clearAllMocks resets calls but keeps implementations, so give range
+		// detection an explicit default: "ordinary sheet, no range needed".
+		// Without this a test that stubs a range leaks it into later tests.
+		vi.mocked(detectSheetDataRange).mockResolvedValue(null);
 	});
 
 	afterEach(() => {
@@ -150,7 +159,108 @@ describe("useFileUpload", () => {
 			expect(setIsUploadingFiles).toHaveBeenCalledWith(false);
 		});
 
-		it("should switch to DuckDB when using BigQuery", async () => {
+		it("materialises XLSX bytes when the picker leaves an empty placeholder buffer", async () => {
+			// Regression: openDataFiles (the file-picker path) sets
+			// buffer = new ArrayBuffer(0) and carries the real bytes in `file`.
+			// A truthiness check on `buffer` passes for that placeholder and
+			// registers 0 bytes, which DuckDB reports much later and far away
+			// as "IO Error: Failed to open zip for reading".
+			const realBytes = new ArrayBuffer(4096);
+			const file = new File(["x"], "report.xlsx") as File & {
+				arrayBuffer: () => Promise<ArrayBuffer>;
+			};
+			file.arrayBuffer = vi.fn().mockResolvedValue(realBytes);
+
+			vi.mocked(openDataFiles).mockResolvedValue([
+				createMockFileData({
+					name: "report.xlsx",
+					type: "xlsx",
+					extension: "xlsx",
+					buffer: new ArrayBuffer(0), // the placeholder
+					file,
+					sheets: [{ name: "MASTER (Business Type Led)", index: 0 }],
+				}),
+			]);
+
+			const { result } = renderHook(() => useFileUpload(createDefaultOptions()));
+			await act(async () => {
+				await result.current.handleUploadDataFile();
+			});
+
+			expect(queryService.registerFile).toHaveBeenCalledWith(
+				"report.xlsx",
+				realBytes,
+			);
+			// The empty placeholder must never reach DuckDB.
+			expect(queryService.registerFile).not.toHaveBeenCalledWith(
+				"report.xlsx",
+				expect.objectContaining({ byteLength: 0 }),
+			);
+		});
+
+		it("registers XLSX from a buffer, never the File handle", async () => {
+			// The handle path routes XLSX through BROWSER_FILEREADER, where
+			// DuckDB's ZIP reader pays a slice + sync read per seek — measured
+			// 3-10x slower than reading the same sheet from a buffer.
+			const buffer = new ArrayBuffer(2048);
+			vi.mocked(openDataFiles).mockResolvedValue([
+				createMockFileData({
+					name: "report.xlsx",
+					type: "xlsx",
+					extension: "xlsx",
+					buffer,
+					file: new File(["x"], "report.xlsx"),
+					sheets: [{ name: "MASTER (Business Type Led)", index: 0 }],
+				}),
+			]);
+
+			const { result } = renderHook(() => useFileUpload(createDefaultOptions()));
+			await act(async () => {
+				await result.current.handleUploadDataFile();
+			});
+
+			expect(queryService.registerFile).toHaveBeenCalledWith(
+				"report.xlsx",
+				buffer,
+			);
+			expect(queryService.registerFileHandle).not.toHaveBeenCalled();
+		});
+
+		it("stores each sheet's detected range for the drag-to-editor flow", async () => {
+			// A user can drag a sheet into the editor without ever expanding it,
+			// so the range has to be resolved at upload, not on expand.
+			vi.mocked(detectSheetDataRange).mockResolvedValueOnce("A3:I1048576");
+			vi.mocked(openDataFiles).mockResolvedValue([
+				createMockFileData({
+					name: "report.xlsx",
+					type: "xlsx",
+					extension: "xlsx",
+					sheets: [{ name: "MASTER (Business Type Led)", index: 0 }],
+				}),
+			]);
+
+			const addDataSource = vi.fn().mockResolvedValue({ id: "ds-1" });
+			const { result } = renderHook(() =>
+				useFileUpload(createDefaultOptions({ addDataSource })),
+			);
+			await act(async () => {
+				await result.current.handleUploadDataFile();
+			});
+
+			expect(addDataSource).toHaveBeenCalledWith(
+				expect.objectContaining({
+					sheets: [
+						{
+							name: "MASTER (Business Type Led)",
+							index: 0,
+							range: "A3:I1048576",
+						},
+					],
+				}),
+			);
+		});
+
+		it("switch to DuckDB when using BigQuery", async () => {
 			const mockFile = createMockFileData();
 			vi.mocked(openDataFiles).mockResolvedValue([mockFile]);
 

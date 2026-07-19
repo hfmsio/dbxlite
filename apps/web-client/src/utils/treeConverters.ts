@@ -43,6 +43,7 @@ import {
 	TrashIcon,
 } from "../components/Icons";
 import { extractNestedFields, isComplexType } from "./typeFormatter";
+import { buildReadXlsxCall } from "./xlsxRange";
 
 /**
  * Format file size in human-readable format
@@ -465,9 +466,10 @@ export function convertFilesToTreeNodes(
 								label: "Query Sheet",
 								icon: React.createElement(TableIcon, { size: 14 }),
 								onClick: () => {
-									// Use DuckDB's native read_xlsx function with sheet parameter
+									// Read through the sheet's detected range: a report-style
+									// sheet returns zero rows without it.
 									onInsertQuery(
-										`SELECT * FROM read_xlsx('${fileReference}', sheet='${sheet.name}') LIMIT 100;`,
+										`SELECT * FROM ${buildReadXlsxCall(fileReference, sheet.name, sheet.range)} LIMIT 100;`,
 										"duckdb",
 									);
 								},
@@ -478,7 +480,7 @@ export function convertFilesToTreeNodes(
 								icon: React.createElement(TableIcon, { size: 14 }),
 								onClick: () => {
 									onInsertQuery(
-										`SELECT * FROM read_xlsx('${fileReference}', sheet='${sheet.name}');`,
+										`SELECT * FROM ${buildReadXlsxCall(fileReference, sheet.name, sheet.range)};`,
 										"duckdb",
 									);
 								},

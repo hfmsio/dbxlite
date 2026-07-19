@@ -30,6 +30,7 @@ import {
 	isComplexType,
 } from "../utils/typeFormatter";
 import { formatCompactNumber } from "../utils/formatters";
+import { buildReadXlsxCall } from "../utils/xlsxRange";
 import { useExplorerContext } from "./ResizableExplorer";
 
 interface UnifiedTreeViewProps {
@@ -595,7 +596,11 @@ function UnifiedTreeView({
 					}
 				}
 
-				return `SELECT * FROM read_xlsx('${fileReference}', sheet='${sheetName}');`;
+				// sourceData is the SheetInfo, so its detected range rides along.
+				// Without it a report-style sheet reads as zero rows.
+				const sheetRange =
+					typeof sourceData?.range === "string" ? sourceData.range : undefined;
+				return `SELECT * FROM ${buildReadXlsxCall(fileReference, sheetName, sheetRange)};`;
 			}
 			// Regular database table
 			const tableName =
