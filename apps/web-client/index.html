@@ -15,6 +15,9 @@
         - connect-src https: is required for DuckDB httpfs (queries against
           arbitrary remote CSV/Parquet URLs); known endpoints listed
           explicitly for documentation even though https: subsumes them
+        - http://localhost:4213 is the DuckDB CLI's `-ui` server (server
+          mode). Without it the mode-detection probe to /info is blocked,
+          including under the vite dev server, so server mode never detects.
         - blob: for DuckDB worker module URLs
     -->
     <meta http-equiv="Content-Security-Policy" content="
@@ -23,7 +26,7 @@
       style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
       font-src 'self' data: https://fonts.gstatic.com;
       img-src 'self' data: blob:;
-      connect-src 'self' https: blob: data:;
+      connect-src 'self' https: http://localhost:4213 blob: data:;
       worker-src 'self' blob:;
       object-src 'none';
       base-uri 'self';

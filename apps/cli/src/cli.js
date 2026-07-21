@@ -240,7 +240,7 @@ const server = createServer((req, res) => {
         "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
         "font-src 'self' data: https://fonts.gstatic.com; " +
         "img-src 'self' data: blob:; " +
-        "connect-src 'self' https: blob: data:; " +
+        "connect-src 'self' https: http://localhost:4213 blob: data:; " +
         "worker-src 'self' blob:; " +
         "object-src 'none'; " +
         "base-uri 'self'; " +
