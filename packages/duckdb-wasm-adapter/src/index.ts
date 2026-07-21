@@ -1,7 +1,5 @@
 // DuckDB adapter main API (uses worker). Parses Arrow IPC chunks and implements ACK-based backpressure.
-import { tableFromIPC } from 'apache-arrow';
 import { createLogger } from './logger';
-import { decodeArrowColumnValue } from './arrow-value-decoder';
 
 const logger = createLogger('DuckDBWorkerAdapter');
 
@@ -238,99 +236,6 @@ export class DuckDBWorkerAdapter {
         }
         // Send ACK
         this.worker.postMessage({ type: 'ack', id: msg.id })
-      } else if(msg.type === 'arrow' && msg.buffer){
-        try {
-          // Try parse as Arrow IPC
-          try {
-            const table = tableFromIPC(msg.buffer)
-
-            // Extract schema from the first chunk and send to callback
-            if (!schemaExtracted && onSchema && table.schema) {
-              const columns = table.schema.fields.map((field) => ({
-                name: field.name,
-                type: field.type.toString(),
-                nullable: field.nullable
-              }))
-              onSchema(columns)
-              schemaExtracted = true
-            }
-
-            // iterate rows
-            let rowIndex = 0
-            for(const row of table) {
-              // Convert Arrow row to plain JavaScript object
-              // Apache Arrow automatically converts Date32/Date64/Timestamp to JavaScript Date objects
-              const plainRow: Record<string, unknown> = {}
-              for (const field of table.schema.fields) {
-                let value = row[field.name]
-
-                // Access the column vector for decoding complex/decimal types
-                const columnIndex = table.schema.fields.indexOf(field)
-                const column = table.getChildAt(columnIndex)
-
-                // Handle DECIMAL types: Arrow returns them as objects, and row[field.name]
-                // triggers .toJSON() which returns a quoted string like "19.99"
-                // We need to use .toString() instead to get the numeric string without quotes
-                const fieldTypeName = field.type.toString().toLowerCase()
-
-                if (fieldTypeName.includes('decimal')) {
-                  if (column) {
-                    const decimalValue = column.get(rowIndex)
-                    if (decimalValue !== null && decimalValue !== undefined) {
-                      // Use toString() to get numeric string without quotes
-                      value = decimalValue.toString()
-                    }
-                  }
-                } else if (fieldTypeName.includes('dictionary')) {
-                  // Dictionary/ENUM types: The row[field.name] access through Arrow's StructRow proxy
-                  // should resolve dictionary indices to actual values. However, if we get a non-primitive,
-                  // use JSON round-trip to ensure proper resolution.
-                  if (value !== null && value !== undefined && typeof value === 'object') {
-                    // Dictionary value is an object - try to resolve via toJSON or toString
-                    if (typeof (value as {toJSON?: () => unknown}).toJSON === 'function') {
-                      value = (value as {toJSON: () => unknown}).toJSON()
-                    } else if (typeof (value as {toString?: () => string}).toString === 'function') {
-                      const strVal = (value as {toString: () => string}).toString()
-                      if (!strVal.startsWith('[object ')) {
-                        value = strVal
-                      }
-                    }
-                    // If still an object, try JSON round-trip via the whole row
-                    if (typeof value === 'object') {
-                      try {
-                        const rowJson = JSON.parse(JSON.stringify(row))
-                        value = rowJson[field.name]
-                      } catch {
-                        // JSON resolution failed - keep original value
-                      }
-                    }
-                  }
-                } else if (column) {
-                  // Decode Arrow LIST/STRUCT/MAP/UNION into plain JS values
-                  value = decodeArrowColumnValue(column, rowIndex)
-                }
-
-                plainRow[field.name] = value
-              }
-              onRow(plainRow)
-              rowIndex++
-            }
-          } catch(parseErr){
-            // Fallback: treat buffer as JSON text
-            try {
-              const txt = new TextDecoder().decode(msg.buffer)
-              const rows = JSON.parse(txt)
-              for(const r of rows) onRow(r)
-            } catch {
-              // JSON fallback parse also failed
-            }
-          }
-        } catch {
-          // Processing chunk failed - will be handled by caller
-        } finally {
-          // ACK the chunk so worker can send more
-          try { this.worker!.postMessage({ type: 'ack', id }) } catch(e){}
-        }
       } else if(msg.type === 'query-stats'){
         onStats && onStats((msg as QueryStatsMessage).stats)
       } else if(msg.type === 'error'){
