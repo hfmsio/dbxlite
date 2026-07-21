@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Column, Schema, Table } from "../types/data-source";
 import { queryService } from "../services/streaming-query-service";
 import { createLogger } from "../utils/logger";
-import { escapeStringLiteral } from "../utils/sqlSanitizer";
+import { escapeIdentifier, escapeStringLiteral } from "../utils/sqlSanitizer";
 
 const logger = createLogger("useServerDatabases");
 
@@ -171,8 +171,11 @@ export function useServerDatabases(isHttpMode: boolean) {
 						// Get row count (optional, skip if slow)
 						let rowCount = 0;
 						try {
+							// escapeIdentifier doubles embedded quotes. This runs against
+							// the connected DuckDB HTTP server, so a hostile name in the
+							// server's catalog must not be able to escape the identifier.
 							const countResult = await queryService.executeQuery(
-								`SELECT COUNT(*) as cnt FROM "${dbName}"."${schemaName}"."${tableName}"`,
+								`SELECT COUNT(*) as cnt FROM ${escapeIdentifier(dbName)}.${escapeIdentifier(schemaName)}.${escapeIdentifier(tableName)}`,
 							);
 							if (countResult.rows.length > 0) {
 								rowCount = Number(countResult.rows[0].cnt);
