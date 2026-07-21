@@ -161,7 +161,7 @@ type StoredConfig = {
 // BigQuery connector reuses the same implementations.
 // ---------------------------------------------------------------------------
 
-import { MetadataCache, base64url } from "./connector-utils"
+import { MetadataCache, WorkerParsePool, base64url } from "./connector-utils"
 
 /**
  * Quote a Snowflake identifier (database/schema/table/column name) as
@@ -262,17 +262,19 @@ export class SnowflakeConnector implements CloudConnector {
 	private cache = new MetadataCache()
 	private activeStatements = new Map<string, string>()
 
-	// Lazily-created Web Worker for row-typing partitions off the main
-	// thread. Falls back to main-thread parsing if Worker construction
-	// fails (e.g. jsdom in tests, or a hosting context with no Worker
-	// support). See snowflake-parse.worker.ts.
-	private parserWorker: Worker | null = null
-	private parserWorkerInitTried = false
-	private parseHandlers = new Map<
-		string,
-		(rows: Record<string, unknown>[]) => void
-	>()
-	private parseSeq = 0
+	// Lazily-created worker pool for row-typing partitions off the main
+	// thread. WorkerParsePool guarantees every request settles: worker
+	// crash / timeout / missing Worker global all re-run the parse on the
+	// main thread instead of leaving `query()` awaiting forever (the bug
+	// the previous bespoke worker wiring had). See snowflake-parse.worker.ts.
+	private parserPool: WorkerParsePool<
+		{
+			type: 'parseRows'
+			data: unknown[][]
+			rowType: { name: string; type: string; scale?: number }[]
+		},
+		{ id: string; rows: Record<string, unknown>[] }
+	> | null = null
 
 	private accountIdentifier: string
 	private accountHostname: string
@@ -1358,17 +1360,11 @@ export class SnowflakeConnector implements CloudConnector {
 		try {
 			localStorage.removeItem(OAUTH_AUTO_CONNECT_LSKEY)
 		} catch {}
-		// Tear down the parse worker so we don't leak it across reconnects
-		if (this.parserWorker) {
-			try {
-				this.parserWorker.terminate()
-			} catch {
-				// non-critical
-			}
-			this.parserWorker = null
-		}
-		this.parserWorkerInitTried = false
-		this.parseHandlers.clear()
+		// Tear down the parse pool so we don't leak the worker across
+		// reconnects. terminate() settles any in-flight parse via the
+		// main-thread fallback first, so no caller is left hanging.
+		this.parserPool?.terminate()
+		this.parserPool = null
 	}
 
 	clearCache(): void {
@@ -1457,64 +1453,36 @@ export class SnowflakeConnector implements CloudConnector {
 			return this.parseRows(data, rowType)
 		}
 
-		const worker = await this.ensureParserWorker()
-		if (!worker) {
-			return this.parseRows(data, rowType)
+		if (!this.parserPool) {
+			this.parserPool = new WorkerParsePool(
+				() =>
+					new Worker(
+						new URL("./snowflake-parse.worker.ts", import.meta.url),
+						{ type: "module" },
+					),
+				// Must mirror the worker's reply shape ({id, rows}) — the caller
+				// reads `.rows` off whichever side answered.
+				(req) => ({
+					id: "main-thread-fallback",
+					rows: this.parseRows(req.data, req.rowType as SnowflakeColumnMeta[]),
+				}),
+				logger,
+			)
 		}
 
-		return new Promise((resolve) => {
-			const id = `p_${++this.parseSeq}`
-			this.parseHandlers.set(id, resolve)
-			// Lite shape: only the fields the worker reads. Avoids leaking
-			// internal SnowflakeColumnMeta extras that may not be cloneable.
-			const lite = rowType.map((c) => ({
-				name: c.name,
-				type: c.type,
-				scale: c.scale,
-			}))
-			worker.postMessage({ id, type: "parseRows", data, rowType: lite })
+		// Lite shape: only the fields the worker reads. Avoids leaking
+		// internal SnowflakeColumnMeta extras that may not be cloneable.
+		const lite = rowType.map((c) => ({
+			name: c.name,
+			type: c.type,
+			scale: c.scale,
+		}))
+		const response = await this.parserPool.send({
+			type: "parseRows",
+			data,
+			rowType: lite,
 		})
-	}
-
-	private async ensureParserWorker(): Promise<Worker | null> {
-		if (this.parserWorker) return this.parserWorker
-		if (this.parserWorkerInitTried) return null
-		this.parserWorkerInitTried = true
-
-		// Vite-style worker import. Wrapped because:
-		//   1. jsdom (Vitest) has no Worker constructor — `new Worker(...)` throws
-		//   2. The dynamic `import.meta.url` path may fail under odd bundlers
-		//   3. Some browsers in private mode restrict workers
-		// In any of these cases we fall back to main-thread parse.
-		try {
-			if (typeof Worker === "undefined") return null
-			const ParserWorker = (
-				await import("./snowflake-parse.worker?worker")
-			).default as new () => Worker
-			this.parserWorker = new ParserWorker()
-			this.parserWorker.onmessage = (
-				e: MessageEvent<{ id: string; rows: Record<string, unknown>[] }>,
-			) => {
-				const handler = this.parseHandlers.get(e.data.id)
-				if (handler) {
-					this.parseHandlers.delete(e.data.id)
-					handler(e.data.rows)
-				}
-			}
-			this.parserWorker.onerror = (err) => {
-				logger.warn("[snowflake parse-worker] error, falling back", err)
-				try {
-					this.parserWorker?.terminate()
-				} catch {
-					// non-critical
-				}
-				this.parserWorker = null
-			}
-			return this.parserWorker
-		} catch (err) {
-			logger.warn("[snowflake parse-worker] init failed, using main thread", err)
-			return null
-		}
+		return response.rows
 	}
 
 	private snapshotConfig(): StoredConfig {

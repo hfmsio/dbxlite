@@ -1112,8 +1112,11 @@ export class BigQueryConnector implements CloudConnector {
         { id: string; rows: Record<string, unknown>[] }
       >(
         () => new Worker(new URL('./bigquery-parse.worker.ts', import.meta.url), { type: 'module' }),
-        (req) =>
-          parseBigQueryRows(req.rows, req.schema),
+        // Must return the same shape the worker posts ({id, rows}) — the
+        // caller reads `.rows` off whichever side answered. Returning the
+        // bare array here made every fallback (worker crash, timeout, no
+        // Worker global) crash the query instead of saving it.
+        (req) => ({ id: 'main-thread-fallback', rows: parseBigQueryRows(req.rows, req.schema) }),
         logger,
       )
     }

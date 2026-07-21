@@ -97,7 +97,25 @@ export function useFileUpload({
 
 				// Drag-drop is read-write, button upload is read-only
 				const attachSQL = buildAttachSQL(fileData.name, dbAlias, !isDragDrop);
-				await queryService.executeQueryOnConnector("duckdb", attachSQL);
+
+				// ATTACH can transiently fail while the file registration settles
+				// (the browser FileReader handle backing a .duckdb). Retry a few
+				// times before surfacing an error, so a re-add doesn't take "a few
+				// tries" by hand.
+				let attachErr: unknown;
+				for (let attempt = 1; attempt <= 3; attempt++) {
+					try {
+						await queryService.executeQueryOnConnector("duckdb", attachSQL);
+						attachErr = undefined;
+						break;
+					} catch (e) {
+						attachErr = e;
+						if (attempt < 3) {
+							await new Promise((r) => setTimeout(r, 150 * attempt));
+						}
+					}
+				}
+				if (attachErr) throw attachErr;
 
 				// Get list of tables
 				let tableNames = "";

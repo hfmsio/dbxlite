@@ -821,6 +821,20 @@ self.addEventListener('message', async (ev) => {
       } catch (err) {
         self.postMessage({ type: 'error', id, error: String(err) });
       }
+    } else if (msg.type === 'drop_file') {
+      // Unregister a file from DuckDB's virtual filesystem. Used on data-source
+      // removal so a later re-add of the same name starts from a clean slate
+      // instead of colliding with the stale registration.
+      const { id, fileName } = msg;
+      try {
+        if (!db) {
+          throw new Error('Database not initialized');
+        }
+        await db.dropFile(fileName);
+        self.postMessage({ type: 'file_dropped', id });
+      } catch (err) {
+        self.postMessage({ type: 'error', id, error: String(err) });
+      }
     }
   } catch (e) {
     // Send error without id for init errors

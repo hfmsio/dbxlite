@@ -27,6 +27,16 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
     await this.adapter!.registerFileHandle(fileName, file)
   }
 
+  /**
+   * Unregister a file from DuckDB's virtual filesystem. Called on data-source
+   * removal so a later re-add of the same filename registers cleanly instead
+   * of colliding with the stale handle.
+   */
+  async dropFile(fileName: string): Promise<void> {
+    if (!this.adapter) return // nothing registered if we never connected
+    await this.adapter.dropFile(fileName)
+  }
+
   async copyFileToBuffer(fileName: string): Promise<Uint8Array> {
     if (!this.adapter) {
       await this.connect({ options: {} })

@@ -11,6 +11,8 @@ import { useDataSourceStore } from "./store";
 vi.mock("../../services/streaming-query-service", () => ({
 	queryService: {
 		executeQuery: vi.fn().mockResolvedValue({ rows: [] }),
+		executeQueryOnConnector: vi.fn().mockResolvedValue({ rows: [] }),
+		dropFile: vi.fn().mockResolvedValue(undefined),
 		getActiveConnectorType: vi.fn().mockReturnValue("duckdb"),
 		setActiveConnector: vi.fn(),
 	},
@@ -497,6 +499,83 @@ describe("dataSourceStore", () => {
 
 			expect(ds2?.id).toBe(ds1.id);
 			expect(useDataSourceStore.getState().dataSources).toHaveLength(1);
+		});
+	});
+
+	// ===== REPLACE vs REMOVE: engine-side teardown =====
+	describe("replace path preserves engine-side resources", () => {
+		it("re-adding a same-path file does NOT drop its fresh registration or detach it", async () => {
+			const { queryService } = await import(
+				"../../services/streaming-query-service"
+			);
+			const store = useDataSourceStore.getState();
+
+			await act(async () => {
+				await store.addDataSource({
+					name: "sales.duckdb",
+					type: "duckdb",
+					filePath: "sales.duckdb",
+					isAttached: true,
+					attachedAs: "sales",
+				});
+			});
+
+			vi.mocked(queryService.dropFile).mockClear();
+			vi.mocked(queryService.executeQueryOnConnector).mockClear();
+
+			// Re-upload of the same file: the caller has just re-registered and
+			// re-attached it, then addDataSource replaces the logical entry.
+			// The replace must NOT dropFile (would unregister the fresh bytes)
+			// and must NOT detach (would tear down the fresh ATTACH).
+			await act(async () => {
+				await store.addDataSource({
+					name: "sales.duckdb",
+					type: "duckdb",
+					filePath: "sales.duckdb",
+					isAttached: true,
+					attachedAs: "sales",
+				});
+			});
+
+			expect(queryService.dropFile).not.toHaveBeenCalled();
+			// Introspection queries are fine; a DETACH is not — it would tear
+			// down the ATTACH the caller just made for the replacing entry.
+			const detachCalls = vi
+				.mocked(queryService.executeQueryOnConnector)
+				.mock.calls.filter(([, sql]) => /\bDETACH\b/i.test(String(sql)));
+			expect(detachCalls).toHaveLength(0);
+			expect(useDataSourceStore.getState().dataSources).toHaveLength(1);
+		});
+
+		it("a plain removeDataSource still drops the registration and detaches", async () => {
+			const { queryService } = await import(
+				"../../services/streaming-query-service"
+			);
+			const store = useDataSourceStore.getState();
+
+			const ds = await act(async () => {
+				return store.addDataSource({
+					name: "sales.duckdb",
+					type: "duckdb",
+					filePath: "sales.duckdb",
+					isAttached: true,
+					attachedAs: "sales",
+				});
+			});
+
+			vi.mocked(queryService.dropFile).mockClear();
+			vi.mocked(queryService.executeQueryOnConnector).mockClear();
+
+			await act(async () => {
+				await useDataSourceStore.getState().removeDataSource(ds.id);
+			});
+
+			expect(queryService.dropFile).toHaveBeenCalledWith("sales.duckdb");
+			expect(queryService.executeQueryOnConnector).toHaveBeenCalledWith(
+				"duckdb",
+				expect.stringContaining("DETACH"),
+			);
+			expect(useDataSourceStore.getState().dataSources).toHaveLength(0);
 		});
 	});
 });
