@@ -281,6 +281,21 @@ export const useDataSourceStore = create<DataSourceStore>()(
 				}
 			}
 
+			// Unregister the file from DuckDB's virtual filesystem. Detach only
+			// removes the ATTACH; the underlying file registration lingers in the
+			// worker and collides with a later re-add of the same name (the
+			// "have to try a few times" flakiness). Best-effort: not every
+			// connector supports drop (HTTP mode reads from disk directly), and a
+			// remote URL was never registered.
+			if (dataSource.filePath && !dataSource.isRemote) {
+				try {
+					await queryService.dropFile(dataSource.filePath);
+					logger.debug(`Unregistered file: ${dataSource.filePath}`);
+				} catch (error) {
+					logger.debug("dropFile skipped/failed (non-critical):", error);
+				}
+			}
+
 			// Remove file handle from IndexedDB if it exists
 			if (dataSource.hasFileHandle) {
 				try {

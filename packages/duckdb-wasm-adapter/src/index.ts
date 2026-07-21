@@ -25,6 +25,11 @@ interface FileRegisteredMessage extends WorkerMessageBase {
   id: string;
 }
 
+interface FileDroppedMessage extends WorkerMessageBase {
+  type: 'file_dropped';
+  id: string;
+}
+
 interface FileBufferMessage extends WorkerMessageBase {
   type: 'file_buffer';
   id: string;
@@ -78,6 +83,7 @@ type WorkerMessage =
   | InitedMessage
   | ErrorMessage
   | FileRegisteredMessage
+  | FileDroppedMessage
   | FileBufferMessage
   | JsonSchemaMessage
   | JsonMessage
@@ -163,6 +169,24 @@ export class DuckDBWorkerAdapter {
       }
       this.handlers.set(id, handler)
       this.worker!.postMessage({ type: 'register_file_handle', id, fileName, file })
+    })
+  }
+
+  async dropFile(fileName: string): Promise<void> {
+    if(!this.worker) await this.init()
+    return new Promise((resolve, reject) => {
+      const id = `drop_${Date.now()}`
+      const handler = (msg: WorkerMessage) => {
+        if(msg.type === 'file_dropped') {
+          this.handlers.delete(id)
+          resolve()
+        } else if(msg.type === 'error') {
+          this.handlers.delete(id)
+          reject(new Error((msg as ErrorMessage).error))
+        }
+      }
+      this.handlers.set(id, handler)
+      this.worker!.postMessage({ type: 'drop_file', id, fileName })
     })
   }
 
