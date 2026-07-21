@@ -7,7 +7,11 @@ import type { Column, DataSource, Schema, Table } from "../../../types/data-sour
 import type { DuckDBIntrospectionResult } from "../types";
 import { queryService } from "../../../services/streaming-query-service";
 import { generateDatabaseAlias } from "../../../utils/duckdbOperations";
-import { buildAttachSQL, escapeStringLiteral } from "../../../utils/sqlSanitizer";
+import {
+	buildAttachSQL,
+	escapeIdentifier,
+	escapeStringLiteral,
+} from "../../../utils/sqlSanitizer";
 import { createLogger } from "../../../utils/logger";
 
 const logger = createLogger("DuckDBIntrospection");
@@ -173,9 +177,12 @@ async function getTableRowCount(
 	attachedAs?: string,
 ): Promise<number> {
 	try {
+		// escapeIdentifier doubles embedded quotes — names inside an attached
+		// .duckdb file are attacker-controlled (a crafted DB attaches and
+		// auto-introspects), so raw interpolation here was an injection vector.
 		const fullTableName = attachedAs
-			? `${attachedAs}."${schemaName}"."${tableName}"`
-			: `"${schemaName}"."${tableName}"`;
+			? `${escapeIdentifier(attachedAs)}.${escapeIdentifier(schemaName)}.${escapeIdentifier(tableName)}`
+			: `${escapeIdentifier(schemaName)}.${escapeIdentifier(tableName)}`;
 
 		const countResult = await queryService.executeQueryOnConnector("duckdb", 
 			`SELECT COUNT(*) as cnt FROM ${fullTableName}`,

@@ -789,7 +789,12 @@ async function runStatementAsObjects(
 }
 
 function escapeSqlLiteral(s: string): string {
-	return s.replace(/'/g, "''")
+	// Backslashes FIRST: Snowflake treats `\` as an escape inside single
+	// quotes, so a name ending in `\` would turn the doubled quote below
+	// into an escaped quote + literal terminator — a breakout primitive
+	// for names the user doesn't control (shared databases). Mirrors the
+	// connector's escapeSfLiteral.
+	return s.replace(/\\/g, "\\\\").replace(/'/g, "''")
 }
 
 function parseComputeState(s: string | undefined): ComputeStatusState {

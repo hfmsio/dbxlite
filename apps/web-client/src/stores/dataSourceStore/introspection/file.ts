@@ -7,6 +7,10 @@ import type { Column, DataSource } from "../../../types/data-source";
 import type { FileIntrospectionResult } from "../types";
 import { queryService } from "../../../services/streaming-query-service";
 import { createLogger } from "../../../utils/logger";
+import {
+	escapeIdentifier,
+	escapeStringLiteral,
+} from "../../../utils/sqlSanitizer";
 
 const logger = createLogger("FileIntrospection");
 
@@ -21,7 +25,13 @@ export async function introspectFileSchema(
 		throw new Error("No file path or table name for data source");
 	}
 
-	const tableName = dataSource.tableName || `'${dataSource.filePath}'`;
+	// Escape both forms: a table name is an identifier, a file path is a
+	// string literal. filePath can be attacker-influenced (remote URLs are
+	// auto-introspected the moment they appear in executed SQL), so raw
+	// interpolation here was an injection vector.
+	const tableName = dataSource.tableName
+		? escapeIdentifier(dataSource.tableName)
+		: escapeStringLiteral(dataSource.filePath ?? "");
 
 	try {
 		// Use DESCRIBE to get column information (metadata only, doesn't scan data)

@@ -118,8 +118,60 @@ describe("introspection functions", () => {
 			await introspectFileSchema(ds);
 
 			expect(mockExecuteQuery).toHaveBeenCalledWith(
-				"DESCRIBE SELECT * FROM my_table LIMIT 1",
+				'DESCRIBE SELECT * FROM "my_table" LIMIT 1',
 			);
+		});
+	});
+
+	describe("injection safety", () => {
+		it("escapes a hostile file path instead of letting it break the literal", async () => {
+			// Remote URLs are auto-introspected the moment they appear in
+			// executed SQL, so filePath is attacker-influenced. A quote in it
+			// must be doubled, not close the literal.
+			mockExecuteQuery
+				.mockResolvedValueOnce({
+					rows: [{ column_name: "a", column_type: "INTEGER", null: "NO" }],
+				})
+				.mockResolvedValueOnce({ rows: [{ cnt: 1 }] });
+
+			const hostile = "x'); DROP TABLE t; --.parquet";
+			const ds: DataSource = {
+				id: "ds-evil",
+				name: "evil",
+				type: "parquet",
+				filePath: hostile,
+				uploadedAt: new Date(),
+			};
+
+			await introspectFileSchema(ds);
+
+			const describeSQL = mockExecuteQuery.mock.calls[0][0] as string;
+			// The doubled quote keeps the whole path inside one literal.
+			expect(describeSQL).toContain("'x''); DROP TABLE t; --.parquet'");
+			// And the raw un-doubled sequence must not appear.
+			expect(describeSQL).not.toContain("x'); DROP");
+		});
+
+		it("escapes a hostile table name as an identifier", async () => {
+			mockExecuteQuery
+				.mockResolvedValueOnce({
+					rows: [{ column_name: "a", column_type: "INTEGER", null: "NO" }],
+				})
+				.mockResolvedValueOnce({ rows: [{ cnt: 1 }] });
+
+			const ds: DataSource = {
+				id: "ds-evil2",
+				name: "evil2",
+				type: "parquet",
+				tableName: 'my"table',
+				filePath: "/ignored.parquet",
+				uploadedAt: new Date(),
+			};
+
+			await introspectFileSchema(ds);
+
+			const describeSQL = mockExecuteQuery.mock.calls[0][0] as string;
+			expect(describeSQL).toContain('"my""table"');
 		});
 	});
 
