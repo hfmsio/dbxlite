@@ -13,7 +13,8 @@
  *   - posts the raw `data` array + `rowType` here
  *   - awaits the typed rows back
  *
- * Vite handles the bundling via the `?worker` import on the call site.
+ * Vite bundles this via the `new Worker(new URL(...), {type:'module'})`
+ * pattern at the call site (WorkerParsePool factory in the connector).
  */
 
 import {

@@ -74,7 +74,16 @@ export const useDataSourceStore = create<DataSourceStore>()(
 					logger.debug(
 						`Replacing existing data source: ${dataSource.name} (ID: ${existing.id})`,
 					);
-					await get().removeDataSource(existing.id);
+					// Replacement, not removal: every caller that reaches this path
+					// has JUST re-registered (and for .duckdb, re-attached) the same
+					// physical file. Detaching or dropping it here would tear down
+					// the resources the new entry depends on — the re-upload bug
+					// where a same-named file dropped its own fresh registration.
+					// Only the logical entry and the old file handle go.
+					await get().removeDataSource(existing.id, {
+						skipDetach: true,
+						skipDropFile: true,
+					});
 				}
 
 				const newDataSource: DataSource = {
@@ -287,7 +296,7 @@ export const useDataSourceStore = create<DataSourceStore>()(
 			// "have to try a few times" flakiness). Best-effort: not every
 			// connector supports drop (HTTP mode reads from disk directly), and a
 			// remote URL was never registered.
-			if (dataSource.filePath && !dataSource.isRemote) {
+			if (!options?.skipDropFile && dataSource.filePath && !dataSource.isRemote) {
 				try {
 					await queryService.dropFile(dataSource.filePath);
 					logger.debug(`Unregistered file: ${dataSource.filePath}`);

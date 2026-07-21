@@ -38,7 +38,10 @@ export interface DataSourceActions {
 		name?: string,
 	) => Promise<DataSource | null>;
 	updateDataSource: (id: string, updates: Partial<DataSource>) => void;
-	removeDataSource: (id: string, options?: { skipDetach?: boolean }) => Promise<void>;
+	removeDataSource: (
+		id: string,
+		options?: { skipDetach?: boolean; skipDropFile?: boolean },
+	) => Promise<void>;
 	clearAllDataSources: () => void;
 	getDataSource: (id: string) => DataSource | undefined;
 
