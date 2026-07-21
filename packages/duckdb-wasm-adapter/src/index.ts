@@ -334,10 +334,18 @@ export class DuckDBWorkerAdapter {
       } else if(msg.type === 'query-stats'){
         onStats && onStats((msg as QueryStatsMessage).stats)
       } else if(msg.type === 'error'){
+        // Terminal: drop the handler so it doesn't leak (and its closure over
+        // onRow → the consumer's row buffer) for the life of the session.
+        this.handlers.delete(id)
         onError && onError((msg as ErrorMessage).error)
       } else if(msg.type === 'done'){
+        this.handlers.delete(id)
         onDone && onDone()
       } else if(msg.type === 'cancelled'){
+        // Terminal. The worker honours the cancel (stops posting chunks and
+        // releases its ACK backpressure), so dropping the handler here can't
+        // deadlock the worker on un-ACKed chunks.
+        this.handlers.delete(id)
         onError && onError(new Error('cancelled'))
       }
     }

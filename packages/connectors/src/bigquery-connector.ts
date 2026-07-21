@@ -968,16 +968,23 @@ export class BigQueryConnector implements CloudConnector {
       jobId: initialData.jobReference?.jobId
     })
 
-    // Store job ID for potential cancellation
-    if (initialData.jobReference) {
-      const queryId = `${Date.now()}-${Math.random()}`
-      this.activeJobs.set(queryId, initialData.jobReference.jobId)
-    }
-
     // Job location must accompany every follow-up call — the REST API
     // requires it for jobs outside the US/EU multi-regions (a job in
     // asia-northeast1 404s on getQueryResults/cancel without it).
     const jobLocation: string | undefined = initialData.jobReference?.location
+    const jobId: string | undefined = initialData.jobReference?.jobId
+
+    // Cancel the SERVER job on abort. Previously cancel() was keyed by an
+    // internal id no caller ever received, so Stop Query only aborted the
+    // fetch while the BigQuery job kept running and billing. `once` so the
+    // listener is auto-removed with the (per-query) signal.
+    if (jobId && signal) {
+      signal.addEventListener(
+        'abort',
+        () => { this.cancelJob(jobId, project, jobLocation).catch(() => {}) },
+        { once: true },
+      )
+    }
 
     // If job is not complete OR rows are missing, POLL getQueryResults until
     // the job finishes. Each call long-polls server-side (timeoutMs), so this
@@ -1161,30 +1168,42 @@ export class BigQueryConnector implements CloudConnector {
   /**
    * Cancel a running query
    */
+  /** Cancel a BigQuery job by id. Best-effort; location is required for jobs outside US/EU. */
+  private async cancelJob(
+    jobId: string,
+    project: string,
+    location?: string,
+  ): Promise<void> {
+    try {
+      const params = new URLSearchParams()
+      if (location) params.set('location', location)
+      const qs = params.toString()
+      await this.apiRequest(
+        `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/jobs/${encodeURIComponent(jobId)}/cancel${qs ? `?${qs}` : ''}`,
+        { method: 'POST' },
+      )
+      logger.debug('BigQuery job cancel requested', { jobId, location })
+    } catch (error) {
+      logger.error('Failed to cancel BigQuery job', error)
+    }
+  }
+
   async cancel(queryId: string): Promise<void> {
+    // Retained for the BaseConnector contract. The primary cancel path is the
+    // abort listener wired in query(); this handles an explicit id if a caller
+    // ever tracks one.
     const jobId = this.activeJobs.get(queryId)
     if (!jobId) return
 
     await this.ensureFreshToken()
-    // Use defaultProject only (never use token's project_id - it's the OAuth app)
     if (!this.defaultProject) await this.loadDefaultProject()
     const project = this.defaultProject
-
     if (!project) {
       logger.warn('Cannot cancel job: no billing project available')
       return
     }
-
-    try {
-      await this.apiRequest(
-        `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/jobs/${encodeURIComponent(jobId)}/cancel`,
-        { method: 'POST' }
-      )
-    } catch (error) {
-      logger.error('Failed to cancel query', error)
-    } finally {
-      this.activeJobs.delete(queryId)
-    }
+    await this.cancelJob(jobId, project)
+    this.activeJobs.delete(queryId)
   }
 
   /**
