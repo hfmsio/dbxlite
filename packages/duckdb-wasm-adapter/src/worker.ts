@@ -19,6 +19,12 @@ let DuckDBDataProtocol: typeof DuckDBTypes.DuckDBDataProtocol | null = null; // 
 
 const MAX_OUTSTANDING = 2;  // Reduced from 4 to limit memory pressure
 const outstanding = new Map();
+// Query ids the consumer has cancelled. conn.query() itself can't be
+// interrupted (that needs the send()/cancelSent() path), but once a query is
+// cancelled we stop serialising and posting its (already-materialised) result
+// chunks — which also releases the ACK backpressure loop below so it can't
+// spin forever waiting for ACKs the departed consumer will never send.
+const cancelledIds = new Set<string>();
 
 // Attempt garbage collection if available (V8 with --expose-gc flag)
 function tryGarbageCollect() {
@@ -670,6 +676,8 @@ self.addEventListener('message', async (ev) => {
             let chunkCount = 0;
 
             for (let i = 0; i < rows.length; i++) {
+              // Consumer cancelled: stop serialising the rest of the result.
+              if (cancelledIds.has(id)) break;
               try {
                 const convertedRow = convertBigIntToNumber(rows[i], fieldScales, fieldTypes, intervalRawData, i);
                 const rowStr = JSON.stringify(convertedRow);
@@ -691,7 +699,9 @@ self.addEventListener('message', async (ev) => {
                   self.postMessage({ type: 'json', id, buffer: buf }, [buf]);
                   chunkCount++;
                   outstanding.set(id, (outstanding.get(id)||0) + 1);
-                  while ((outstanding.get(id) || 0) >= MAX_OUTSTANDING) {
+                  // Break the ACK wait on cancel so this can't deadlock once the
+                  // consumer stops ACKing.
+                  while ((outstanding.get(id) || 0) >= MAX_OUTSTANDING && !cancelledIds.has(id)) {
                     await new Promise(r => setTimeout(r, 10));
                   }
                   currentChunk = [];
@@ -716,8 +726,8 @@ self.addEventListener('message', async (ev) => {
               }
             }
 
-            // Send remaining rows
-            if (currentChunk.length > 0) {
+            // Send remaining rows (unless cancelled)
+            if (currentChunk.length > 0 && !cancelledIds.has(id)) {
               const txt = JSON.stringify(currentChunk);
               const buf = new TextEncoder().encode(txt).buffer;
               self.postMessage({ type: 'json', id, buffer: buf }, [buf]);
@@ -770,6 +780,7 @@ self.addEventListener('message', async (ev) => {
       } finally {
         self.postMessage({ type: 'done', id });
         outstanding.delete(id);
+        cancelledIds.delete(id);
         // Trigger GC after query completion to free memory
         tryGarbageCollect();
       }
@@ -779,6 +790,7 @@ self.addEventListener('message', async (ev) => {
       outstanding.set(id, Math.max(0, cur - 1));
     } else if (msg.type === 'cancel'){
       const { id } = msg;
+      cancelledIds.add(id);
       self.postMessage({ type: 'cancelled', id });
     } else if (msg.type === 'register_file') {
       const { id, fileName, fileBuffer } = msg;

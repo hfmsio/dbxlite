@@ -13,6 +13,9 @@ export default defineConfig({
       // in v0.3.7 when Argon2 params were hardened — the existing test
       // file was previously dormant.
       '../../packages/storage/src/**/*.{test,spec,vitest}.{ts,tsx}',
+      // @ide/duckdb-adapter tests (worker protocol: cancellation, handler
+      // lifecycle, backpressure).
+      '../../packages/duckdb-wasm-adapter/src/**/*.{test,spec,vitest}.{ts,tsx}',
     ],
     exclude: [
       'node_modules',
