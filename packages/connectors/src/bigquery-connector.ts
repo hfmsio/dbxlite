@@ -974,28 +974,51 @@ export class BigQueryConnector implements CloudConnector {
       this.activeJobs.set(queryId, initialData.jobReference.jobId)
     }
 
-    // If job is not complete OR rows are missing, fetch results via getQueryResults
+    // Job location must accompany every follow-up call — the REST API
+    // requires it for jobs outside the US/EU multi-regions (a job in
+    // asia-northeast1 404s on getQueryResults/cancel without it).
+    const jobLocation: string | undefined = initialData.jobReference?.location
+
+    // If job is not complete OR rows are missing, POLL getQueryResults until
+    // the job finishes. Each call long-polls server-side (timeoutMs), so this
+    // is one HTTP round-trip every ~10s, not a busy loop. Without the loop, a
+    // query slower than the initial timeout returned an empty result that
+    // looked like a successful 0-row query — while the job kept running and
+    // billing server-side.
     if ((!initialData.jobComplete || !initialData.rows) && initialData.jobReference) {
-      logger.debug('Fetching results via getQueryResults', {
+      logger.debug('Polling getQueryResults until job completes', {
         jobComplete: initialData.jobComplete,
-        hasRows: !!initialData.rows
+        hasRows: !!initialData.rows,
+        location: jobLocation,
       })
-      const resultsResponse = await this.apiRequest(
-        `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries/${encodeURIComponent(initialData.jobReference.jobId)}?` +
-        new URLSearchParams({
-          maxResults: Math.min(maxRows, 10000).toString()
-        }),
-        { signal }
-      )
-      const resultsData = await resultsResponse.json()
+      let resultsData: typeof initialData
+      for (;;) {
+        const params = new URLSearchParams({
+          maxResults: Math.min(maxRows, 10000).toString(),
+          timeoutMs: '10000',
+        })
+        if (jobLocation) params.set('location', jobLocation)
+        const resultsResponse = await this.apiRequest(
+          `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries/${encodeURIComponent(initialData.jobReference.jobId)}?${params}`,
+          { signal }
+        )
+        resultsData = await resultsResponse.json()
+        if (resultsData.jobComplete) break
+        if (signal?.aborted) {
+          const err = new Error('Query aborted by user')
+          err.name = 'AbortError'
+          throw err
+        }
+        logger.debug('Job still running; polling again', {
+          jobId: initialData.jobReference.jobId,
+        })
+      }
       logger.debug('Results fetched', {
         jobComplete: resultsData.jobComplete,
         hasRows: !!resultsData.rows,
         rowsLength: resultsData.rows?.length,
         totalRows: resultsData.totalRows,
-        keys: Object.keys(resultsData)
       })
-      logger.debug('Full resultsData', resultsData)
 
       // Merge results data with initial data (preserve schema from initial response)
       initialData.rows = resultsData.rows
@@ -1051,12 +1074,16 @@ export class BigQueryConnector implements CloudConnector {
     let totalRowsFetched = rows.length
     logger.debug('Pagination check', { pageToken, totalRowsFetched, maxRows })
     while (pageToken && totalRowsFetched < maxRows) {
+      const pageParams = new URLSearchParams({
+        pageToken,
+        maxResults: Math.min(maxRows - totalRowsFetched, 10000).toString()
+      })
+      if (jobLocation) pageParams.set('location', jobLocation)
       const pageResponse = await this.apiRequest(
-        `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries/${encodeURIComponent(initialData.jobReference.jobId)}?` +
-        new URLSearchParams({
-          pageToken,
-          maxResults: Math.min(maxRows - totalRowsFetched, 10000).toString()
-        })
+        `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries/${encodeURIComponent(initialData.jobReference.jobId)}?${pageParams}`,
+        // Abortable: without the signal, Stop Query couldn't even stop the
+        // page-fetch loop, let alone the server-side job.
+        { signal }
       )
 
       const pageData = await pageResponse.json()

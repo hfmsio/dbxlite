@@ -1125,10 +1125,33 @@ export class SnowflakeConnector implements CloudConnector {
 			throw new DOMException("Query aborted before start", "AbortError")
 		}
 
-		const initial = await this.executeStatement(sql, {
+		let initial = await this.executeStatement(sql, {
 			timeout: opts?.timeout ? Math.floor(opts.timeout / 1000) : 60,
 			signal,
 		})
+
+		// 333334 = "Asynchronous execution in progress" (HTTP 202): the
+		// statement outlived the server-side wait (~45s) and is still running.
+		// Poll the statement handle until it reaches a terminal state. Without
+		// this, any query slower than the initial wait surfaced as
+		// "Query failed with code 333334" while the warehouse kept running
+		// (and billing) the statement to completion.
+		const ASYNC_IN_PROGRESS = "333334"
+		let pollDelayMs = 1000
+		while (initial.code === ASYNC_IN_PROGRESS && initial.statementHandle) {
+			if (signal?.aborted) {
+				throw new DOMException("Query aborted by user", "AbortError")
+			}
+			await sleep(pollDelayMs)
+			pollDelayMs = Math.min(pollDelayMs * 2, 5000)
+			const statusResponse = await this.apiRequest(
+				`/statements/${initial.statementHandle}`,
+				{ method: "GET", signal },
+			)
+			// A failed statement returns a non-2xx that apiRequest already
+			// converts into a thrown, user-readable error.
+			initial = (await statusResponse.json()) as SnowflakeStatementResponse
+		}
 
 		// 090001 = "Statement executed successfully" — only present on certain
 		// async-mode responses. Other codes indicate failure.

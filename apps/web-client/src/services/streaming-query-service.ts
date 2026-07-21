@@ -18,6 +18,11 @@ import type { EncryptedCredentialStore } from "@ide/storage";
 import type { ConnectorType } from "../types/data-source";
 import type { TableRow } from "../types/table";
 import { createLogger } from "../utils/logger";
+import {
+	getStatementKeyword as getSqlKeyword,
+	getTrailingLimit,
+	isPaginatableStatement,
+} from "../utils/sqlPagination";
 import { databaseTimezone } from "./formatter-settings";
 
 const logger = createLogger("QueryService");
@@ -135,6 +140,13 @@ export interface QueryResult {
 	columns: string[];
 	columnTypes?: ColumnMetadata[];
 	totalRows: number;
+	/**
+	 * Server-reported size of the FULL result when the connector surfaces it
+	 * (BigQuery). When larger than rows.length, the fetch was truncated
+	 * (maxRows) and the UI should say so instead of presenting a partial
+	 * result as complete.
+	 */
+	serverTotalRows?: number;
 	executionTime: number;
 	/**
 	 * Connector-side query identifier (Snowflake's statementHandle, BigQuery's
@@ -311,16 +323,28 @@ class StreamingQueryService {
 	private mode: DbxliteMode = "wasm";
 
 	/**
-	 * Normalize SQL for statement classification by stripping leading comments/whitespace.
-	 * Returns the first keyword in lowercase (e.g., "select", "show", "pragma").
+	 * The latest streaming query materialised into a temp table for stable
+	 * paging. Raw `sql LIMIT n OFFSET m` per page is unsound: each page is a
+	 * separate execution and with preserve_insertion_order=false DuckDB gives
+	 * no cross-execution ordering guarantee, so pages could repeat or skip
+	 * rows. Materialising once and paging `ORDER BY rowid` over the fixed
+	 * table is deterministic by construction — and gives an exact row count
+	 * for free. WASM-mode DuckDB only (temp tables are connection-scoped;
+	 * the WASM worker holds one long-lived connection).
 	 */
-	private getStatementKeyword(sql: string): string {
-		const withoutLeadingComments = sql
-			.replace(/^\s*(?:--[^\n]*\n|\/\*[\s\S]*?\*\/)*/g, "")
-			.trim();
-		const match = withoutLeadingComments.match(/^([a-zA-Z]+)/);
-		return match ? match[1].toLowerCase() : "";
-	}
+	private streamMaterialization: {
+		sql: string;
+		table: string;
+		rowCount: number;
+	} | null = null;
+	/**
+	 * Name of the last materialisation's table, kept separately so the next
+	 * materialisation can DROP it even after an invalidation nulled the
+	 * pointer (a mutation invalidates trust in the snapshot, not the need to
+	 * clean up the table).
+	 */
+	private lastStreamTable: string | null = null;
+	private streamTableSeq = 0;
 
 	/**
 	 * Hash a SQL query for caching purposes
@@ -334,6 +358,88 @@ class StreamingQueryService {
 			hash = hash & hash; // Convert to 32bit integer
 		}
 		return hash.toString(36);
+	}
+
+	/**
+	 * Drop trust in the current stream materialisation when a statement can
+	 * mutate what it snapshot. Cheap keyword test; the temp table itself is
+	 * dropped lazily by the next materialisation (see lastStreamTable).
+	 */
+	private maybeInvalidateStreamMaterialization(sql: string): void {
+		if (!this.streamMaterialization) return;
+		const kw = getSqlKeyword(sql);
+		const mutating =
+			/^(insert|update|delete|merge|create|drop|alter|truncate|copy|import|attach|detach|call)$/.test(
+				kw,
+			) ||
+			(kw === "with" && !isPaginatableStatement(sql));
+		if (mutating) {
+			this.streamMaterialization = null;
+		}
+	}
+
+	/**
+	 * Materialise `sql` into a temp table for stable paging, reusing the
+	 * existing one when the same SQL is paged again. Returns null when
+	 * materialisation isn't applicable (HTTP mode: temp tables are not
+	 * guaranteed connection-stable across requests) or fails (non-SELECT
+	 * shapes) — callers fall back to legacy behavior.
+	 */
+	private async ensureStreamMaterialization(
+		sql: string,
+		signal?: AbortSignal,
+	): Promise<{ table: string; rowCount: number } | null> {
+		if (this.streamMaterialization?.sql === sql) {
+			return this.streamMaterialization;
+		}
+		if (this.mode === "http") return null;
+
+		const cleanSql = sql.replace(/[\s;]+$/, "");
+		const table = `__dbxlite_stream_${++this.streamTableSeq}`;
+		try {
+			await this.executeQueryOnConnector(
+				"duckdb",
+				`CREATE TEMP TABLE ${table} AS ${cleanSql}`,
+				signal,
+				true,
+			);
+		} catch (err) {
+			logger.debug(
+				"Stream materialisation failed; falling back to direct paging",
+				err,
+			);
+			return null;
+		}
+
+		// Best-effort cleanup of the previous stream table.
+		const previous = this.lastStreamTable;
+		this.lastStreamTable = table;
+		if (previous && previous !== table) {
+			this.executeQueryOnConnector(
+				"duckdb",
+				`DROP TABLE IF EXISTS ${previous}`,
+				undefined,
+				true,
+			).catch(() => {
+				/* non-critical */
+			});
+		}
+
+		let rowCount = -1;
+		try {
+			const countResult = await this.executeQueryOnConnector(
+				"duckdb",
+				`SELECT COUNT(*) AS cnt FROM ${table}`,
+				signal,
+				true,
+			);
+			rowCount = Number(countResult.rows[0]?.cnt ?? -1);
+		} catch {
+			// Count is an enhancement; paging still works without it.
+		}
+
+		this.streamMaterialization = { sql, table, rowCount };
+		return this.streamMaterialization;
 	}
 
 	async initialize(credentialStore: EncryptedCredentialStore) {
@@ -420,25 +526,36 @@ class StreamingQueryService {
 		try {
 			const connector = this.getActiveConnector();
 
-			// Add pagination to SQL if enabled and query doesn't have user's LIMIT
+			// Invalidate any stream snapshot a mutating statement makes stale.
+			this.maybeInvalidateStreamMaterialization(sql);
+
+			// Pagination for DuckDB. Preferred path: materialise the query once
+			// into a temp table and page it with ORDER BY rowid — deterministic
+			// across page fetches (raw `sql LIMIT/OFFSET` per page re-executes
+			// the query each time with no ordering guarantee under
+			// preserve_insertion_order=false, so pages could repeat/skip rows).
+			// This also handles queries whose own LIMIT lives in a subquery, and
+			// large trailing user LIMITs (the temp table simply holds the
+			// limited result). Fallback for HTTP mode or shapes CREATE TABLE AS
+			// can't wrap: the legacy trailing-LIMIT injection, gated on the SAME
+			// end-anchored user-LIMIT test the UI uses (the old anywhere-match
+			// disagreed with the UI and made every "page" return the full set).
 			let paginatedSql = sql;
-			if (enablePagination && this.activeConnector === "duckdb") {
-				const hasUserLimit = /\bLIMIT\s+\d+/i.test(sql);
-
-				// Check if this is a statement that doesn't support LIMIT (DDL/DML commands)
-				// These commands don't return result sets in the traditional sense
-				const statementKeyword = this.getStatementKeyword(sql);
-				const isNonSelectStatement = /^(copy|insert|update|delete|create|alter|drop|truncate|export|import|attach|detach|use|install|load|show|pragma|describe|explain|set|call|checkpoint|vacuum|analyze|begin|commit|rollback)$/i.test(
-					statementKeyword,
-				);
-
-				// Only add pagination if:
-				// 1. User didn't specify their own LIMIT
-				// 2. This is not a DDL/DML statement (COPY, INSERT, etc.)
-				if (!hasUserLimit && !isNonSelectStatement) {
-					if (limit !== undefined) {
-						paginatedSql += ` LIMIT ${limit}`;
+			let materializedTotal: number | undefined;
+			if (
+				enablePagination &&
+				this.activeConnector === "duckdb" &&
+				limit !== undefined &&
+				isPaginatableStatement(sql)
+			) {
+				const mat = await this.ensureStreamMaterialization(sql, signal);
+				if (mat) {
+					paginatedSql = `SELECT * FROM ${mat.table} ORDER BY rowid LIMIT ${limit} OFFSET ${offset}`;
+					if (mat.rowCount >= 0) {
+						materializedTotal = mat.rowCount;
 					}
+				} else if (getTrailingLimit(sql) === undefined) {
+					paginatedSql += ` LIMIT ${limit}`;
 					if (offset > 0) {
 						paginatedSql += ` OFFSET ${offset}`;
 					}
@@ -448,7 +565,7 @@ class StreamingQueryService {
 			let currentIndex = offset;
 			let buffer: TableRow[] = [];
 			let columns: ColumnMetadata[] = [];
-			let totalRows: number | undefined;
+			let totalRows: number | undefined = materializedTotal;
 			let queryStats: QueryStats | undefined;
 			let firstChunk = true;
 
@@ -465,8 +582,9 @@ class StreamingQueryService {
 					throw error;
 				}
 
-				// Extract totalRows from first chunk if available (BigQuery provides this)
-				if (firstChunk && chunk.totalRows !== undefined) {
+				// Extract totalRows from the connector when the materialisation
+				// didn't already provide an exact one (BigQuery surfaces it).
+				if (totalRows === undefined && chunk.totalRows !== undefined) {
 					totalRows = chunk.totalRows;
 					logger.debug("Got totalRows from connector", { totalRows });
 				}
@@ -715,6 +833,18 @@ class StreamingQueryService {
 		signal?: AbortSignal,
 		_timeoutMs: number = 30000,
 	): Promise<{ count: number; isEstimated: boolean }> {
+		// A live stream materialisation knows the exact count — no estimate,
+		// no fabricated footer numbers.
+		if (
+			this.streamMaterialization?.sql === sql &&
+			this.streamMaterialization.rowCount >= 0
+		) {
+			return {
+				count: this.streamMaterialization.rowCount,
+				isEstimated: false,
+			};
+		}
+
 		// Check cache first
 		const cacheKey = this.hashQuery(sql);
 		const cached = this.countCache.get(cacheKey);
@@ -1143,7 +1273,10 @@ class StreamingQueryService {
 
 		// Detect SET timezone commands and update the database timezone store
 		detectAndUpdateTimezone(sql);
+		// Mutations make any stream snapshot stale.
+		this.maybeInvalidateStreamMaterialization(sql);
 
+		let serverTotalRows: number | undefined;
 		const allRows: TableRow[] = [];
 		const columns: string[] = [];
 		let columnTypes: ColumnMetadata[] | undefined;
@@ -1159,6 +1292,12 @@ class StreamingQueryService {
 
 				if (!connectorQueryId && chunk.connectorQueryId) {
 					connectorQueryId = chunk.connectorQueryId;
+				}
+
+				// Server-reported result size (BigQuery surfaces it). Lets the
+				// caller detect that maxRows truncated the fetch.
+				if (chunk.totalRows !== undefined) {
+					serverTotalRows = chunk.totalRows;
 				}
 
 				// Extract schema information from the first chunk
@@ -1192,6 +1331,7 @@ class StreamingQueryService {
 				columns,
 				columnTypes,
 				totalRows: allRows.length,
+				serverTotalRows,
 				executionTime: Date.now() - startTime,
 				connectorQueryId,
 				connectorType,
