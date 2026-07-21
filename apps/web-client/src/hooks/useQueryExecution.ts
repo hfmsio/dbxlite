@@ -9,6 +9,7 @@ import { detectQueryEngine } from "../utils/engineDetectors";
 import { createLogger } from "../utils/logger";
 import { formatQueryError } from "../utils/queryErrorFormatter";
 import { extractQueryAtCursor } from "../utils/queryExtractor";
+import { getTrailingLimit } from "../utils/sqlPagination";
 import { formatExecutionTime } from "../utils/timeFormatter";
 import { detectRemoteURLs } from "../utils/urlDetector";
 import { useBigQueryCostWarning } from "./useBigQueryCostWarning";
@@ -315,16 +316,13 @@ export function useQueryExecution({
 		const activeConnectorType = effectiveConnector;
 		let isStreamingMode = false; // Track if we're using streaming mode
 
-		// Check for LIMIT clause at the END of query (not in subqueries/CTEs)
-		// Only match LIMIT followed by optional semicolon or end of string
-		const finalLimitMatch = sql.trim().match(/\bLIMIT\s+(\d+)\s*(?:;|\s*)$/i);
-		const userLimit = finalLimitMatch
-			? parseInt(finalLimitMatch[1], 10)
-			: undefined;
-		const hasUserLimit = finalLimitMatch !== null;
+		// Trailing user LIMIT — shared helper so the streaming service and this
+		// hook can never disagree about what counts as a user LIMIT again.
+		const userLimit = getTrailingLimit(sql);
+		const hasUserLimit = userLimit !== undefined;
 		const hasLargeLimit = userLimit !== undefined && userLimit > 10000;
 
-		if (finalLimitMatch && userLimit !== undefined) {
+		if (userLimit !== undefined) {
 			// For large LIMITs, inform user that pagination will be used for memory safety
 			if (userLimit > 10000) {
 				showToast(
@@ -579,6 +577,20 @@ export function useQueryExecution({
 						result: null,
 					});
 					return;
+				}
+
+				// The server knows the full result size (BigQuery); if we fetched
+				// fewer rows the result was truncated — say so instead of
+				// presenting a partial result as complete.
+				if (
+					result.serverTotalRows !== undefined &&
+					result.serverTotalRows > result.rows.length
+				) {
+					showToast(
+						`⚠️ Showing ${result.rows.length.toLocaleString()} of ${result.serverTotalRows.toLocaleString()} rows — result truncated. Add a LIMIT or export to Parquet for the full set.`,
+						"warning",
+						8000,
+					);
 				}
 
 				updateTab(activeTabId, {
