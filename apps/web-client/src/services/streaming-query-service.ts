@@ -26,6 +26,7 @@ import { ConnectorMode } from "./query/connector-mode";
 import { DuckDBFileVfs, type FileVfs } from "./query/file-vfs";
 import { PaginationPlanner } from "./query/pagination-planner";
 import type { ExecuteOnConnector } from "./query/ports";
+import { RowCountEstimator } from "./query/row-count-estimator";
 
 const logger = createLogger("QueryService");
 
@@ -202,12 +203,6 @@ class StreamingQueryService {
 		signal,
 		silent,
 	) => this.executeQueryOnConnector(connectorType, sql, signal, silent);
-	// Count cache with 5-minute TTL to avoid repeated COUNT queries
-	private countCache = new Map<
-		string,
-		{ count: number; isEstimated: boolean; timestamp: number }
-	>();
-	private readonly COUNT_CACHE_TTL = 2 * 60 * 1000; // 2 minutes (reduced for memory)
 	// Operating mode: 'wasm' for standalone, 'http' for duckdb -ui
 	private readonly connectorMode = new ConnectorMode();
 	// Declared after connectorMode: field initializers run in order, and the
@@ -216,20 +211,12 @@ class StreamingQueryService {
 		this.executeOnConnector,
 		this.connectorMode,
 	);
-
-	/**
-	 * Hash a SQL query for caching purposes
-	 */
-	private hashQuery(sql: string): string {
-		// Simple hash function for query caching
-		let hash = 0;
-		for (let i = 0; i < sql.length; i++) {
-			const char = sql.charCodeAt(i);
-			hash = (hash << 5) - hash + char;
-			hash = hash & hash; // Convert to 32bit integer
-		}
-		return hash.toString(36);
-	}
+	// Reads the planner's materialization seam for its exact-count fast path,
+	// so it is declared after it.
+	private readonly rowCountEstimator = new RowCountEstimator(
+		(sql) => this.paginationPlanner.exactRowCountFor(sql),
+		() => this.getActiveConnector(),
+	);
 
 	async initialize(credentialStore: EncryptedCredentialStore) {
 		this.credentialStore = credentialStore;
@@ -588,169 +575,7 @@ class StreamingQueryService {
 		signal?: AbortSignal,
 		_timeoutMs: number = 30000,
 	): Promise<{ count: number; isEstimated: boolean }> {
-		// A live stream materialisation knows the exact count — no estimate,
-		// no fabricated footer numbers.
-		const exact = this.paginationPlanner.exactRowCountFor(sql);
-		if (exact !== null) {
-			return { count: exact, isEstimated: false };
-		}
-
-		// Check cache first
-		const cacheKey = this.hashQuery(sql);
-		const cached = this.countCache.get(cacheKey);
-		if (cached && Date.now() - cached.timestamp < this.COUNT_CACHE_TTL) {
-			logger.debug("Using cached count", {
-				count: cached.count,
-				isEstimated: cached.isEstimated,
-			});
-			return { count: cached.count, isEstimated: cached.isEstimated };
-		}
-
-		const connector = this.getActiveConnector();
-
-		try {
-			let count = -1;
-
-			// BigQuery: Run query with LIMIT 0 to get totalRows from response metadata (EXACT count)
-			if (connector instanceof BigQueryConnector) {
-				logger.debug(
-					"BigQuery: Running query with LIMIT 0 to get metadata totalRows",
-				);
-				// Add LIMIT 0 to get metadata without fetching rows
-				const metadataSql = `${sql} LIMIT 0`;
-
-				for await (const chunk of connector.query(metadataSql, {
-					maxRows: 0,
-				})) {
-					if (chunk.totalRows !== undefined) {
-						count = chunk.totalRows;
-						logger.debug("BigQuery totalRows from metadata (exact)", { count });
-						break;
-					}
-				}
-
-				// Cache the result (BigQuery metadata is exact, not estimated)
-				if (count > 0) {
-					this.countCache.set(cacheKey, {
-						count,
-						isEstimated: false,
-						timestamp: Date.now(),
-					});
-				}
-
-				return { count, isEstimated: false };
-			}
-
-			// DuckDB: Use EXPLAIN for fast estimation (ESTIMATED count)
-			if (connector instanceof DuckDBConnector) {
-				logger.debug("DuckDB: Using EXPLAIN for row estimation");
-				count = await connector.getEstimatedRowCount(sql);
-				logger.debug("DuckDB EXPLAIN estimate (estimated)", { count });
-
-				// Cache the result (DuckDB EXPLAIN is estimated, not exact)
-				if (count > 0) {
-					this.countCache.set(cacheKey, {
-						count,
-						isEstimated: true,
-						timestamp: Date.now(),
-					});
-				}
-
-				return { count, isEstimated: true };
-			}
-
-			// Snowflake: wrap in SELECT COUNT(*) FROM (sql) with a 5-second
-			// timeout. Without this, every Snowflake query falls through to the
-			// `count = -1` path below and useQueryExecution interprets that as
-			// "huge dataset, force streaming mode" — even for a 3-row SELECT.
-			// On timeout we still return -1, but at that point streaming-mode
-			// for a slow-counting query is the correct UX.
-			if (connector instanceof SnowflakeConnector) {
-				logger.debug("Snowflake: counting via SELECT COUNT(*) FROM (sql)");
-				const COUNT_TIMEOUT_MS = 5_000;
-				// Strip trailing semicolons + whitespace before wrapping —
-				// otherwise `SELECT COUNT(*) AS c FROM (SELECT * FROM t;)` is a
-				// Snowflake parse error, count fails, and useQueryExecution
-				// falls into the misleading "Very large dataset" toast for a
-				// query that's actually small.
-				const innerSql = sql.replace(/[\s;]+$/, "");
-				const countSql = `SELECT COUNT(*) AS c FROM (${innerSql})`;
-				const countCtl = new AbortController();
-				const timeout = setTimeout(
-					() => countCtl.abort(),
-					COUNT_TIMEOUT_MS,
-				);
-				// Combine the internal timeout signal with the caller's
-				// signal so a Stop Query during the COUNT terminates the
-				// Snowflake-side query (real billing-leak fix). Falls back
-				// to AbortController.abort()-on-listener for older browsers
-				// without AbortSignal.any.
-				const combinedSignal: AbortSignal = signal
-					? typeof AbortSignal.any === "function"
-						? AbortSignal.any([countCtl.signal, signal])
-						: (() => {
-								const ctl = new AbortController();
-								const onAbort = () => ctl.abort();
-								countCtl.signal.addEventListener("abort", onAbort);
-								signal.addEventListener("abort", onAbort);
-								return ctl.signal;
-							})()
-					: countCtl.signal;
-				try {
-					for await (const chunk of connector.query(countSql, {
-						signal: combinedSignal,
-					})) {
-						const row = chunk.rows?.[0];
-						if (row !== undefined) {
-							const v =
-								typeof row === "object" && row !== null
-									? (Object.values(row)[0] as unknown)
-									: row;
-							const n =
-								typeof v === "number"
-									? v
-									: typeof v === "string"
-										? Number(v)
-										: -1;
-							if (Number.isFinite(n) && n >= 0) {
-								count = n;
-								break;
-							}
-						}
-					}
-				} catch (err) {
-					if (countCtl.signal.aborted) {
-						logger.debug("Snowflake count timed out — returning -1");
-					} else {
-						logger.debug("Snowflake count failed; returning -1", err);
-					}
-				} finally {
-					clearTimeout(timeout);
-				}
-
-				if (count >= 0) {
-					this.countCache.set(cacheKey, {
-						count,
-						isEstimated: false,
-						timestamp: Date.now(),
-					});
-					return { count, isEstimated: false };
-				}
-				return { count: -1, isEstimated: true };
-			}
-
-			// Fallback for other connectors: return -1 (unknown, treated as estimated)
-			logger.warn("Unknown connector type, returning -1");
-			return { count: -1, isEstimated: true };
-		} catch (error) {
-			// Re-throw abort errors
-			if (error instanceof Error && error.name === "AbortError") {
-				throw error;
-			}
-
-			logger.warn("Could not get row count", error);
-			return { count: -1, isEstimated: true }; // Unknown count - treated as estimated
-		}
+		return this.rowCountEstimator.getRowCount(sql, signal);
 	}
 
 	/**
