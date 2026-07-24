@@ -28,6 +28,7 @@ import {
 	type AbortRegistry,
 	InMemoryAbortRegistry,
 } from "./query/abort-registry";
+import { DuckDBFileVfs, type FileVfs } from "./query/file-vfs";
 
 const logger = createLogger("QueryService");
 
@@ -49,14 +50,6 @@ function detectAndUpdateTimezone(sql: string): void {
 
 // Re-export ConnectorType for backward compatibility
 export type { ConnectorType };
-
-// Extended DuckDB connector type with file operations
-interface DuckDBConnectorExtended extends BaseConnector {
-	registerFile(fileName: string, fileBuffer: ArrayBuffer): Promise<void>;
-	registerFileHandle(fileName: string, file: File): Promise<void>;
-	copyFileToBuffer(fileName: string): Promise<Uint8Array>;
-	dropFile(fileName: string): Promise<void>;
-}
 
 // Extended BigQuery connector type with cache clearing
 interface BigQueryConnectorExtended extends BaseConnector {
@@ -198,6 +191,9 @@ class StreamingQueryService {
 	private activeConnector: ConnectorType = "duckdb";
 	private credentialStore: EncryptedCredentialStore | null = null;
 	private readonly abortRegistry: AbortRegistry = new InMemoryAbortRegistry();
+	private readonly fileVfs: FileVfs = new DuckDBFileVfs(
+		() => this.connectors.get("duckdb") ?? null,
+	);
 	// Count cache with 5-minute TTL to avoid repeated COUNT queries
 	private countCache = new Map<
 		string,
@@ -923,66 +919,22 @@ class StreamingQueryService {
 	}
 
 	async registerFile(fileName: string, fileBuffer: ArrayBuffer): Promise<void> {
-		const connector = this.connectors.get("duckdb");
-		if (!connector) {
-			throw new Error("DuckDB connector not initialized");
-		}
-		if (
-			"registerFile" in connector &&
-			typeof connector.registerFile === "function"
-		) {
-			await (connector as DuckDBConnectorExtended).registerFile(
-				fileName,
-				fileBuffer,
-			);
-		}
+		return this.fileVfs.registerFile(fileName, fileBuffer);
 	}
 
 	async registerFileHandle(fileName: string, file: File): Promise<void> {
-		const connector = this.connectors.get("duckdb");
-		if (!connector) {
-			throw new Error("DuckDB connector not initialized");
-		}
-		if (
-			"registerFileHandle" in connector &&
-			typeof connector.registerFileHandle === "function"
-		) {
-			await (connector as DuckDBConnectorExtended).registerFileHandle(
-				fileName,
-				file,
-			);
-		}
+		return this.fileVfs.registerFileHandle(fileName, file);
 	}
 
 	async copyFileToBuffer(fileName: string): Promise<Uint8Array> {
-		const connector = this.connectors.get("duckdb");
-		if (!connector) {
-			throw new Error("DuckDB connector not initialized");
-		}
-		if (
-			"copyFileToBuffer" in connector &&
-			typeof connector.copyFileToBuffer === "function"
-		) {
-			return await (connector as DuckDBConnectorExtended).copyFileToBuffer(
-				fileName,
-			);
-		}
-		throw new Error("File copy not supported");
+		return this.fileVfs.copyFileToBuffer(fileName);
 	}
 
 	/**
 	 * Drop a file from DuckDB's virtual filesystem
 	 */
 	async dropFile(fileName: string): Promise<void> {
-		const connector = this.connectors.get("duckdb");
-		if (!connector) {
-			throw new Error("DuckDB connector not initialized");
-		}
-		if ("dropFile" in connector && typeof connector.dropFile === "function") {
-			await (connector as DuckDBConnectorExtended).dropFile(fileName);
-		} else {
-			throw new Error("File drop not supported by this connector");
-		}
+		return this.fileVfs.dropFile(fileName);
 	}
 
 	/**
