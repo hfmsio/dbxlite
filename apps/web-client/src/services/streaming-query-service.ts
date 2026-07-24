@@ -1,7 +1,6 @@
 import {
 	type BaseConnector,
 	type CatalogInfo,
-	type CloudConnector,
 	type ConnectionTestResult,
 	DuckDBConnector,
 	DuckDBHttpConnector,
@@ -25,6 +24,11 @@ import {
 import { DuckDBFileVfs, type FileVfs } from "./query/file-vfs";
 import { PaginationPlanner } from "./query/pagination-planner";
 import type { ExecuteOnConnector } from "./query/ports";
+import {
+	requireCatalog,
+	supportsCacheClear,
+	supportsProjectDefaults,
+} from "./query/catalog-capable";
 import { QueryExecutor } from "./query/query-executor";
 import { RowCountEstimator } from "./query/row-count-estimator";
 
@@ -32,11 +36,6 @@ const logger = createLogger("QueryService");
 
 // Re-export ConnectorType for backward compatibility
 export type { ConnectorType };
-
-// Extended BigQuery connector type with cache clearing
-interface BigQueryConnectorExtended extends BaseConnector {
-	clearCache(): void;
-}
 
 // Snowflake setup config (subset of SnowflakeConnectorConfig that the UI
 // provides; transport + credentialStore are wired here, not by callers).
@@ -403,11 +402,8 @@ class StreamingQueryService {
 		const connector = this.registry.get("bigquery");
 		if (!connector) return;
 
-		if (
-			"clearCache" in connector &&
-			typeof connector.clearCache === "function"
-		) {
-			(connector as BigQueryConnectorExtended).clearCache();
+		if (supportsCacheClear(connector)) {
+			connector.clearCache();
 		}
 	}
 
@@ -426,13 +422,12 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"listProjects" in connector &&
-			typeof connector.listProjects === "function"
-		) {
-			return await (connector as CloudConnector).listProjects?.() ?? [];
-		}
-		throw new Error("Project listing not supported");
+		return requireCatalog(
+			connector,
+			"listProjects",
+			"BigQuery connector not initialized",
+			"Project listing not supported",
+		).listProjects();
 	}
 
 	/**
@@ -443,13 +438,12 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"listDatasets" in connector &&
-			typeof connector.listDatasets === "function"
-		) {
-			return await (connector as CloudConnector).listDatasets?.(projectId) ?? [];
-		}
-		throw new Error("Dataset listing not supported");
+		return requireCatalog(
+			connector,
+			"listDatasets",
+			"BigQuery connector not initialized",
+			"Dataset listing not supported",
+		).listDatasets(projectId);
 	}
 
 	/**
@@ -463,16 +457,12 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"listTables" in connector &&
-			typeof connector.listTables === "function"
-		) {
-			return await (connector as CloudConnector).listTables?.(
-				projectId,
-				datasetId,
-			) ?? [];
-		}
-		throw new Error("Table listing not supported");
+		return requireCatalog(
+			connector,
+			"listTables",
+			"BigQuery connector not initialized",
+			"Table listing not supported",
+		).listTables(projectId, datasetId);
 	}
 
 	/**
@@ -487,19 +477,14 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"getTableMetadata" in connector &&
-			typeof connector.getTableMetadata === "function"
-		) {
-			const result = await (connector as CloudConnector).getTableMetadata?.(
-				projectId,
-				datasetId,
-				tableId,
-			);
-			if (!result) throw new Error("Table metadata not available");
-			return result;
-		}
-		throw new Error("Table metadata not supported");
+		const result = await requireCatalog(
+			connector,
+			"getTableMetadata",
+			"BigQuery connector not initialized",
+			"Table metadata not supported",
+		).getTableMetadata(projectId, datasetId, tableId);
+		if (!result) throw new Error("Table metadata not available");
+		return result;
 	}
 
 	/**
@@ -513,18 +498,14 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"estimateQueryCost" in connector &&
-			typeof connector.estimateQueryCost === "function"
-		) {
-			const result = await (connector as CloudConnector).estimateQueryCost?.(
-				sql,
-				projectId,
-			);
-			if (!result) throw new Error("Cost estimate not available");
-			return result;
-		}
-		throw new Error("Cost estimation not supported");
+		const result = await requireCatalog(
+			connector,
+			"estimateQueryCost",
+			"BigQuery connector not initialized",
+			"Cost estimation not supported",
+		).estimateQueryCost(sql, projectId);
+		if (!result) throw new Error("Cost estimate not available");
+		return result;
 	}
 
 	/**
@@ -535,15 +516,14 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"testConnection" in connector &&
-			typeof connector.testConnection === "function"
-		) {
-			const result = await (connector as CloudConnector).testConnection?.();
-			if (!result) throw new Error("Connection test result not available");
-			return result;
-		}
-		throw new Error("Connection testing not supported");
+		const result = await requireCatalog(
+			connector,
+			"testConnection",
+			"BigQuery connector not initialized",
+			"Connection testing not supported",
+		).testConnection();
+		if (!result) throw new Error("Connection test result not available");
+		return result;
 	}
 
 	/**
@@ -554,11 +534,8 @@ class StreamingQueryService {
 		if (!connector) {
 			return null;
 		}
-		if (
-			"getDefaultProject" in connector &&
-			typeof connector.getDefaultProject === "function"
-		) {
-			return await (connector as CloudConnector).getDefaultProject?.() ?? null;
+		if (supportsProjectDefaults(connector)) {
+			return connector.getDefaultProject() ?? null;
 		}
 		return null;
 	}
@@ -571,11 +548,8 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
-		if (
-			"setDefaultProject" in connector &&
-			typeof connector.setDefaultProject === "function"
-		) {
-			await (connector as CloudConnector).setDefaultProject?.(projectId);
+		if (supportsProjectDefaults(connector)) {
+			connector.setDefaultProject(projectId);
 			return;
 		}
 		throw new Error("Setting default project not supported");
@@ -651,15 +625,17 @@ class StreamingQueryService {
 		if (!connector) {
 			throw new Error("Snowflake connector not initialized");
 		}
-		if (
-			"testConnection" in connector &&
-			typeof connector.testConnection === "function"
-		) {
-			const result = await (connector as CloudConnector).testConnection?.();
-			if (!result) throw new Error("Connection test result not available");
-			return result;
-		}
-		throw new Error("Connection testing not supported");
+		// Aligned with the BigQuery path (A10): Snowflake was already narrowed
+		// via getSnowflakeConnector(), so this is the one site that still used
+		// a string test. Same helper, same messages.
+		const result = await requireCatalog(
+			connector,
+			"testConnection",
+			"Snowflake connector not initialized",
+			"Connection testing not supported",
+		).testConnection();
+		if (!result) throw new Error("Connection test result not available");
+		return result;
 	}
 
 	/**
