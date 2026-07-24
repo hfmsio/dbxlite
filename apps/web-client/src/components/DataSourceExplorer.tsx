@@ -84,11 +84,10 @@ function DataSourceExplorer({
 	);
 	const [showSnowflakeEdit, setShowSnowflakeEdit] = useState(false);
 	React.useEffect(() => {
-		const id = setInterval(
-			() => setIsSnowflakeConnected(queryService.isSnowflakeConnected()),
-			2000,
-		);
-		return () => clearInterval(id);
+		const sync = () =>
+			setIsSnowflakeConnected(queryService.isSnowflakeConnected());
+		sync();
+		return queryService.onConnectorState(sync);
 	}, []);
 
 	// Listen for cross-component signal from the topbar SnowflakeContextButton —

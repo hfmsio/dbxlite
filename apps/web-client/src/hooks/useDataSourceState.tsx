@@ -139,7 +139,7 @@ export function useDataSourceState({
 		);
 	}, [expandedNodes]);
 
-	// Check if BigQuery is connected (but don't auto-load data)
+	// Track whether BigQuery is connected (but don't auto-load data)
 	useEffect(() => {
 		const checkBigQueryConnection = () => {
 			const isConnected = queryService.isBigQueryConnected();
@@ -147,9 +147,9 @@ export function useDataSourceState({
 		};
 
 		checkBigQueryConnection();
-		// Check periodically in case connection status changes
-		const interval = setInterval(checkBigQueryConnection, 5000);
-		return () => clearInterval(interval);
+		// Re-check on connector state changes rather than on a timer; the
+		// predicate read is the same one the poll used.
+		return queryService.onConnectorState(checkBigQueryConnection);
 	}, []);
 
 	// ESC key handler for table info modal
