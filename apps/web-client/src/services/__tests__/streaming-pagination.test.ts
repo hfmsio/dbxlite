@@ -41,8 +41,10 @@ class FakeDuckDB {
 }
 
 type ServiceInternals = {
-	connectors: Map<string, unknown>;
-	activeConnector: string;
+	registry: {
+		set(slot: string, connector: unknown): void;
+		setActive(slot: string): void;
+	};
 };
 
 let fake: FakeDuckDB;
@@ -58,8 +60,8 @@ beforeEach(async () => {
 	({ queryService } = await import("../streaming-query-service"));
 	fake = new FakeDuckDB();
 	const internals = queryService as unknown as ServiceInternals;
-	internals.connectors = new Map([["duckdb", fake]]);
-	internals.activeConnector = "duckdb";
+	internals.registry.set("duckdb", fake);
+	internals.registry.setActive("duckdb");
 });
 
 describe("stream materialisation paging", () => {

@@ -158,9 +158,13 @@ function injectConnector(
 	slot: "bigquery" | "snowflake",
 	connector: unknown,
 ) {
+	// Goes through the registry's own API rather than poking a raw Map, so
+	// this survives further movement of the service's internals.
 	(
-		svc as unknown as { connectors: Map<string, unknown> }
-	).connectors.set(slot, connector);
+		svc as unknown as {
+			registry: { set(slot: string, connector: unknown): void };
+		}
+	).registry.set(slot, connector);
 	svc.setActiveConnector(slot);
 }
 

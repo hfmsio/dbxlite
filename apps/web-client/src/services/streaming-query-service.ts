@@ -22,7 +22,10 @@ import {
 	type AbortRegistry,
 	InMemoryAbortRegistry,
 } from "./query/abort-registry";
-import { ConnectorMode } from "./query/connector-mode";
+import {
+	ConnectorRegistry,
+	type ConnectorEventHandler,
+} from "./query/connector-registry";
 import { DuckDBFileVfs, type FileVfs } from "./query/file-vfs";
 import { PaginationPlanner } from "./query/pagination-planner";
 import type { ExecuteOnConnector } from "./query/ports";
@@ -185,12 +188,11 @@ export interface StreamingQueryOptions {
  * Streaming query service with memory-efficient pagination
  */
 class StreamingQueryService {
-	private connectors: Map<ConnectorType, BaseConnector> = new Map();
-	private activeConnector: ConnectorType = "duckdb";
+	private readonly registry = new ConnectorRegistry();
 	private credentialStore: EncryptedCredentialStore | null = null;
 	private readonly abortRegistry: AbortRegistry = new InMemoryAbortRegistry();
 	private readonly fileVfs: FileVfs = new DuckDBFileVfs(
-		() => this.connectors.get("duckdb") ?? null,
+		() => this.registry.get("duckdb"),
 	);
 	/**
 	 * The connector-execution seam handed to the query collaborators, so they
@@ -203,13 +205,9 @@ class StreamingQueryService {
 		signal,
 		silent,
 	) => this.executeQueryOnConnector(connectorType, sql, signal, silent);
-	// Operating mode: 'wasm' for standalone, 'http' for duckdb -ui
-	private readonly connectorMode = new ConnectorMode();
-	// Declared after connectorMode: field initializers run in order, and the
-	// planner captures the mode object at construction.
 	private readonly paginationPlanner = new PaginationPlanner(
 		this.executeOnConnector,
-		this.connectorMode,
+		this.registry.mode,
 	);
 	// Reads the planner's materialization seam for its exact-count fast path,
 	// so it is declared after it.
@@ -222,21 +220,21 @@ class StreamingQueryService {
 		this.credentialStore = credentialStore;
 
 		// Detect operating mode (WASM vs HTTP for duckdb -ui)
-		const mode = this.connectorMode.detect();
+		const mode = this.registry.mode.detect();
 		logger.info(`Initializing in ${mode} mode`);
 
 		// Initialize DuckDB connector based on mode
-		if (this.connectorMode.isHttp()) {
+		if (this.registry.mode.isHttp()) {
 			// HTTP mode: Connect to DuckDB CLI's embedded HTTP server
 			const duckdb = new DuckDBHttpConnector();
 			await duckdb.connect({ options: {} });
-			this.connectors.set("duckdb", duckdb);
+			this.registry.set("duckdb", duckdb);
 			logger.info("Connected to DuckDB HTTP server");
 		} else {
 			// WASM mode: Use in-browser DuckDB
 			const duckdb = new DuckDBConnector();
 			await duckdb.connect({ options: {} });
-			this.connectors.set("duckdb", duckdb);
+			this.registry.set("duckdb", duckdb);
 		}
 	}
 
@@ -244,14 +242,14 @@ class StreamingQueryService {
 	 * Get the current operating mode
 	 */
 	getMode(): DbxliteMode {
-		return this.connectorMode.get();
+		return this.registry.mode.get();
 	}
 
 	/**
 	 * Check if running in HTTP mode (duckdb -ui)
 	 */
 	isHttpMode(): boolean {
-		return this.connectorMode.isHttp();
+		return this.registry.mode.isHttp();
 	}
 
 	/**
@@ -262,17 +260,32 @@ class StreamingQueryService {
 	 * @returns Unsubscribe function
 	 */
 	onSchemaChange(listener: () => void): () => void {
-		if (!this.connectorMode.isHttp()) {
+		if (!this.registry.mode.isHttp()) {
 			// WASM mode doesn't have server-sent events
 			return () => {};
 		}
 
-		const connector = this.connectors.get("duckdb");
+		const connector = this.registry.get("duckdb");
 		if (connector && "onSchemaChange" in connector) {
 			return (connector as DuckDBHttpConnector).onSchemaChange(listener);
 		}
 
 		return () => {};
+	}
+
+	/**
+	 * Subscribe to connector state changes — connect, disconnect, session
+	 * context. Keyed by connector slot, so a subscription survives the
+	 * reconnects that replace connector instances.
+	 *
+	 * Same shape as `onSchemaChange`: returns its own unsubscribe. No emit
+	 * points are wired yet (WS-B B2/B3 add those), so today this only
+	 * delivers what the registry itself announces.
+	 *
+	 * @returns Unsubscribe function
+	 */
+	onConnectorState(handler: ConnectorEventHandler): () => void {
+		return this.registry.onConnectorState(handler);
 	}
 
 	/**
@@ -317,7 +330,7 @@ class StreamingQueryService {
 				limit,
 				offset,
 				enablePagination,
-				activeConnector: this.activeConnector,
+				activeConnector: this.registry.getActiveType(),
 				signal,
 			});
 			const paginatedSql = plan.sql;
@@ -612,26 +625,19 @@ class StreamingQueryService {
 	 *     export work
 	 */
 	setActiveConnector(type: ConnectorType) {
-		if (!this.connectors.has(type)) {
-			throw new Error(`Connector ${type} not initialized`);
-		}
-		this.activeConnector = type;
+		this.registry.setActive(type);
 	}
 
 	getActiveConnector(): BaseConnector {
-		const connector = this.connectors.get(this.activeConnector);
-		if (!connector) {
-			throw new Error(`No active connector available`);
-		}
-		return connector;
+		return this.registry.getActive();
 	}
 
 	getActiveConnectorType(): ConnectorType {
-		return this.activeConnector;
+		return this.registry.getActiveType();
 	}
 
 	isConnectorReady(type: ConnectorType): boolean {
-		return this.connectors.has(type);
+		return this.registry.has(type);
 	}
 
 	async registerFile(fileName: string, fileBuffer: ArrayBuffer): Promise<void> {
@@ -657,7 +663,7 @@ class StreamingQueryService {
 	 * Get a specific connector by type
 	 */
 	getConnector(type: ConnectorType): BaseConnector | null {
-		return this.connectors.get(type) || null;
+		return this.registry.get(type);
 	}
 
 	/**
@@ -793,7 +799,7 @@ class StreamingQueryService {
 	async executeQuery(sql: string, signal?: AbortSignal): Promise<QueryResult> {
 		const startTime = Date.now();
 		const connector = this.getActiveConnector();
-		const connectorType = this.activeConnector;
+		const connectorType = this.registry.getActiveType();
 
 		// Detect SET timezone commands and update the database timezone store
 		detectAndUpdateTimezone(sql);
@@ -902,7 +908,7 @@ class StreamingQueryService {
 				redirectUri: `${window.location.origin}/oauth-callback`,
 			},
 		});
-		this.connectors.set("bigquery", bigquery);
+		this.registry.set("bigquery", bigquery);
 	}
 
 	/**
@@ -949,7 +955,7 @@ class StreamingQueryService {
 				}
 			}
 
-			this.connectors.set("bigquery", bigquery);
+			this.registry.set("bigquery", bigquery);
 
 			logger.info("BigQuery connection restored from storage");
 			return true;
@@ -963,7 +969,7 @@ class StreamingQueryService {
 	 * Check if BigQuery connector is available and connected
 	 */
 	isBigQueryConnected(): boolean {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) return false;
 		if (
 			"isConnected" in connector &&
@@ -978,14 +984,14 @@ class StreamingQueryService {
 	 * Disconnect from BigQuery and revoke credentials
 	 */
 	async disconnectBigQuery(): Promise<void> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) return;
 
 		if ("revoke" in connector && typeof connector.revoke === "function") {
 			await (connector as CloudConnector).revoke?.();
 		}
 
-		this.connectors.delete("bigquery");
+		this.registry.delete("bigquery");
 
 		if (this.credentialStore) {
 			await this.credentialStore.save("bigquery-oauth-config", null);
@@ -1004,7 +1010,7 @@ class StreamingQueryService {
 	 * Clear BigQuery metadata cache (projects, datasets, tables)
 	 */
 	clearBigQueryCache(): void {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) return;
 
 		if (
@@ -1050,7 +1056,7 @@ class StreamingQueryService {
 			) {
 				const connected = bigqueryConnector.isConnected();
 				if (connected) {
-					this.connectors.set("bigquery", bigqueryConnector);
+					this.registry.set("bigquery", bigqueryConnector);
 					logger.info("BigQuery reconnected successfully");
 					return true;
 				}
@@ -1068,7 +1074,7 @@ class StreamingQueryService {
 	 * List BigQuery projects
 	 */
 	async getBigQueryProjects(): Promise<CatalogInfo[]> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1085,7 +1091,7 @@ class StreamingQueryService {
 	 * List BigQuery datasets in a project
 	 */
 	async getBigQueryDatasets(projectId: string): Promise<SchemaInfo[]> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1105,7 +1111,7 @@ class StreamingQueryService {
 		projectId: string,
 		datasetId: string,
 	): Promise<TableMetadata[]> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1129,7 +1135,7 @@ class StreamingQueryService {
 		datasetId: string,
 		tableId: string,
 	): Promise<TableMetadata> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1155,7 +1161,7 @@ class StreamingQueryService {
 		sql: string,
 		projectId?: string,
 	): Promise<QueryCostEstimate> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1177,7 +1183,7 @@ class StreamingQueryService {
 	 * Test BigQuery connection
 	 */
 	async testBigQueryConnection(): Promise<ConnectionTestResult> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1196,7 +1202,7 @@ class StreamingQueryService {
 	 * Get BigQuery default project
 	 */
 	async getBigQueryDefaultProject(): Promise<string | null> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			return null;
 		}
@@ -1213,7 +1219,7 @@ class StreamingQueryService {
 	 * Set BigQuery default project
 	 */
 	async setBigQueryDefaultProject(projectId: string): Promise<void> {
-		const connector = this.connectors.get("bigquery");
+		const connector = this.registry.get("bigquery");
 		if (!connector) {
 			throw new Error("BigQuery connector not initialized");
 		}
@@ -1231,11 +1237,11 @@ class StreamingQueryService {
 	 * Disconnect from a connector
 	 */
 	async disconnect(type: ConnectorType) {
-		const connector = this.connectors.get(type);
+		const connector = this.registry.get(type);
 		if (connector?.revoke) {
 			await connector.revoke();
 		}
-		this.connectors.delete(type);
+		this.registry.delete(type);
 	}
 
 	// ============================================
@@ -1271,7 +1277,7 @@ class StreamingQueryService {
 			schema: opts.schema,
 		});
 		await sf.connect({ options: {} });
-		this.connectors.set("snowflake", sf);
+		this.registry.set("snowflake", sf);
 	}
 
 	/**
@@ -1335,7 +1341,7 @@ class StreamingQueryService {
 				logger.debug("Snowflake initializeFromStorage returned false");
 				return false;
 			}
-			this.connectors.set("snowflake", sf);
+			this.registry.set("snowflake", sf);
 			logger.info("Snowflake connection restored from storage", {
 				authMode: storedMode,
 			});
@@ -1366,7 +1372,7 @@ class StreamingQueryService {
 	 * Check if Snowflake connector is available and connected.
 	 */
 	isSnowflakeConnected(): boolean {
-		const connector = this.connectors.get("snowflake");
+		const connector = this.registry.get("snowflake");
 		if (!connector) return false;
 		if (
 			"isConnected" in connector &&
@@ -1381,19 +1387,19 @@ class StreamingQueryService {
 	 * Disconnect from Snowflake and revoke credentials.
 	 */
 	async disconnectSnowflake(): Promise<void> {
-		const connector = this.connectors.get("snowflake");
+		const connector = this.registry.get("snowflake");
 		if (!connector) return;
 		if ("revoke" in connector && typeof connector.revoke === "function") {
 			await (connector as CloudConnector).revoke?.();
 		}
-		this.connectors.delete("snowflake");
+		this.registry.delete("snowflake");
 	}
 
 	/**
 	 * Test Snowflake connection.
 	 */
 	async testSnowflakeConnection(): Promise<ConnectionTestResult> {
-		const connector = this.connectors.get("snowflake");
+		const connector = this.registry.get("snowflake");
 		if (!connector) {
 			throw new Error("Snowflake connector not initialized");
 		}
@@ -1412,7 +1418,7 @@ class StreamingQueryService {
 	 * Get Snowflake connector instance (for direct API access in catalog UI).
 	 */
 	getSnowflakeConnector(): SnowflakeConnector | null {
-		const connector = this.connectors.get("snowflake");
+		const connector = this.registry.get("snowflake");
 		return connector instanceof SnowflakeConnector ? connector : null;
 	}
 
