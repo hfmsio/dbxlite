@@ -14,6 +14,10 @@ export { useFileReload } from "./useFileReload";
 export { useFileUpload } from "./useFileUpload";
 export { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 export { useOnboarding } from "./useOnboarding";
+export {
+	PERMISSION_SAFETY_POLL_MS,
+	usePermissionRecheck,
+} from "./usePermissionRecheck";
 export { useQueryExecution } from "./useQueryExecution";
 export { useQueryOverlay } from "./useQueryOverlay";
 export { useSQLTemplates } from "./useSQLTemplates";

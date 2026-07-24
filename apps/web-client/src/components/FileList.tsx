@@ -3,7 +3,8 @@
  */
 
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { usePermissionRecheck } from "../hooks/usePermissionRecheck";
 import { useRemoveDataSource, useUpdateDataSource } from "../stores/dataSourceStore";
 import { fileHandleStore } from "../services/file-handle-store";
 import type { DataSource } from "../types/data-source";
@@ -41,52 +42,46 @@ export function FileList({
 		variant?: "danger" | "warning" | "info";
 	} | null>(null);
 
-	// Check file handle permissions periodically
-	useEffect(() => {
-		const checkPermissions = async () => {
-			for (const file of files) {
-				// Only check files with handles (not remote files)
-				if (!file.hasFileHandle || file.isRemote) continue;
+	const checkPermissions = useCallback(async () => {
+		for (const file of files) {
+			// Only check files with handles (not remote files)
+			if (!file.hasFileHandle || file.isRemote) continue;
 
-				try {
-					const storedHandle = await fileHandleStore.getHandle(file.id);
-					if (storedHandle) {
-						// Try to actually read the file to verify permission (not just query cached state)
-						let hasPermission = false;
-						try {
-							await storedHandle.handle.getFile();
-							hasPermission = true;
-						} catch (_err) {
-							// If we can't read the file, permission is not actually granted
-							hasPermission = false;
-						}
-
-						const newStatus = hasPermission ? "granted" : "prompt";
-
-						// Update status if changed
-						if (file.permissionStatus !== newStatus) {
-							updateDataSource(file.id, { permissionStatus: newStatus });
-						}
-					} else {
-						// No handle found - mark as unknown
-						if (file.permissionStatus !== "unknown") {
-							updateDataSource(file.id, { permissionStatus: "unknown" });
-						}
+			try {
+				const storedHandle = await fileHandleStore.getHandle(file.id);
+				if (storedHandle) {
+					// Try to actually read the file to verify permission (not just query cached state)
+					let hasPermission = false;
+					try {
+						await storedHandle.handle.getFile();
+						hasPermission = true;
+					} catch (_err) {
+						// If we can't read the file, permission is not actually granted
+						hasPermission = false;
 					}
-				} catch (error) {
-					logger.warn(`Failed to check permission for ${file.name}`, error);
-					updateDataSource(file.id, { permissionStatus: "unknown" });
+
+					const newStatus = hasPermission ? "granted" : "prompt";
+
+					// Update status if changed
+					if (file.permissionStatus !== newStatus) {
+						updateDataSource(file.id, { permissionStatus: newStatus });
+					}
+				} else {
+					// No handle found - mark as unknown
+					if (file.permissionStatus !== "unknown") {
+						updateDataSource(file.id, { permissionStatus: "unknown" });
+					}
 				}
+			} catch (error) {
+				logger.warn(`Failed to check permission for ${file.name}`, error);
+				updateDataSource(file.id, { permissionStatus: "unknown" });
 			}
-		};
-
-		// Check immediately
-		checkPermissions();
-
-		// Check every 5 seconds (permissions can be revoked)
-		const interval = setInterval(checkPermissions, 5000);
-		return () => clearInterval(interval);
+		}
 	}, [files, updateDataSource]);
+
+	// Permissions can be revoked while the tab is in the background, so
+	// re-check on return rather than on a fast poll.
+	usePermissionRecheck(checkPermissions);
 
 	// Helper to check if file is available in DuckDB
 	const isFileAvailable = (file: DataSource): boolean => {
