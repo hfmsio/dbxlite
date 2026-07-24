@@ -17,9 +17,9 @@
  * nothing when those are missing (capability-gated).
  */
 
-import { useCallback, useEffect, useRef, useState } from "react"
-import { CloudProxyUnavailableError } from "@ide/connectors"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import type { CatalogProvider, ComputeStatus, ComputeStatusState } from "../types"
+import { getComputeProbe } from "../compute-status-probe"
 
 interface ComputeStatusBadgeProps {
 	provider: CatalogProvider
@@ -31,7 +31,6 @@ interface ComputeStatusBadgeProps {
 	onStatusChange?: (status: ComputeStatus) => void
 }
 
-const POLL_INTERVAL_MS = 30_000
 const POST_ACTION_QUIET_MS = 10_000
 const POST_ACTION_RECHECK_MS = 2_000
 
@@ -74,64 +73,22 @@ export default function ComputeStatusBadge({
 }: ComputeStatusBadgeProps) {
 	const [status, setStatus] = useState<ComputeStatus | null>(null)
 	const [resuming, setResuming] = useState(false)
-	const quietUntilRef = useRef<number>(0)
-	const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-	// Permanent disable when the cloud proxy isn't deployed (npx dbxlite-ui
-	// or self-hosted without dbxlite-cloud). One failed call is enough -
-	// no point polling forever.
-	const proxyDownRef = useRef(false)
 
-	const fetchStatus = useCallback(async () => {
-		if (!provider.getComputeStatus) return
-		if (proxyDownRef.current) return
-		if (Date.now() < quietUntilRef.current) return
-		try {
-			const next = await provider.getComputeStatus(name)
-			setStatus(next)
-			onStatusChange?.(next)
-		} catch (err) {
-			if (err instanceof CloudProxyUnavailableError) {
-				proxyDownRef.current = true
-				if (intervalRef.current != null) {
-					clearInterval(intervalRef.current)
-					intervalRef.current = null
-				}
-				setStatus({ state: "unknown", lastChecked: new Date() })
-				return
-			}
-			// Failure is non-fatal — show UNKNOWN; permission errors common
-			setStatus({ state: "unknown", lastChecked: new Date() })
-		}
-	}, [provider, name, onStatusChange])
+	// One shared, ref-counted probe per warehouse rather than an interval per
+	// badge: the poll, the visibility disarm, the query-completed refresh and
+	// the proxy-down disable all live in it now.
+	const probe = useMemo(
+		() => getComputeProbe(provider, name),
+		[provider, name],
+	)
 
-	// Initial + polling
 	useEffect(() => {
 		if (!provider.getComputeStatus) return
-		fetchStatus()
-		const arm = () => {
-			if (intervalRef.current != null) return
-			intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS)
-		}
-		const disarm = () => {
-			if (intervalRef.current != null) {
-				clearInterval(intervalRef.current)
-				intervalRef.current = null
-			}
-		}
-		arm()
-		const onVis = () => (document.hidden ? disarm() : arm())
-		// Snowflake auto-resumes the warehouse when a query runs against
-		// a SUSPENDED one — we'd otherwise sit on the stale SUSPENDED
-		// badge until the next 30s tick. Refresh on query-complete.
-		const onQueryDone = () => fetchStatus()
-		document.addEventListener("visibilitychange", onVis)
-		window.addEventListener("dbxlite:query-completed", onQueryDone)
-		return () => {
-			disarm()
-			document.removeEventListener("visibilitychange", onVis)
-			window.removeEventListener("dbxlite:query-completed", onQueryDone)
-		}
-	}, [fetchStatus, provider])
+		return probe.subscribe((next) => {
+			setStatus(next)
+			onStatusChange?.(next)
+		})
+	}, [probe, provider, onStatusChange])
 
 	const handleResume = useCallback(async () => {
 		if (!provider.resumeCompute) return
@@ -142,22 +99,20 @@ export default function ComputeStatusBadge({
 			size: status?.size,
 			lastChecked: new Date(),
 		})
-		quietUntilRef.current = Date.now() + POST_ACTION_QUIET_MS
+		probe.quiet(POST_ACTION_QUIET_MS)
 		try {
 			await provider.resumeCompute(name)
 			// Re-poll after a short delay to confirm
 			setTimeout(() => {
-				quietUntilRef.current = 0
-				fetchStatus()
+				void probe.refreshNow()
 			}, POST_ACTION_RECHECK_MS)
 		} catch {
-			// Revert optimistic flip; let next poll catch up
-			quietUntilRef.current = 0
-			fetchStatus()
+			// Revert optimistic flip; let the next poll catch up
+			void probe.refreshNow()
 		} finally {
 			setResuming(false)
 		}
-	}, [provider, name, status?.size, fetchStatus])
+	}, [provider, name, status?.size, probe])
 
 	if (!provider.getComputeStatus) return null
 	if (!status) {
