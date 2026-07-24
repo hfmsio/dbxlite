@@ -11,7 +11,6 @@ import {
 	type SchemaInfo,
 	SnowflakeConnector,
 	type TableMetadata,
-	detectMode,
 	type DbxliteMode,
 } from "@ide/connectors";
 import type { EncryptedCredentialStore } from "@ide/storage";
@@ -28,7 +27,9 @@ import {
 	type AbortRegistry,
 	InMemoryAbortRegistry,
 } from "./query/abort-registry";
+import { ConnectorMode } from "./query/connector-mode";
 import { DuckDBFileVfs, type FileVfs } from "./query/file-vfs";
+import type { ExecuteOnConnector } from "./query/ports";
 
 const logger = createLogger("QueryService");
 
@@ -194,6 +195,17 @@ class StreamingQueryService {
 	private readonly fileVfs: FileVfs = new DuckDBFileVfs(
 		() => this.connectors.get("duckdb") ?? null,
 	);
+	/**
+	 * The connector-execution seam handed to the query collaborators, so they
+	 * can run SQL without a reference back to this object. Bound as an arrow
+	 * property because it is passed around as a bare function.
+	 */
+	private readonly executeOnConnector: ExecuteOnConnector<QueryResult> = (
+		connectorType,
+		sql,
+		signal,
+		silent,
+	) => this.executeQueryOnConnector(connectorType, sql, signal, silent);
 	// Count cache with 5-minute TTL to avoid repeated COUNT queries
 	private countCache = new Map<
 		string,
@@ -201,7 +213,7 @@ class StreamingQueryService {
 	>();
 	private readonly COUNT_CACHE_TTL = 2 * 60 * 1000; // 2 minutes (reduced for memory)
 	// Operating mode: 'wasm' for standalone, 'http' for duckdb -ui
-	private mode: DbxliteMode = "wasm";
+	private readonly connectorMode = new ConnectorMode();
 
 	/**
 	 * The latest streaming query materialised into a temp table for stable
@@ -273,12 +285,12 @@ class StreamingQueryService {
 		if (this.streamMaterialization?.sql === sql) {
 			return this.streamMaterialization;
 		}
-		if (this.mode === "http") return null;
+		if (this.connectorMode.isHttp()) return null;
 
 		const cleanSql = sql.replace(/[\s;]+$/, "");
 		const table = `__dbxlite_stream_${++this.streamTableSeq}`;
 		try {
-			await this.executeQueryOnConnector(
+			await this.executeOnConnector(
 				"duckdb",
 				`CREATE TEMP TABLE ${table} AS ${cleanSql}`,
 				signal,
@@ -296,7 +308,7 @@ class StreamingQueryService {
 		const previous = this.lastStreamTable;
 		this.lastStreamTable = table;
 		if (previous && previous !== table) {
-			this.executeQueryOnConnector(
+			this.executeOnConnector(
 				"duckdb",
 				`DROP TABLE IF EXISTS ${previous}`,
 				undefined,
@@ -308,7 +320,7 @@ class StreamingQueryService {
 
 		let rowCount = -1;
 		try {
-			const countResult = await this.executeQueryOnConnector(
+			const countResult = await this.executeOnConnector(
 				"duckdb",
 				`SELECT COUNT(*) AS cnt FROM ${table}`,
 				signal,
@@ -327,11 +339,11 @@ class StreamingQueryService {
 		this.credentialStore = credentialStore;
 
 		// Detect operating mode (WASM vs HTTP for duckdb -ui)
-		this.mode = detectMode();
-		logger.info(`Initializing in ${this.mode} mode`);
+		const mode = this.connectorMode.detect();
+		logger.info(`Initializing in ${mode} mode`);
 
 		// Initialize DuckDB connector based on mode
-		if (this.mode === "http") {
+		if (this.connectorMode.isHttp()) {
 			// HTTP mode: Connect to DuckDB CLI's embedded HTTP server
 			const duckdb = new DuckDBHttpConnector();
 			await duckdb.connect({ options: {} });
@@ -349,14 +361,14 @@ class StreamingQueryService {
 	 * Get the current operating mode
 	 */
 	getMode(): DbxliteMode {
-		return this.mode;
+		return this.connectorMode.get();
 	}
 
 	/**
 	 * Check if running in HTTP mode (duckdb -ui)
 	 */
 	isHttpMode(): boolean {
-		return this.mode === "http";
+		return this.connectorMode.isHttp();
 	}
 
 	/**
@@ -367,7 +379,7 @@ class StreamingQueryService {
 	 * @returns Unsubscribe function
 	 */
 	onSchemaChange(listener: () => void): () => void {
-		if (this.mode !== "http") {
+		if (!this.connectorMode.isHttp()) {
 			// WASM mode doesn't have server-sent events
 			return () => {};
 		}
