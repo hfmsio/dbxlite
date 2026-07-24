@@ -1,6 +1,5 @@
 import {
 	type BaseConnector,
-	BigQueryConnector,
 	type CatalogInfo,
 	type CloudConnector,
 	type ColumnInfo,
@@ -189,7 +188,6 @@ export interface StreamingQueryOptions {
  */
 class StreamingQueryService {
 	private readonly registry = new ConnectorRegistry();
-	private credentialStore: EncryptedCredentialStore | null = null;
 	private readonly abortRegistry: AbortRegistry = new InMemoryAbortRegistry();
 	private readonly fileVfs: FileVfs = new DuckDBFileVfs(
 		() => this.registry.get("duckdb"),
@@ -217,7 +215,9 @@ class StreamingQueryService {
 	);
 
 	async initialize(credentialStore: EncryptedCredentialStore) {
-		this.credentialStore = credentialStore;
+		// The registry owns the credential store now: the lifecycle
+		// collaborators that need it hang off it.
+		this.registry.setCredentialStore(credentialStore);
 
 		// Detect operating mode (WASM vs HTTP for duckdb -ui)
 		const mode = this.registry.mode.detect();
@@ -885,147 +885,31 @@ class StreamingQueryService {
 	// ============================================
 
 	/**
-	 * Announce a connector's current status, read from the same predicate the
-	 * UI poll used to call. Deriving the emit rather than hand-writing a status
-	 * at each call site is what makes the event path exactly as truthful as the
-	 * poll it replaces. The registry dedupes, so calling this unconditionally
-	 * after any lifecycle operation is free.
-	 */
-	private announceStatus(type: "bigquery" | "snowflake"): void {
-		const connected =
-			type === "bigquery"
-				? this.isBigQueryConnected()
-				: this.isSnowflakeConnected();
-		this.registry.emitStatus(
-			type,
-			connected ? "connected" : "disconnected",
-			connected ? "connected" : "manual",
-		);
-	}
-
-	/**
 	 * Set up BigQuery connector with OAuth
 	 */
 	async setupBigQuery(clientId: string, clientSecret: string) {
-		if (!this.credentialStore) {
-			throw new Error("Credential store not initialized");
-		}
-
-		// Persist OAuth client credentials for auto-reconnect
-		await this.credentialStore.save("bigquery-oauth-config", {
-			clientId,
-			clientSecret,
-		});
-
-		const bigquery = new BigQueryConnector(
-			this.credentialStore,
-			clientId,
-			clientSecret,
-		);
-		await bigquery.connect({
-			options: {
-				redirectUri: `${window.location.origin}/oauth-callback`,
-			},
-		});
-		this.registry.set("bigquery", bigquery);
-		this.announceStatus("bigquery");
+		return this.registry.bigquery.setup(clientId, clientSecret);
 	}
 
 	/**
 	 * Restore BigQuery connection from stored credentials
 	 */
 	async restoreBigQueryConnection(): Promise<boolean> {
-		if (!this.credentialStore) {
-			logger.debug("No credential store available for BigQuery restoration");
-			return false;
-		}
-
-		try {
-			const oauthConfig = await this.credentialStore.load(
-				"bigquery-oauth-config",
-			);
-			if (!oauthConfig || !oauthConfig.clientId || !oauthConfig.clientSecret) {
-				logger.debug(
-					"No valid OAuth config found - skipping BigQuery restoration",
-				);
-				return false;
-			}
-
-			const token = await this.credentialStore.load("bigquery-token");
-			if (!token) {
-				logger.debug("No token found - skipping BigQuery restoration");
-				return false;
-			}
-
-			const bigquery = new BigQueryConnector(
-				this.credentialStore,
-				oauthConfig.clientId,
-				oauthConfig.clientSecret,
-			);
-
-			// Load token into memory so isConnected() returns true
-			if (
-				"initializeFromStorage" in bigquery &&
-				typeof bigquery.initializeFromStorage === "function"
-			) {
-				const hasToken = await bigquery.initializeFromStorage();
-				if (!hasToken) {
-					logger.debug("BigQuery token not found or invalid in storage");
-					return false;
-				}
-			}
-
-			this.registry.set("bigquery", bigquery);
-			this.announceStatus("bigquery");
-
-			logger.info("BigQuery connection restored from storage");
-			return true;
-		} catch (error) {
-			logger.error("Failed to restore BigQuery connection", error);
-			return false;
-		}
+		return this.registry.bigquery.restore();
 	}
 
 	/**
 	 * Check if BigQuery connector is available and connected
 	 */
 	isBigQueryConnected(): boolean {
-		const connector = this.registry.get("bigquery");
-		if (!connector) return false;
-		if (
-			"isConnected" in connector &&
-			typeof connector.isConnected === "function"
-		) {
-			return (connector as CloudConnector).isConnected?.() ?? false;
-		}
-		return false;
+		return this.registry.bigquery.isConnected();
 	}
 
 	/**
 	 * Disconnect from BigQuery and revoke credentials
 	 */
 	async disconnectBigQuery(): Promise<void> {
-		const connector = this.registry.get("bigquery");
-		if (!connector) return;
-
-		if ("revoke" in connector && typeof connector.revoke === "function") {
-			await (connector as CloudConnector).revoke?.();
-		}
-
-		this.registry.delete("bigquery");
-		this.announceStatus("bigquery");
-
-		if (this.credentialStore) {
-			await this.credentialStore.save("bigquery-oauth-config", null);
-		}
-		// Mirror Snowflake's revoke(): also clear the auto-connect flag so
-		// the next page load doesn't try to restore a connection that the
-		// user just explicitly removed.
-		try {
-			localStorage.removeItem("bigquery-auto-connect");
-		} catch {
-			// localStorage may be unavailable in some test envs
-		}
+		return this.registry.bigquery.disconnect();
 	}
 
 	/**
@@ -1047,49 +931,7 @@ class StreamingQueryService {
 	 * Attempt to reconnect to BigQuery using stored credentials
 	 */
 	async reconnectBigQuery(): Promise<boolean> {
-		if (!this.credentialStore) {
-			logger.debug("Cannot reconnect - credential store not initialized");
-			return false;
-		}
-
-		if (this.isBigQueryConnected()) {
-			logger.debug("BigQuery already connected");
-			return true;
-		}
-
-		try {
-			const config = await this.credentialStore.load("bigquery-oauth-config");
-			if (!config || !config.clientId) {
-				logger.debug("No stored BigQuery OAuth config found");
-				return false;
-			}
-
-			logger.debug("Found stored OAuth config, attempting reconnect...");
-
-			const bigqueryConnector = new BigQueryConnector(
-				this.credentialStore,
-				config.clientId,
-				config.clientSecret,
-			);
-
-			if (
-				"isConnected" in bigqueryConnector &&
-				typeof bigqueryConnector.isConnected === "function"
-			) {
-				const connected = bigqueryConnector.isConnected();
-				if (connected) {
-					this.registry.set("bigquery", bigqueryConnector);
-					logger.info("BigQuery reconnected successfully");
-					return true;
-				}
-			}
-
-			logger.debug("BigQuery credentials expired or invalid");
-			return false;
-		} catch (error) {
-			logger.error("Failed to reconnect to BigQuery", error);
-			return false;
-		}
+		return this.registry.bigquery.reconnect();
 	}
 
 	/**
@@ -1264,8 +1106,10 @@ class StreamingQueryService {
 			await connector.revoke();
 		}
 		this.registry.delete(type);
+		// Announce through the owning lifecycle so the status is derived the
+		// same way whichever path removed the connector.
 		if (type === "bigquery" || type === "snowflake") {
-			this.announceStatus(type);
+			this.registry.emitStatus(type, "disconnected", "manual");
 		}
 	}
 
@@ -1278,33 +1122,7 @@ class StreamingQueryService {
 	 * Triggers the OAuth popup flow.
 	 */
 	async setupSnowflake(opts: SnowflakeSetupOptions): Promise<void> {
-		if (!this.credentialStore) {
-			throw new Error("Credential store not initialized");
-		}
-		// Map the UI-facing options to the connector's auth discriminator.
-		// PAT mode bypasses the OAuth popup; OAuth (default) keeps the
-		// existing flow.
-		const auth =
-			opts.auth?.mode === "pat"
-				? { mode: "pat" as const, token: opts.auth.token }
-				: {
-						mode: "oauth" as const,
-						clientId: opts.clientId ?? "",
-						clientSecret: opts.clientSecret,
-					};
-		const sf = new SnowflakeConnector({
-			credentialStore: this.credentialStore,
-			account: opts.account,
-			auth,
-			warehouse: opts.warehouse,
-			role: opts.role,
-			database: opts.database,
-			schema: opts.schema,
-		});
-		await sf.connect({ options: {} });
-		this.registry.set("snowflake", sf);
-		this.announceStatus("snowflake");
-		this.registry.emitSessionContext("snowflake");
+		return this.registry.snowflake.setup(opts);
 	}
 
 	/**
@@ -1312,73 +1130,7 @@ class StreamingQueryService {
 	 * Returns true if restored successfully, false otherwise.
 	 */
 	async restoreSnowflakeConnection(): Promise<boolean> {
-		if (!this.credentialStore) {
-			logger.debug("No credential store available for Snowflake restoration");
-			return false;
-		}
-		try {
-			const config = (await this.credentialStore.load(
-				"snowflake-config",
-			)) as
-				| (Partial<SnowflakeSetupOptions> & { authMode?: "oauth" | "pat" })
-				| null;
-			if (!config || !config.account) {
-				logger.debug("No valid Snowflake config in storage");
-				return false;
-			}
-			const storedMode = config.authMode ?? "oauth";
-
-			// Mode-specific credential presence check + connector
-			// instantiation. Legacy stored configs without authMode default
-			// to OAuth (back-compat).
-			let auth: { mode: "oauth"; clientId: string; clientSecret?: string } | { mode: "pat"; token: string };
-			if (storedMode === "pat") {
-				const pat = (await this.credentialStore.load("snowflake-pat")) as
-					| string
-					| null;
-				if (!pat) {
-					logger.debug("PAT mode but no token in storage");
-					return false;
-				}
-				auth = { mode: "pat", token: pat };
-			} else {
-				const token = await this.credentialStore.load("snowflake-token");
-				if (!token || !config.clientId) {
-					logger.debug("No valid Snowflake OAuth token/clientId in storage");
-					return false;
-				}
-				auth = {
-					mode: "oauth",
-					clientId: config.clientId,
-					clientSecret: config.clientSecret,
-				};
-			}
-
-			const sf = new SnowflakeConnector({
-				credentialStore: this.credentialStore,
-				account: config.account,
-				auth,
-				warehouse: config.warehouse ?? "",
-				role: config.role,
-				database: config.database,
-				schema: config.schema,
-			});
-			const ok = await sf.initializeFromStorage();
-			if (!ok) {
-				logger.debug("Snowflake initializeFromStorage returned false");
-				return false;
-			}
-			this.registry.set("snowflake", sf);
-			this.announceStatus("snowflake");
-			this.registry.emitSessionContext("snowflake");
-			logger.info("Snowflake connection restored from storage", {
-				authMode: storedMode,
-			});
-			return true;
-		} catch (error) {
-			logger.error("Failed to restore Snowflake connection", error);
-			return false;
-		}
+		return this.registry.snowflake.restore();
 	}
 
 	/**
@@ -1390,43 +1142,21 @@ class StreamingQueryService {
 		schema?: string;
 		role?: string;
 	}): Promise<void> {
-		const sf = this.getSnowflakeConnector();
-		if (!sf) {
-			throw new Error("Snowflake connector not initialized");
-		}
-		await sf.updateConfig(config);
-		// Role/warehouse/database/schema are exactly what the session-context
-		// chips display, and this is the only path that changes them, so it is
-		// the only place the chips need to hear about.
-		this.registry.emitSessionContext("snowflake");
+		return this.registry.snowflake.updateConfig(config);
 	}
 
 	/**
 	 * Check if Snowflake connector is available and connected.
 	 */
 	isSnowflakeConnected(): boolean {
-		const connector = this.registry.get("snowflake");
-		if (!connector) return false;
-		if (
-			"isConnected" in connector &&
-			typeof connector.isConnected === "function"
-		) {
-			return (connector as CloudConnector).isConnected?.() ?? false;
-		}
-		return false;
+		return this.registry.snowflake.isConnected();
 	}
 
 	/**
 	 * Disconnect from Snowflake and revoke credentials.
 	 */
 	async disconnectSnowflake(): Promise<void> {
-		const connector = this.registry.get("snowflake");
-		if (!connector) return;
-		if ("revoke" in connector && typeof connector.revoke === "function") {
-			await (connector as CloudConnector).revoke?.();
-		}
-		this.registry.delete("snowflake");
-		this.announceStatus("snowflake");
+		return this.registry.snowflake.disconnect();
 	}
 
 	/**
@@ -1452,8 +1182,7 @@ class StreamingQueryService {
 	 * Get Snowflake connector instance (for direct API access in catalog UI).
 	 */
 	getSnowflakeConnector(): SnowflakeConnector | null {
-		const connector = this.registry.get("snowflake");
-		return connector instanceof SnowflakeConnector ? connector : null;
+		return this.registry.snowflake.getConnector();
 	}
 
 	/**

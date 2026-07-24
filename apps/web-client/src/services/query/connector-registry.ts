@@ -30,7 +30,10 @@ import {
 } from "@ide/connectors";
 import type { ConnectorType } from "../../types/data-source";
 import { createLogger } from "../../utils/logger";
+import { BigQueryLifecycle } from "./bigquery-lifecycle";
 import { ConnectorMode } from "./connector-mode";
+import type { EncryptedCredentialStore } from "./lifecycle-deps";
+import { SnowflakeLifecycle } from "./snowflake-lifecycle";
 
 const logger = createLogger("ConnectorRegistry");
 
@@ -73,6 +76,20 @@ export class ConnectorRegistry {
 	private readonly lastStatus = new Map<ConnectorType, ConnectorStatus>();
 
 	readonly mode = new ConnectorMode();
+
+	/**
+	 * Connection lifecycle orchestration, owned here but implemented in its
+	 * own module so the registry stays about slots, selection and events.
+	 * Populated once the credential store exists (at initialize()).
+	 */
+	private credentialStore: EncryptedCredentialStore | null = null;
+	readonly bigquery = new BigQueryLifecycle(this, () => this.credentialStore);
+	readonly snowflake = new SnowflakeLifecycle(this, () => this.credentialStore);
+
+	/** Supply the credential store the lifecycles need. */
+	setCredentialStore(store: EncryptedCredentialStore): void {
+		this.credentialStore = store;
+	}
 
 	/**
 	 * Detach handles for the per-instance subscriptions this registry holds,
