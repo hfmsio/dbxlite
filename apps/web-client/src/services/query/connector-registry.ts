@@ -22,7 +22,12 @@
  * `onSchemaChange` already uses, and the reason WS-B depends on this PR.
  */
 
-import type { BaseConnector } from "@ide/connectors";
+import {
+	type BaseConnector,
+	type ConnectorStatus,
+	type ConnectorStatusReason,
+	isConnectorStateSource,
+} from "@ide/connectors";
 import type { SessionContextChip } from "../../providers/catalog/types";
 import type { ConnectorType } from "../../types/data-source";
 import { createLogger } from "../../utils/logger";
@@ -30,13 +35,17 @@ import { ConnectorMode } from "./connector-mode";
 
 const logger = createLogger("ConnectorRegistry");
 
-export type ConnectorStatus = "connected" | "disconnected" | "error";
-
 export type ConnectorEvent =
 	| {
 			type: "statusChange";
 			connector: ConnectorType;
 			status: ConnectorStatus;
+			/**
+			 * Why the status changed. Consumers that evict cached state on
+			 * disconnect must check this: only an `auth` (or `manual`) ending
+			 * invalidates the catalog, never a transient network failure.
+			 */
+			reason?: ConnectorStatusReason;
 	  }
 	| {
 			type: "sessionContextChange";
@@ -59,15 +68,46 @@ export class ConnectorRegistry {
 
 	readonly mode = new ConnectorMode();
 
+	/**
+	 * Detach handles for the per-instance subscriptions this registry holds,
+	 * so replacing or removing a connector cannot leak the old one's listener.
+	 */
+	private readonly forwarding = new Map<ConnectorType, () => void>();
+
 	// --- membership -------------------------------------------------------
 
+	/**
+	 * Put a connector in a slot, taking over event forwarding for it. Any
+	 * previous occupant's subscription is detached first: reconnects build a
+	 * fresh connector, and a stale subscription would both leak and let a dead
+	 * instance speak for a live slot.
+	 */
 	set(type: ConnectorType, connector: BaseConnector): void {
+		this.detach(type);
 		this.connectors.set(type, connector);
+
+		if (isConnectorStateSource(connector)) {
+			const off = connector.onStateChange((event) => {
+				// Re-emit on the stable slot key. Consumers subscribed to the
+				// registry never see the instance swap underneath them.
+				this.emitStatus(type, event.status, event.reason);
+			});
+			this.forwarding.set(type, off);
+		}
 	}
 
 	delete(type: ConnectorType): boolean {
+		this.detach(type);
 		this.lastStatus.delete(type);
 		return this.connectors.delete(type);
+	}
+
+	private detach(type: ConnectorType): void {
+		const off = this.forwarding.get(type);
+		if (off) {
+			off();
+			this.forwarding.delete(type);
+		}
 	}
 
 	get(type: ConnectorType): BaseConnector | null {
@@ -121,10 +161,14 @@ export class ConnectorRegistry {
 	 * Announce a status transition for a slot. Repeats are dropped, so callers
 	 * can emit unconditionally at their transition points.
 	 */
-	emitStatus(connector: ConnectorType, status: ConnectorStatus): void {
+	emitStatus(
+		connector: ConnectorType,
+		status: ConnectorStatus,
+		reason?: ConnectorStatusReason,
+	): void {
 		if (this.lastStatus.get(connector) === status) return;
 		this.lastStatus.set(connector, status);
-		this.emit({ type: "statusChange", connector, status });
+		this.emit({ type: "statusChange", connector, status, reason });
 	}
 
 	/** Announce a session-context change (role, warehouse, billing project). */

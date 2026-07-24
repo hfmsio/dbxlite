@@ -124,6 +124,9 @@ vi.mock("@ide/connectors", () => ({
 	SnowflakeConnector: fake.SnowflakeConnector,
 	detectMode: () => fake.state.mode,
 	isParquetExportCapable: () => false,
+	// The registry narrows on this to decide whether to forward a connector's
+	// own state events. These fakes emit nothing.
+	isConnectorStateSource: () => false,
 }));
 
 const timezone = vi.hoisted(() => ({ setTimezone: vi.fn() }));

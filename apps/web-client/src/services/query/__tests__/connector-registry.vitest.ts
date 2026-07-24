@@ -5,11 +5,21 @@
  * dedupe behavior is pinned here before any emit point exists.
  */
 
-import type { BaseConnector } from "@ide/connectors";
+import { type BaseConnector, ConnectorStateEmitter } from "@ide/connectors";
 import { describe, expect, it, vi } from "vitest";
 import { ConnectorRegistry } from "../connector-registry";
 
 const conn = (tag = "c") => ({ tag }) as unknown as BaseConnector;
+
+/** A connector that announces its own state, like a real one after B3. */
+function emittingConn(tag = "c") {
+	const emitter = new ConnectorStateEmitter();
+	const connector = {
+		tag,
+		onStateChange: emitter.onStateChange.bind(emitter),
+	} as unknown as BaseConnector;
+	return { connector, emitter };
+}
 
 describe("ConnectorRegistry", () => {
 	describe("membership", () => {
@@ -240,6 +250,112 @@ describe("ConnectorRegistry", () => {
 			type: "statusChange",
 			connector: "bigquery",
 			status: "connected",
+		});
+	});
+
+	describe("forwarding from connector instances", () => {
+		it("re-emits a connector's own status on its slot key", () => {
+			const registry = new ConnectorRegistry();
+			const handler = vi.fn();
+			registry.onConnectorState(handler);
+			const { connector, emitter } = emittingConn();
+
+			registry.set("snowflake", connector);
+			emitter.emit("connected", "connected");
+
+			expect(handler).toHaveBeenCalledWith({
+				type: "statusChange",
+				connector: "snowflake",
+				status: "connected",
+				reason: "connected",
+			});
+		});
+
+		it("carries the reason through to consumers", () => {
+			const registry = new ConnectorRegistry();
+			const handler = vi.fn();
+			registry.onConnectorState(handler);
+			const { connector, emitter } = emittingConn();
+			registry.set("bigquery", connector);
+
+			emitter.emit("disconnected", "auth");
+
+			expect(handler).toHaveBeenCalledWith(
+				expect.objectContaining({ status: "disconnected", reason: "auth" }),
+			);
+		});
+
+		it("keeps forwarding after the instance is replaced", () => {
+			const registry = new ConnectorRegistry();
+			const handler = vi.fn();
+			registry.onConnectorState(handler);
+			const first = emittingConn("first");
+			const second = emittingConn("second");
+
+			registry.set("bigquery", first.connector);
+			first.emitter.emit("connected");
+			registry.set("bigquery", second.connector);
+			second.emitter.emit("disconnected");
+
+			expect(handler).toHaveBeenCalledTimes(2);
+			expect(handler).toHaveBeenLastCalledWith(
+				expect.objectContaining({
+					connector: "bigquery",
+					status: "disconnected",
+				}),
+			);
+		});
+
+		it("stops listening to a replaced instance", () => {
+			const registry = new ConnectorRegistry();
+			const handler = vi.fn();
+			registry.onConnectorState(handler);
+			const first = emittingConn("first");
+			const second = emittingConn("second");
+
+			registry.set("bigquery", first.connector);
+			registry.set("bigquery", second.connector);
+			// The displaced instance must no longer speak for the live slot.
+			first.emitter.emit("connected");
+
+			expect(handler).not.toHaveBeenCalled();
+			expect(first.emitter.listenerCount).toBe(0);
+		});
+
+		it("stops listening once the slot is emptied", () => {
+			const registry = new ConnectorRegistry();
+			const handler = vi.fn();
+			registry.onConnectorState(handler);
+			const { connector, emitter } = emittingConn();
+
+			registry.set("bigquery", connector);
+			registry.delete("bigquery");
+			emitter.emit("connected");
+
+			expect(handler).not.toHaveBeenCalled();
+			expect(emitter.listenerCount).toBe(0);
+		});
+
+		it("accepts a connector that emits nothing", () => {
+			const registry = new ConnectorRegistry();
+
+			expect(() => registry.set("duckdb", conn())).not.toThrow();
+		});
+
+		it("still dedupes across an instance swap", () => {
+			const registry = new ConnectorRegistry();
+			const handler = vi.fn();
+			registry.onConnectorState(handler);
+			const first = emittingConn("first");
+			const second = emittingConn("second");
+
+			registry.set("bigquery", first.connector);
+			first.emitter.emit("connected");
+			// A reconnect that lands in the same state should not re-announce.
+			registry.set("bigquery", second.connector);
+			second.emitter.emit("connected");
+
+			expect(handler).toHaveBeenCalledTimes(1);
 		});
 	});
 
