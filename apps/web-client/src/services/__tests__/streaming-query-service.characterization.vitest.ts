@@ -535,8 +535,8 @@ describe("StreamingQueryService characterization", () => {
 		it("clears the active-query registry once a query finishes", async () => {
 			const svc = await freshService("wasm");
 			const registry = (
-				svc as unknown as { activeQueries: Map<string, AbortController> }
-			).activeQueries;
+				svc as unknown as { abortRegistry: { size: number } }
+			).abortRegistry;
 
 			await drain(svc.executeStreamingQuery("SELECT 1", {}));
 
@@ -546,8 +546,8 @@ describe("StreamingQueryService characterization", () => {
 		it("registers the query while it is in flight", async () => {
 			const svc = await freshService("wasm");
 			const registry = (
-				svc as unknown as { activeQueries: Map<string, AbortController> }
-			).activeQueries;
+				svc as unknown as { abortRegistry: { size: number } }
+			).abortRegistry;
 			fake.state.responder = () => [
 				{ rows: [{ a: 1 }], done: false },
 				{ rows: [{ a: 2 }], done: true },

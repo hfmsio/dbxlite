@@ -24,6 +24,10 @@ import {
 	isPaginatableStatement,
 } from "../utils/sqlPagination";
 import { databaseTimezone } from "./formatter-settings";
+import {
+	type AbortRegistry,
+	InMemoryAbortRegistry,
+} from "./query/abort-registry";
 
 const logger = createLogger("QueryService");
 
@@ -193,7 +197,7 @@ class StreamingQueryService {
 	private connectors: Map<ConnectorType, BaseConnector> = new Map();
 	private activeConnector: ConnectorType = "duckdb";
 	private credentialStore: EncryptedCredentialStore | null = null;
-	private activeQueries = new Map<string, AbortController>();
+	private readonly abortRegistry: AbortRegistry = new InMemoryAbortRegistry();
 	// Count cache with 5-minute TTL to avoid repeated COUNT queries
 	private countCache = new Map<
 		string,
@@ -388,8 +392,7 @@ class StreamingQueryService {
 		options: StreamingQueryOptions = {},
 	): AsyncGenerator<DataChunk> {
 		const queryId = `query_${Date.now()}_${Math.random()}`;
-		const abortController = new AbortController();
-		this.activeQueries.set(queryId, abortController);
+		const abortController = this.abortRegistry.register(queryId);
 
 		// Detect SET timezone commands and update the database timezone store
 		detectAndUpdateTimezone(sql);
@@ -542,7 +545,7 @@ class StreamingQueryService {
 			// Re-throw other errors as-is
 			throw error;
 		} finally {
-			this.activeQueries.delete(queryId);
+			this.abortRegistry.release(queryId);
 		}
 	}
 
@@ -867,21 +870,14 @@ class StreamingQueryService {
 	 * Cancel an active query
 	 */
 	async cancelQuery(queryId: string) {
-		const controller = this.activeQueries.get(queryId);
-		if (controller) {
-			controller.abort();
-			this.activeQueries.delete(queryId);
-		}
+		this.abortRegistry.cancel(queryId);
 	}
 
 	/**
 	 * Cancel all active queries
 	 */
 	async cancelAllQueries() {
-		for (const [_queryId, controller] of this.activeQueries) {
-			controller.abort();
-		}
-		this.activeQueries.clear();
+		this.abortRegistry.cancelAll();
 	}
 
 	// Utility methods
