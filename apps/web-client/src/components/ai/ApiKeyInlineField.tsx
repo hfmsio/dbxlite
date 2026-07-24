@@ -21,6 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type AIProviderType,
 	aiCredentialStore,
+	backendRegistry,
 	getCredentialKey,
 	getProvider,
 } from "../../services/ai";
@@ -151,6 +152,9 @@ export default function ApiKeyInlineField({
 
 		// Verified — persist.
 		await aiCredentialStore.save(getCredentialKey(provider), trimmed);
+		// A BYO backend's availability is "is a key stored", so the registry
+		// cannot see this change on its own.
+		backendRegistry.notifyAvailabilityChanged();
 		setHasSavedKey(true);
 		setApiKey("");
 		setVerifying(false);
@@ -160,6 +164,7 @@ export default function ApiKeyInlineField({
 
 	const handleRemove = useCallback(async () => {
 		await aiCredentialStore.save(getCredentialKey(provider), null);
+		backendRegistry.notifyAvailabilityChanged();
 		setHasSavedKey(false);
 		setVerifyResult(null);
 		onRemoved?.();

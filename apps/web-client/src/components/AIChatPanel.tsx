@@ -6,6 +6,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { type AIProviderType, backendRegistry } from "../services/ai";
+import { queryService } from "../services/streaming-query-service";
 import { useAIChatStore } from "../stores/aiChatStore";
 import { grantPiiConsent, hasPiiConsent } from "../utils/aiPiiConsent";
 import { AIChatMessage } from "./AIChatMessage";
@@ -704,7 +705,14 @@ function BackendPicker({
 }) {
 	const [available, setAvailable] = useState<Set<string>>(new Set());
 
-	// Poll availability on mount + every 5s to react to connector activate/deactivate.
+	// listAvailable() can change for three independent reasons, and all three
+	// have to be subscribed to or the picker goes stale:
+	//   1. a warehouse backend registering/unregistering  -> registry onChange
+	//   2. the user adding or removing a BYO API key      -> registry onChange,
+	//      via the explicit notify from the key field
+	//   3. a warehouse connector connecting/disconnecting -> onConnectorState,
+	//      because WarehouseChatBackend.isAvailable() reads connection state
+	// A conversion that only watched the registry would silently drop (3).
 	useEffect(() => {
 		let cancelled = false;
 		const update = async () => {
@@ -713,10 +721,12 @@ function BackendPicker({
 			setAvailable(new Set(list.map((b) => b.id)));
 		};
 		update();
-		const t = setInterval(update, 5000);
+		const offRegistry = backendRegistry.onChange(update);
+		const offConnector = queryService.onConnectorState(update);
 		return () => {
 			cancelled = true;
-			clearInterval(t);
+			offRegistry();
+			offConnector();
 		};
 	}, []);
 

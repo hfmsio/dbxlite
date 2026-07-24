@@ -24,6 +24,9 @@ vi.mock("../../../services/ai", () => ({
 		load: (...args: unknown[]) => mockLoad(...args),
 	},
 	getCredentialKey: (type: string) => `ai-key-${type}`,
+	// Saving or removing a key changes BYO backend availability, which the
+	// registry cannot observe on its own.
+	backendRegistry: { notifyAvailabilityChanged: () => {} },
 	getProvider: (type: string) => ({
 		type,
 		displayName:
