@@ -885,6 +885,25 @@ class StreamingQueryService {
 	// ============================================
 
 	/**
+	 * Announce a connector's current status, read from the same predicate the
+	 * UI poll used to call. Deriving the emit rather than hand-writing a status
+	 * at each call site is what makes the event path exactly as truthful as the
+	 * poll it replaces. The registry dedupes, so calling this unconditionally
+	 * after any lifecycle operation is free.
+	 */
+	private announceStatus(type: "bigquery" | "snowflake"): void {
+		const connected =
+			type === "bigquery"
+				? this.isBigQueryConnected()
+				: this.isSnowflakeConnected();
+		this.registry.emitStatus(
+			type,
+			connected ? "connected" : "disconnected",
+			connected ? "connected" : "manual",
+		);
+	}
+
+	/**
 	 * Set up BigQuery connector with OAuth
 	 */
 	async setupBigQuery(clientId: string, clientSecret: string) {
@@ -909,6 +928,7 @@ class StreamingQueryService {
 			},
 		});
 		this.registry.set("bigquery", bigquery);
+		this.announceStatus("bigquery");
 	}
 
 	/**
@@ -956,6 +976,7 @@ class StreamingQueryService {
 			}
 
 			this.registry.set("bigquery", bigquery);
+			this.announceStatus("bigquery");
 
 			logger.info("BigQuery connection restored from storage");
 			return true;
@@ -992,6 +1013,7 @@ class StreamingQueryService {
 		}
 
 		this.registry.delete("bigquery");
+		this.announceStatus("bigquery");
 
 		if (this.credentialStore) {
 			await this.credentialStore.save("bigquery-oauth-config", null);
@@ -1242,6 +1264,9 @@ class StreamingQueryService {
 			await connector.revoke();
 		}
 		this.registry.delete(type);
+		if (type === "bigquery" || type === "snowflake") {
+			this.announceStatus(type);
+		}
 	}
 
 	// ============================================
@@ -1278,6 +1303,7 @@ class StreamingQueryService {
 		});
 		await sf.connect({ options: {} });
 		this.registry.set("snowflake", sf);
+		this.announceStatus("snowflake");
 	}
 
 	/**
@@ -1342,6 +1368,7 @@ class StreamingQueryService {
 				return false;
 			}
 			this.registry.set("snowflake", sf);
+			this.announceStatus("snowflake");
 			logger.info("Snowflake connection restored from storage", {
 				authMode: storedMode,
 			});
@@ -1393,6 +1420,7 @@ class StreamingQueryService {
 			await (connector as CloudConnector).revoke?.();
 		}
 		this.registry.delete("snowflake");
+		this.announceStatus("snowflake");
 	}
 
 	/**

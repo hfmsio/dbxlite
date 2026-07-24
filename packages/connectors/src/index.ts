@@ -18,6 +18,20 @@ export type {
 
 export { isParquetExportCapable } from './base'
 
+// Connector state events (WS-B): the signal that replaces UI state polling.
+export {
+  ConnectorStateEmitter,
+  classifyAuthFailure,
+  isConnectorStateSource,
+} from './connector-state'
+export type {
+  ConnectorStatus,
+  ConnectorStatusReason,
+  ConnectorStateEvent,
+  ConnectorStateListener,
+  ConnectorStateSource,
+} from './connector-state'
+
 // Export connector implementations
 export { BigQueryConnector } from './bigquery-connector'
 export { DuckDBConnector } from './duckdb-connector'
