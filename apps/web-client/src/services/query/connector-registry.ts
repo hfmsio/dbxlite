@@ -28,7 +28,6 @@ import {
 	type ConnectorStatusReason,
 	isConnectorStateSource,
 } from "@ide/connectors";
-import type { SessionContextChip } from "../../providers/catalog/types";
 import type { ConnectorType } from "../../types/data-source";
 import { createLogger } from "../../utils/logger";
 import { ConnectorMode } from "./connector-mode";
@@ -48,9 +47,16 @@ export type ConnectorEvent =
 			reason?: ConnectorStatusReason;
 	  }
 	| {
+			/**
+			 * The connector's session context (role, warehouse, database,
+			 * billing project) may have changed. Deliberately payload-free:
+			 * consumers re-read from their catalog provider, exactly as they
+			 * did when polling. That keeps this module free of app-level view
+			 * types and keeps the event a trigger rather than a second source
+			 * of truth.
+			 */
 			type: "sessionContextChange";
 			connector: ConnectorType;
-			context: SessionContextChip[];
 	  };
 
 export type ConnectorEventHandler = (event: ConnectorEvent) => void;
@@ -172,11 +178,8 @@ export class ConnectorRegistry {
 	}
 
 	/** Announce a session-context change (role, warehouse, billing project). */
-	emitSessionContext(
-		connector: ConnectorType,
-		context: SessionContextChip[],
-	): void {
-		this.emit({ type: "sessionContextChange", connector, context });
+	emitSessionContext(connector: ConnectorType): void {
+		this.emit({ type: "sessionContextChange", connector });
 	}
 
 	/** How many subscribers are attached. Exposed for leak assertions. */

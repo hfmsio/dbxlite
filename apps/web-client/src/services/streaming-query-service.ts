@@ -1304,6 +1304,7 @@ class StreamingQueryService {
 		await sf.connect({ options: {} });
 		this.registry.set("snowflake", sf);
 		this.announceStatus("snowflake");
+		this.registry.emitSessionContext("snowflake");
 	}
 
 	/**
@@ -1369,6 +1370,7 @@ class StreamingQueryService {
 			}
 			this.registry.set("snowflake", sf);
 			this.announceStatus("snowflake");
+			this.registry.emitSessionContext("snowflake");
 			logger.info("Snowflake connection restored from storage", {
 				authMode: storedMode,
 			});
@@ -1393,6 +1395,10 @@ class StreamingQueryService {
 			throw new Error("Snowflake connector not initialized");
 		}
 		await sf.updateConfig(config);
+		// Role/warehouse/database/schema are exactly what the session-context
+		// chips display, and this is the only path that changes them, so it is
+		// the only place the chips need to hear about.
+		this.registry.emitSessionContext("snowflake");
 	}
 
 	/**

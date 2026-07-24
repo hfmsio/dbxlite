@@ -106,20 +106,18 @@ describe("ConnectorRegistry", () => {
 			});
 		});
 
-		it("delivers a session-context change", () => {
+		it("delivers a payload-free session-context change", () => {
 			const registry = new ConnectorRegistry();
 			const handler = vi.fn();
 			registry.onConnectorState(handler);
-			const chips = [
-				{ icon: "R", label: "Role", value: "SYSADMIN", tooltip: "" },
-			];
 
-			registry.emitSessionContext("snowflake", chips);
+			registry.emitSessionContext("snowflake");
 
+			// No payload on purpose: consumers re-read from their provider, so
+			// the event cannot become a stale second source of truth.
 			expect(handler).toHaveBeenCalledWith({
 				type: "sessionContextChange",
 				connector: "snowflake",
-				context: chips,
 			});
 		});
 
@@ -210,10 +208,9 @@ describe("ConnectorRegistry", () => {
 			const registry = new ConnectorRegistry();
 			const handler = vi.fn();
 			registry.onConnectorState(handler);
-			const chips = [{ icon: "R", label: "Role", value: "X", tooltip: "" }];
 
-			registry.emitSessionContext("snowflake", chips);
-			registry.emitSessionContext("snowflake", chips);
+			registry.emitSessionContext("snowflake");
+			registry.emitSessionContext("snowflake");
 
 			expect(handler).toHaveBeenCalledTimes(2);
 		});
