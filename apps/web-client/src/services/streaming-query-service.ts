@@ -17,11 +17,6 @@ import type { EncryptedCredentialStore } from "@ide/storage";
 import type { ConnectorType } from "../types/data-source";
 import type { TableRow } from "../types/table";
 import { createLogger } from "../utils/logger";
-import {
-	getStatementKeyword as getSqlKeyword,
-	getTrailingLimit,
-	isPaginatableStatement,
-} from "../utils/sqlPagination";
 import { databaseTimezone } from "./formatter-settings";
 import {
 	type AbortRegistry,
@@ -29,6 +24,7 @@ import {
 } from "./query/abort-registry";
 import { ConnectorMode } from "./query/connector-mode";
 import { DuckDBFileVfs, type FileVfs } from "./query/file-vfs";
+import { PaginationPlanner } from "./query/pagination-planner";
 import type { ExecuteOnConnector } from "./query/ports";
 
 const logger = createLogger("QueryService");
@@ -214,30 +210,12 @@ class StreamingQueryService {
 	private readonly COUNT_CACHE_TTL = 2 * 60 * 1000; // 2 minutes (reduced for memory)
 	// Operating mode: 'wasm' for standalone, 'http' for duckdb -ui
 	private readonly connectorMode = new ConnectorMode();
-
-	/**
-	 * The latest streaming query materialised into a temp table for stable
-	 * paging. Raw `sql LIMIT n OFFSET m` per page is unsound: each page is a
-	 * separate execution and with preserve_insertion_order=false DuckDB gives
-	 * no cross-execution ordering guarantee, so pages could repeat or skip
-	 * rows. Materialising once and paging `ORDER BY rowid` over the fixed
-	 * table is deterministic by construction — and gives an exact row count
-	 * for free. WASM-mode DuckDB only (temp tables are connection-scoped;
-	 * the WASM worker holds one long-lived connection).
-	 */
-	private streamMaterialization: {
-		sql: string;
-		table: string;
-		rowCount: number;
-	} | null = null;
-	/**
-	 * Name of the last materialisation's table, kept separately so the next
-	 * materialisation can DROP it even after an invalidation nulled the
-	 * pointer (a mutation invalidates trust in the snapshot, not the need to
-	 * clean up the table).
-	 */
-	private lastStreamTable: string | null = null;
-	private streamTableSeq = 0;
+	// Declared after connectorMode: field initializers run in order, and the
+	// planner captures the mode object at construction.
+	private readonly paginationPlanner = new PaginationPlanner(
+		this.executeOnConnector,
+		this.connectorMode,
+	);
 
 	/**
 	 * Hash a SQL query for caching purposes
@@ -251,88 +229,6 @@ class StreamingQueryService {
 			hash = hash & hash; // Convert to 32bit integer
 		}
 		return hash.toString(36);
-	}
-
-	/**
-	 * Drop trust in the current stream materialisation when a statement can
-	 * mutate what it snapshot. Cheap keyword test; the temp table itself is
-	 * dropped lazily by the next materialisation (see lastStreamTable).
-	 */
-	private maybeInvalidateStreamMaterialization(sql: string): void {
-		if (!this.streamMaterialization) return;
-		const kw = getSqlKeyword(sql);
-		const mutating =
-			/^(insert|update|delete|merge|create|drop|alter|truncate|copy|import|attach|detach|call)$/.test(
-				kw,
-			) ||
-			(kw === "with" && !isPaginatableStatement(sql));
-		if (mutating) {
-			this.streamMaterialization = null;
-		}
-	}
-
-	/**
-	 * Materialise `sql` into a temp table for stable paging, reusing the
-	 * existing one when the same SQL is paged again. Returns null when
-	 * materialisation isn't applicable (HTTP mode: temp tables are not
-	 * guaranteed connection-stable across requests) or fails (non-SELECT
-	 * shapes) — callers fall back to legacy behavior.
-	 */
-	private async ensureStreamMaterialization(
-		sql: string,
-		signal?: AbortSignal,
-	): Promise<{ table: string; rowCount: number } | null> {
-		if (this.streamMaterialization?.sql === sql) {
-			return this.streamMaterialization;
-		}
-		if (this.connectorMode.isHttp()) return null;
-
-		const cleanSql = sql.replace(/[\s;]+$/, "");
-		const table = `__dbxlite_stream_${++this.streamTableSeq}`;
-		try {
-			await this.executeOnConnector(
-				"duckdb",
-				`CREATE TEMP TABLE ${table} AS ${cleanSql}`,
-				signal,
-				true,
-			);
-		} catch (err) {
-			logger.debug(
-				"Stream materialisation failed; falling back to direct paging",
-				err,
-			);
-			return null;
-		}
-
-		// Best-effort cleanup of the previous stream table.
-		const previous = this.lastStreamTable;
-		this.lastStreamTable = table;
-		if (previous && previous !== table) {
-			this.executeOnConnector(
-				"duckdb",
-				`DROP TABLE IF EXISTS ${previous}`,
-				undefined,
-				true,
-			).catch(() => {
-				/* non-critical */
-			});
-		}
-
-		let rowCount = -1;
-		try {
-			const countResult = await this.executeOnConnector(
-				"duckdb",
-				`SELECT COUNT(*) AS cnt FROM ${table}`,
-				signal,
-				true,
-			);
-			rowCount = Number(countResult.rows[0]?.cnt ?? -1);
-		} catch {
-			// Count is an enhancement; paging still works without it.
-		}
-
-		this.streamMaterialization = { sql, table, rowCount };
-		return this.streamMaterialization;
 	}
 
 	async initialize(credentialStore: EncryptedCredentialStore) {
@@ -417,7 +313,7 @@ class StreamingQueryService {
 			const connector = this.getActiveConnector();
 
 			// Invalidate any stream snapshot a mutating statement makes stale.
-			this.maybeInvalidateStreamMaterialization(sql);
+			this.paginationPlanner.invalidateIfMutating(sql);
 
 			// Pagination for DuckDB. Preferred path: materialise the query once
 			// into a temp table and page it with ORDER BY rowid — deterministic
@@ -430,27 +326,15 @@ class StreamingQueryService {
 			// can't wrap: the legacy trailing-LIMIT injection, gated on the SAME
 			// end-anchored user-LIMIT test the UI uses (the old anywhere-match
 			// disagreed with the UI and made every "page" return the full set).
-			let paginatedSql = sql;
-			let materializedTotal: number | undefined;
-			if (
-				enablePagination &&
-				this.activeConnector === "duckdb" &&
-				limit !== undefined &&
-				isPaginatableStatement(sql)
-			) {
-				const mat = await this.ensureStreamMaterialization(sql, signal);
-				if (mat) {
-					paginatedSql = `SELECT * FROM ${mat.table} ORDER BY rowid LIMIT ${limit} OFFSET ${offset}`;
-					if (mat.rowCount >= 0) {
-						materializedTotal = mat.rowCount;
-					}
-				} else if (getTrailingLimit(sql) === undefined) {
-					paginatedSql += ` LIMIT ${limit}`;
-					if (offset > 0) {
-						paginatedSql += ` OFFSET ${offset}`;
-					}
-				}
-			}
+			const plan = await this.paginationPlanner.plan(sql, {
+				limit,
+				offset,
+				enablePagination,
+				activeConnector: this.activeConnector,
+				signal,
+			});
+			const paginatedSql = plan.sql;
+			const materializedTotal = plan.totalRows;
 
 			let currentIndex = offset;
 			let buffer: TableRow[] = [];
@@ -706,14 +590,9 @@ class StreamingQueryService {
 	): Promise<{ count: number; isEstimated: boolean }> {
 		// A live stream materialisation knows the exact count — no estimate,
 		// no fabricated footer numbers.
-		if (
-			this.streamMaterialization?.sql === sql &&
-			this.streamMaterialization.rowCount >= 0
-		) {
-			return {
-				count: this.streamMaterialization.rowCount,
-				isEstimated: false,
-			};
+		const exact = this.paginationPlanner.exactRowCountFor(sql);
+		if (exact !== null) {
+			return { count: exact, isEstimated: false };
 		}
 
 		// Check cache first
@@ -1094,7 +973,7 @@ class StreamingQueryService {
 		// Detect SET timezone commands and update the database timezone store
 		detectAndUpdateTimezone(sql);
 		// Mutations make any stream snapshot stale.
-		this.maybeInvalidateStreamMaterialization(sql);
+		this.paginationPlanner.invalidateIfMutating(sql);
 
 		let serverTotalRows: number | undefined;
 		const allRows: TableRow[] = [];
