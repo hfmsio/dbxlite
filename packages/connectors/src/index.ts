@@ -33,7 +33,8 @@ export type {
 } from './connector-state'
 
 // Export connector implementations
-export { BigQueryConnector } from './bigquery-connector'
+export { BigQueryConnector, OAUTH_SCOPES } from './bigquery-connector'
+export type { BigQueryAuth } from './bigquery-connector'
 export { DuckDBConnector } from './duckdb-connector'
 export { DuckDBHttpConnector } from './duckdb-http-connector'
 export { SnowflakeConnector } from './snowflake-connector'

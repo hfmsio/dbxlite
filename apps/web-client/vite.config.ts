@@ -178,6 +178,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Fail loudly rather than walking to the next free port. OAuth redirect
+    // URIs are registered per exact origin in Google Cloud, so a silent hop to
+    // 5174 turns a working BigQuery connection into `redirect_uri_mismatch`
+    // with no obvious cause. Better to be told the port is busy.
+    strictPort: true,
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       // Use credentialless mode instead of require-corp to allow fetching remote files

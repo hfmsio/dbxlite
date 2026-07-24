@@ -230,37 +230,72 @@ describe('BigQueryConnector', () => {
       mockCredentialStore.load.mockResolvedValue(token)
     })
 
-    it('should list projects', async () => {
-      const mockProjects = {
-        projects: [
-          {
-            projectId: 'project-1',
-            name: 'Project One',
-            projectNumber: '12345'
-          },
-          {
-            projectId: 'project-2',
-            name: 'Project Two',
-            projectNumber: '67890'
-          }
-        ]
-      }
+    /** A BigQuery projects.list payload. */
+    const bqProjectsPayload = {
+      projects: [
+        { id: 'project-1', friendlyName: 'Project One' },
+        { id: 'project-2', friendlyName: 'Project Two' }
+      ]
+    }
 
-      ;(global.fetch as Mock).mockResolvedValueOnce({
+    /** A Cloud Resource Manager payload, which carries project numbers. */
+    const crmProjectsPayload = {
+      projects: [
+        { projectId: 'project-1', name: 'Project One', projectNumber: '12345' }
+      ]
+    }
+
+    const okOnce = (payload: unknown) =>
+      (global.fetch as Mock).mockResolvedValueOnce({
         ok: true,
-        json: async () => mockProjects
+        json: async () => payload
       })
+
+    const failOnce = (status: number) =>
+      (global.fetch as Mock).mockResolvedValueOnce({
+        ok: false,
+        status,
+        statusText: 'Forbidden',
+        json: async () => ({ error: { message: 'API not enabled' } })
+      })
+
+    it('lists projects via the BigQuery API first', async () => {
+      // BigQuery projects.list needs only the `bigquery` scope and the API the
+      // user must already have enabled, so it is the primary source.
+      okOnce(bqProjectsPayload)
 
       const projects = await connector.listProjects()
 
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('cloudresourcemanager.googleapis.com'),
+        'https://bigquery.googleapis.com/bigquery/v2/projects',
         expect.objectContaining({
           headers: expect.objectContaining({
             Authorization: 'Bearer test-token'
           })
         })
       )
+      expect(projects).toEqual([
+        { id: 'project-1', name: 'Project One', type: 'project' },
+        { id: 'project-2', name: 'Project Two', type: 'project' }
+      ])
+    })
+
+    it('does not call Cloud Resource Manager when BigQuery answers', async () => {
+      okOnce(bqProjectsPayload)
+
+      await connector.listProjects()
+
+      expect(global.fetch).not.toHaveBeenCalledWith(
+        expect.stringContaining('cloudresourcemanager.googleapis.com'),
+        expect.anything()
+      )
+    })
+
+    it('falls back to Cloud Resource Manager when BigQuery returns none', async () => {
+      okOnce({ projects: [] })
+      okOnce(crmProjectsPayload)
+
+      const projects = await connector.listProjects()
 
       expect(projects).toEqual([
         {
@@ -268,14 +303,46 @@ describe('BigQueryConnector', () => {
           name: 'Project One',
           type: 'project',
           description: 'Project #12345'
-        },
-        {
-          id: 'project-2',
-          name: 'Project Two',
-          type: 'project',
-          description: 'Project #67890'
         }
       ])
+    })
+
+    it('falls back to Cloud Resource Manager when the BigQuery API is disabled', async () => {
+      // A disabled API answers 403. That must not abort discovery, which is
+      // the bug this ordering was rewritten to fix: the 403 used to throw and
+      // the fallback never ran, leaving a connected-but-empty explorer.
+      failOnce(403)
+      okOnce(crmProjectsPayload)
+
+      const projects = await connector.listProjects()
+
+      expect(projects).toHaveLength(1)
+      expect(projects[0].id).toBe('project-1')
+    })
+
+    it('returns empty rather than throwing when neither source is available', async () => {
+      failOnce(403)
+      failOnce(403)
+
+      await expect(connector.listProjects()).resolves.toEqual([])
+    })
+
+    it('skips malformed entries with no usable project id', async () => {
+      okOnce({ projects: [{ friendlyName: 'nameless' }, { id: 'good' }] })
+
+      const projects = await connector.listProjects()
+
+      expect(projects).toEqual([
+        { id: 'good', name: 'good', type: 'project' }
+      ])
+    })
+
+    it('reads the project id from projectReference when id is absent', async () => {
+      okOnce({ projects: [{ projectReference: { projectId: 'ref-only' } }] })
+
+      const projects = await connector.listProjects()
+
+      expect(projects[0].id).toBe('ref-only')
     })
 
     it('should list datasets for a project', async () => {
@@ -459,8 +526,9 @@ describe('BigQueryConnector', () => {
     })
 
     it('should cache catalog metadata', async () => {
+      // BigQuery-shaped payload: the primary source answers, so one call.
       const mockProjects = {
-        projects: [{ projectId: 'project-1', name: 'Project One' }]
+        projects: [{ id: 'project-1', friendlyName: 'Project One' }]
       }
 
       ;(global.fetch as Mock).mockResolvedValueOnce({
@@ -923,5 +991,89 @@ describe('BigQueryConnector', () => {
         'No token to export'
       )
     })
+  })
+})
+describe('BigQueryConnector token auth mode', () => {
+  const creds = () =>
+    ({
+      load: vi.fn().mockResolvedValue(null),
+      save: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined)
+    }) as unknown as ConstructorParameters<typeof BigQueryConnector>[0]
+
+  const tokenConnector = (token = 'ya29.pasted') =>
+    new BigQueryConnector(creds(), '', undefined, {
+      mode: 'token',
+      accessToken: token
+    })
+
+  it('needs no client id, which is the whole point of the mode', () => {
+    expect(() => tokenConnector()).not.toThrow()
+  })
+
+  it('rejects an empty token', () => {
+    expect(
+      () =>
+        new BigQueryConnector(creds(), '', undefined, {
+          mode: 'token',
+          accessToken: ''
+        })
+    ).toThrow('accessToken is required')
+  })
+
+  it('still requires a client id in oauth mode', () => {
+    expect(() => new BigQueryConnector(creds(), '')).toThrow('clientId required')
+  })
+
+  it('reports connected as soon as a token is supplied', () => {
+    expect(tokenConnector().isConnected()).toBe(true)
+  })
+
+  it('sends the pasted token as the bearer credential', async () => {
+    ;(global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ projects: [{ id: 'p1' }] })
+    })
+
+    await tokenConnector('ya29.specific').listProjects()
+
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer ya29.specific'
+        })
+      })
+    )
+  })
+
+  it('never calls the OAuth token endpoint', async () => {
+    ;(global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ projects: [] })
+    })
+    ;(global.fetch as Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ projects: [] })
+    })
+
+    await tokenConnector().listProjects()
+
+    // A pasted token has no refresh token, so there is nothing to exchange.
+    expect(global.fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining('oauth2.googleapis.com/token'),
+      expect.anything()
+    )
+  })
+
+  it('restores a persisted token from storage', async () => {
+    const store = creds()
+    vi.mocked(store.load).mockResolvedValue('ya29.stored')
+    const connector = new BigQueryConnector(store, '', undefined, {
+      mode: 'token',
+      accessToken: 'ya29.initial'
+    })
+
+    await expect(connector.initializeFromStorage()).resolves.toBe(true)
   })
 })

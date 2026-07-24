@@ -60,6 +60,52 @@ import {
 /**
  * Enhanced BigQuery connector with full catalog discovery and query optimization
  */
+/**
+ * Scopes requested at consent.
+ *
+ * Deliberately minimal. This list is the single biggest lever on whether a
+ * user completes setup, because Google renders it verbatim on the consent
+ * screen and a broad scope reads as alarming.
+ *
+ * Removed in the onboarding pass: `cloud-platform` and
+ * `cloud-platform.read-only`. Nothing here calls any Google API outside
+ * BigQuery, Cloud Resource Manager and userinfo, so they granted nothing we
+ * use while rendering as "See, edit, configure, and delete your Google Cloud
+ * data" — the scariest line on the screen.
+ *
+ * Anything added here must be justified by a real call site.
+ */
+/**
+ * Whether a failure means "your credential is bad" rather than "this
+ * particular API is unavailable". Only the former should abort project
+ * discovery; a disabled API must leave the other source free to answer.
+ */
+function isAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return (
+    message.includes('401') ||
+    message.includes('refresh token') ||
+    message.includes('invalid_grant') ||
+    message.includes('Authentication')
+  )
+}
+
+/** Auth discriminator. See BigQueryConnector.authMode for the trade-offs. */
+export type BigQueryAuth =
+  | { mode: 'oauth' }
+  | { mode: 'token'; accessToken: string }
+
+export const OAUTH_SCOPES = [
+  // Query execution, datasets, tables, and projects.list.
+  'https://www.googleapis.com/auth/bigquery',
+  // Richer project listing via Cloud Resource Manager. Optional: listProjects
+  // falls back to BigQuery's own projects.list when CRM is unavailable.
+  'https://www.googleapis.com/auth/cloudplatformprojects.readonly',
+  // Shows which account is connected in the UI. Non-sensitive.
+  'https://www.googleapis.com/auth/userinfo.email',
+  'openid'
+] as const
+
 export class BigQueryConnector implements CloudConnector {
   readonly id = 'bigquery'
   private token: OAuthToken | null = null
@@ -82,12 +128,39 @@ export class BigQueryConnector implements CloudConnector {
   private activeJobs = new Map<string, string>() // queryId -> jobId mapping
   private defaultProject: string | null = null
 
+  /**
+   * How this connector authenticates.
+   *
+   * - `oauth`: the full consent flow. Needs a Google Cloud OAuth client the
+   *   user creates, which is the setup friction this mode exists despite.
+   * - `token`: a pre-minted access token, typically from
+   *   `gcloud auth print-access-token`. No Cloud Console work at all. Google
+   *   access tokens are short-lived (about an hour) and carry no refresh
+   *   token, so this suits trials and demos rather than daily use.
+   *
+   * Mirrors SnowflakeConnector's oauth/pat split deliberately: same shape,
+   * same reasoning, one fewer pattern to learn.
+   */
+  private authMode: 'oauth' | 'token' = 'oauth'
+  /** Held in memory and in the credential store when authMode === 'token'. */
+  private accessToken = ''
+  private readonly accessTokenKey = 'bigquery-access-token'
+
   constructor(
     private creds: CredentialStoreLike,
     private clientId: string,
-    private clientSecret?: string
+    private clientSecret?: string,
+    auth: BigQueryAuth = { mode: 'oauth' }
   ) {
-    if (!clientId) throw new Error('clientId required for BigQueryConnector')
+    this.authMode = auth.mode
+    if (auth.mode === 'token') {
+      if (!auth.accessToken) {
+        throw new Error('accessToken is required for token auth')
+      }
+      this.accessToken = auth.accessToken
+    } else if (!clientId) {
+      throw new Error('clientId required for BigQueryConnector')
+    }
     // Load default project from storage
     this.loadDefaultProject()
   }
@@ -137,19 +210,11 @@ export class BigQueryConnector implements CloudConnector {
     // crypto.randomUUID() pattern.
     const state = crypto.randomUUID()
 
-    // Request appropriate scopes for all APIs
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: redirectUri,
       response_type: 'code',
-      scope: [
-        'https://www.googleapis.com/auth/bigquery',
-        'https://www.googleapis.com/auth/cloud-platform',
-        'https://www.googleapis.com/auth/cloud-platform.read-only',
-        'https://www.googleapis.com/auth/cloudplatformprojects.readonly',
-        'https://www.googleapis.com/auth/userinfo.email',
-        'openid'
-      ].join(' '),
+      scope: OAUTH_SCOPES.join(' '),
       access_type: 'offline',
       state,
       code_challenge: codeChallenge,
@@ -349,6 +414,16 @@ export class BigQueryConnector implements CloudConnector {
    * Concurrent calls share a single in-flight refresh via refreshPromise.
    */
   private async ensureFreshToken(): Promise<OAuthToken> {
+    if (this.authMode === 'token') {
+      if (!this.accessToken) {
+        throw new Error('Not authenticated. Please paste an access token.')
+      }
+      // No expiry bookkeeping: a pasted token carries no refresh token, so
+      // there is nothing to refresh. Expiry surfaces as a 401 from the API,
+      // which handleBigQueryError turns into a "paste a new token" message.
+      return { access_token: this.accessToken } as OAuthToken
+    }
+
     const tk = await this.loadToken()
     if (!tk) throw new Error('Not authenticated. Please connect first.')
 
@@ -493,89 +568,113 @@ export class BigQueryConnector implements CloudConnector {
     const cached = this.cache.get<CatalogInfo[]>('projects')
     if (cached) return cached
 
+    // Order matters. BigQuery's own projects.list is tried first because it
+    // needs only the `bigquery` scope and the BigQuery API, both of which the
+    // user must already have for anything else to work. Cloud Resource Manager
+    // gives nicer names and project numbers, but it is a *separate* API that
+    // has to be enabled, and requiring it turned "I forgot to enable one API"
+    // into a connected-but-empty explorer.
+    //
+    // Previously CRM was primary and the fallback only ran when it returned
+    // zero projects. A disabled CRM API returns 403, which threw, so the
+    // fallback never ran at all.
+    const viaBigQuery = await this.listProjectsViaBigQuery()
+    if (viaBigQuery.length > 0) {
+      await this.adoptProjects(viaBigQuery)
+      return viaBigQuery
+    }
+
+    const viaResourceManager = await this.listProjectsViaResourceManager()
+    if (viaResourceManager.length > 0) {
+      await this.adoptProjects(viaResourceManager)
+      return viaResourceManager
+    }
+
+    logger.warn(
+      'No BigQuery projects found. Either this account has no projects, or ' +
+        'the BigQuery API is not enabled on them, or the account lacks ' +
+        'permission to list them.'
+    )
+    this.cache.set('projects', [])
+    return []
+  }
+
+  /**
+   * Projects via the BigQuery API. Needs only the `bigquery` scope.
+   * Returns [] rather than throwing so the caller can try the other source.
+   */
+  private async listProjectsViaBigQuery(): Promise<CatalogInfo[]> {
     try {
-      // Use Cloud Resource Manager API to list projects
-      logger.debug('Fetching projects from Cloud Resource Manager API')
+      const response = await this.apiRequest(
+        'https://bigquery.googleapis.com/bigquery/v2/projects'
+      )
+      const data = (await response.json()) as {
+        projects?: Array<{
+          id?: string
+          friendlyName?: string
+          projectReference?: { projectId: string }
+        }>
+      }
+      return (data.projects ?? [])
+        .map((p) => {
+          const id = p.id || p.projectReference?.projectId || ''
+          return {
+            id,
+            name: p.friendlyName || id,
+            type: 'project' as const
+          }
+        })
+        .filter((p) => p.id !== '')
+    } catch (error) {
+      // An auth failure is not specific to this source — surface it rather
+      // than silently trying the other one and reporting "no projects".
+      if (isAuthError(error)) throw error
+      logger.debug('BigQuery projects.list unavailable', error)
+      return []
+    }
+  }
+
+  /**
+   * Projects via Cloud Resource Manager. Richer metadata, but a separate API
+   * that may not be enabled — a 403 here is expected and non-fatal.
+   */
+  private async listProjectsViaResourceManager(): Promise<CatalogInfo[]> {
+    try {
       const response = await this.apiRequest(
         'https://cloudresourcemanager.googleapis.com/v1/projects?filter=lifecycleState:ACTIVE'
       )
-
-      const data = await response.json() as {
+      const data = (await response.json()) as {
         projects?: Array<{
-          projectId: string;
-          name?: string;
-          projectNumber?: string;
-        }>;
+          projectId: string
+          name?: string
+          projectNumber?: string
+        }>
       }
-      logger.debug('Projects response', { projectCount: data.projects?.length || 0 })
-
-      const projects: CatalogInfo[] = (data.projects || []).map((project) => ({
+      return (data.projects ?? []).map((project) => ({
         id: project.projectId,
         name: project.name || project.projectId,
         type: 'project' as const,
-        description: project.projectNumber ? `Project #${project.projectNumber}` : undefined
+        description: project.projectNumber
+          ? `Project #${project.projectNumber}`
+          : undefined
       }))
-
-      if (projects.length === 0) {
-        logger.warn('No projects found. This could mean: 1) You have no Google Cloud projects, 2) Cloud Resource Manager API is not enabled, 3) Your account lacks permission to list projects. Attempting fallback to use BigQuery API directly...')
-
-        // Try to get project from token or use a direct BigQuery API call
-        await this.loadToken()
-
-        // Try listing datasets without specifying a project to see if we can discover the project
-        try {
-          // This is a workaround - try to use the project from the OAuth app
-          const bqResponse = await this.apiRequest(
-            'https://bigquery.googleapis.com/bigquery/v2/projects'
-          )
-          const bqData = await bqResponse.json() as {
-            projects?: Array<{
-              id?: string;
-              friendlyName?: string;
-              projectReference?: {projectId: string};
-            }>;
-          }
-          logger.debug('Projects from BigQuery API', bqData)
-
-          if (bqData.projects && bqData.projects.length > 0) {
-            const bqProjects: CatalogInfo[] = bqData.projects.map((p) => ({
-              id: p.id || p.projectReference?.projectId || '',
-              name: p.friendlyName || p.id || p.projectReference?.projectId || '',
-              type: 'project' as const
-            }))
-
-            // Save first project as default
-            if (bqProjects.length > 0 && !this.defaultProject) {
-              await this.setDefaultProject(bqProjects[0].id)
-              logger.info('Set default project', { project: bqProjects[0].id })
-            }
-
-            this.cache.set('projects', bqProjects)
-            return bqProjects
-          }
-        } catch (bqError) {
-          logger.error('Failed to list projects via BigQuery API', bqError)
-        }
-      } else {
-        // Save first project as default if we don't have one
-        if (projects.length > 0 && !this.defaultProject) {
-          await this.setDefaultProject(projects[0].id)
-          logger.info('Set default project', { project: projects[0].id })
-        }
-      }
-
-      this.cache.set('projects', projects)
-      return projects
     } catch (error) {
-      logger.error('Failed to list projects', error)
-      // Re-throw authentication errors so UI can show appropriate message
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      if (errorMessage.includes('refresh token') || errorMessage.includes('token') || errorMessage.includes('401') || errorMessage.includes('403')) {
-        throw error
-      }
-      // Return empty array for other errors - let the UI show "No projects found"
+      if (isAuthError(error)) throw error
+      logger.debug(
+        'Cloud Resource Manager unavailable (API likely not enabled)',
+        error
+      )
       return []
     }
+  }
+
+  /** Cache the list and adopt the first project as default if none is set. */
+  private async adoptProjects(projects: CatalogInfo[]): Promise<void> {
+    if (!this.defaultProject && projects.length > 0) {
+      await this.setDefaultProject(projects[0].id)
+      logger.info('Set default project', { project: projects[0].id })
+    }
+    this.cache.set('projects', projects)
   }
 
   /**
@@ -874,6 +973,7 @@ export class BigQueryConnector implements CloudConnector {
    * Check if currently connected
    */
   isConnected(): boolean {
+    if (this.authMode === 'token') return this.accessToken !== ''
     return this.token !== null
   }
 
@@ -883,8 +983,22 @@ export class BigQueryConnector implements CloudConnector {
    * @returns true if token was loaded successfully, false if no token found
    */
   async initializeFromStorage(): Promise<boolean> {
+    if (this.authMode === 'token') {
+      if (this.accessToken) return true
+      const stored = (await this.creds.load(this.accessTokenKey)) as
+        | string
+        | null
+      if (stored) this.accessToken = stored
+      return this.accessToken !== ''
+    }
     const token = await this.loadToken()
     return token !== null
+  }
+
+  /** Persist the pasted access token so a reload does not lose the session. */
+  async saveAccessToken(): Promise<void> {
+    if (this.authMode !== 'token') return
+    await this.creds.save(this.accessTokenKey, this.accessToken)
   }
 
   /**
