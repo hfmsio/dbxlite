@@ -77,6 +77,23 @@ export class BigQueryLifecycle {
 		this.adopt(bigquery);
 	}
 
+	/**
+	 * Connect with a pre-minted access token (`gcloud auth print-access-token`).
+	 *
+	 * No OAuth client, no consent screen, no Cloud Console work. The token is
+	 * short-lived and carries no refresh token, so this is the low-ceremony
+	 * path for trying BigQuery out rather than the one to live on.
+	 */
+	async setupWithAccessToken(accessToken: string): Promise<void> {
+		const credentialStore = this.requireCredentialStore();
+		const bigquery = new BigQueryConnector(credentialStore, "", undefined, {
+			mode: "token",
+			accessToken,
+		});
+		await bigquery.saveAccessToken();
+		this.adopt(bigquery);
+	}
+
 	/** Rehydrate a previous session from stored credentials at app start. */
 	async restore(): Promise<boolean> {
 		const credentialStore = this.getCredentialStore();

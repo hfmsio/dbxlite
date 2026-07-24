@@ -374,6 +374,11 @@ class StreamingQueryService {
 		return this.registry.bigquery.setup(clientId, clientSecret);
 	}
 
+	/** Connect BigQuery with a pre-minted access token instead of OAuth. */
+	async setupBigQueryWithAccessToken(accessToken: string) {
+		return this.registry.bigquery.setupWithAccessToken(accessToken);
+	}
+
 	/**
 	 * Restore BigQuery connection from stored credentials
 	 */
