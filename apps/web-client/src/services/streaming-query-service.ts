@@ -180,128 +180,10 @@ export interface StreamingQueryOptions {
 	chunkSize?: number;
 	// Enable server-side pagination
 	enablePagination?: boolean;
-	// Cache results in IndexedDB for fast re-query
-	cacheResults?: boolean;
 	// Project ID for BigQuery
 	projectId?: string;
 	// Abort signal for cancellation
 	signal?: AbortSignal;
-}
-
-/**
- * Result cache using IndexedDB for fast pagination
- */
-class ResultCache {
-	private db: IDBDatabase | null = null;
-	private readonly DB_NAME = "QueryResultCache";
-	private readonly STORE_NAME = "results";
-
-	async init() {
-		return new Promise<void>((resolve, reject) => {
-			const request = indexedDB.open(this.DB_NAME, 1);
-
-			request.onerror = () => reject(request.error);
-			request.onsuccess = () => {
-				this.db = request.result;
-				resolve();
-			};
-
-			request.onupgradeneeded = (event) => {
-				const db = (event.target as IDBOpenDBRequest).result;
-				if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-					const store = db.createObjectStore(this.STORE_NAME, {
-						keyPath: "id",
-					});
-					store.createIndex("queryHash", "queryHash", { unique: false });
-					store.createIndex("timestamp", "timestamp", { unique: false });
-				}
-			};
-		});
-	}
-
-	async cacheChunk(queryHash: string, chunkIndex: number, data: TableRow[]) {
-		if (!this.db) await this.init();
-
-		const tx = this.db?.transaction([this.STORE_NAME], "readwrite");
-		if (!tx) throw new Error("Failed to create transaction");
-		const store = tx.objectStore(this.STORE_NAME);
-
-		await new Promise<void>((resolve, reject) => {
-			const request = store.put({
-				id: `${queryHash}_${chunkIndex}`,
-				queryHash,
-				chunkIndex,
-				data,
-				timestamp: Date.now(),
-			});
-			request.onsuccess = () => resolve();
-			request.onerror = () => reject(request.error);
-		});
-
-		// Clean old cache if needed
-		await this.cleanOldCache();
-	}
-
-	async getChunk(
-		queryHash: string,
-		chunkIndex: number,
-	): Promise<TableRow[] | null> {
-		if (!this.db) await this.init();
-
-		const tx = this.db?.transaction([this.STORE_NAME], "readonly");
-		if (!tx) throw new Error("Failed to create transaction");
-		const store = tx.objectStore(this.STORE_NAME);
-
-		return new Promise((resolve, reject) => {
-			const request = store.get(`${queryHash}_${chunkIndex}`);
-			request.onsuccess = () => resolve(request.result?.data || null);
-			request.onerror = () => reject(request.error);
-		});
-	}
-
-	async cleanOldCache() {
-		// Remove entries older than 1 hour. Errors here are non-fatal but
-		// were previously swallowed silently — log them so quota-exceeded
-		// or private-mode failures show up in DevTools.
-		const cutoff = Date.now() - 3600000;
-
-		const tx = this.db?.transaction([this.STORE_NAME], "readwrite");
-		if (!tx) return;
-		tx.onerror = () => {
-			logger.warn(
-				"[ResultCache] cleanOldCache transaction error",
-				tx.error,
-			);
-		};
-		tx.onabort = () => {
-			logger.warn("[ResultCache] cleanOldCache transaction aborted", tx.error);
-		};
-		const store = tx.objectStore(this.STORE_NAME);
-		const index = store.index("timestamp");
-
-		const range = IDBKeyRange.upperBound(cutoff);
-		const request = index.openCursor(range);
-
-		request.onerror = () => {
-			logger.warn(
-				"[ResultCache] cleanOldCache cursor error",
-				request.error,
-			);
-		};
-		request.onsuccess = (event) => {
-			const cursor = (event.target as IDBRequest).result;
-			if (cursor) {
-				const deleteReq = cursor.delete();
-				deleteReq.onerror = () => {
-					logger.warn(
-						"[ResultCache] cleanOldCache delete failed",
-						deleteReq.error,
-					);
-				};
-				cursor.continue();
-			}
-		};
-	}
 }
 
 /**
@@ -311,7 +193,6 @@ class StreamingQueryService {
 	private connectors: Map<ConnectorType, BaseConnector> = new Map();
 	private activeConnector: ConnectorType = "duckdb";
 	private credentialStore: EncryptedCredentialStore | null = null;
-	private cache = new ResultCache();
 	private activeQueries = new Map<string, AbortController>();
 	// Count cache with 5-minute TTL to avoid repeated COUNT queries
 	private countCache = new Map<
@@ -444,7 +325,6 @@ class StreamingQueryService {
 
 	async initialize(credentialStore: EncryptedCredentialStore) {
 		this.credentialStore = credentialStore;
-		await this.cache.init();
 
 		// Detect operating mode (WASM vs HTTP for duckdb -ui)
 		this.mode = detectMode();
@@ -514,14 +394,13 @@ class StreamingQueryService {
 		// Detect SET timezone commands and update the database timezone store
 		detectAndUpdateTimezone(sql);
 
-			const {
-				limit,
-				offset = 0,
-				chunkSize = 1000,
-				enablePagination = true,
-				cacheResults = false,
-				signal,
-			} = options;
+		const {
+			limit,
+			offset = 0,
+			chunkSize = 1000,
+			enablePagination = true,
+			signal,
+		} = options;
 
 		try {
 			const connector = this.getActiveConnector();
@@ -615,16 +494,6 @@ class StreamingQueryService {
 				while (buffer.length >= chunkSize) {
 					const chunkData = buffer.splice(0, chunkSize);
 
-					// Cache if enabled
-					if (cacheResults) {
-						const queryHash = this.hashQuery(sql);
-						await this.cache.cacheChunk(
-							queryHash,
-							Math.floor(currentIndex / chunkSize),
-							chunkData,
-						);
-					}
-
 					yield {
 						rows: chunkData,
 						startIndex: currentIndex,
@@ -640,15 +509,6 @@ class StreamingQueryService {
 
 			// Yield remaining buffered rows
 			if (buffer.length > 0) {
-				if (cacheResults) {
-					const queryHash = this.hashQuery(sql);
-					await this.cache.cacheChunk(
-						queryHash,
-						Math.floor(currentIndex / chunkSize),
-						buffer,
-					);
-				}
-
 				yield {
 					rows: buffer,
 					startIndex: currentIndex,

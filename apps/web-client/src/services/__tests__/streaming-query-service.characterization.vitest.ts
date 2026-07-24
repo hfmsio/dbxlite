@@ -15,7 +15,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installFakeIndexedDB } from "./fake-connectors";
 
 // --- the connector-layer stub -------------------------------------------
 // Hoisted so vi.mock's factory can close over it. `state` is mutable and is
@@ -176,7 +175,6 @@ async function drain(gen: AsyncGenerator<{ rows: unknown[] }>) {
 
 describe("StreamingQueryService characterization", () => {
 	beforeEach(() => {
-		installFakeIndexedDB();
 		fake.state.calls = [];
 		fake.state.responder = () => [{ rows: [], done: true }];
 		fake.state.estimatedRowCount = 0;
