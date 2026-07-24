@@ -1,0 +1,535 @@
+/**
+ * QueryExecutor — everything that runs a statement and shapes the result.
+ *
+ * Extracted from StreamingQueryService (WS-A / A8 in docs/REFACTOR-PLAN.md).
+ * With this out, `queryService` is a composition root: it owns collaborators
+ * and forwards to them.
+ *
+ * It owns the per-query SET timezone sniff. That fires once per *query*, not
+ * once per connection, so it belongs with execution rather than with the
+ * registry — the distinction the plan calls out explicitly.
+ *
+ * Collaborators arrive as a dependency bundle rather than as a back-reference
+ * to the service, so the executor can be constructed and tested without one.
+ */
+
+import type { ColumnInfo } from "@ide/connectors";
+import type { BaseConnector } from "@ide/connectors";
+import type { ConnectorType } from "../../types/data-source";
+import type { TableRow } from "../../types/table";
+import { createLogger } from "../../utils/logger";
+import { databaseTimezone } from "../formatter-settings";
+import type { AbortRegistry } from "./abort-registry";
+import type { PaginationPlanner } from "./pagination-planner";
+import type { RowCountEstimator } from "./row-count-estimator";
+import type {
+	ColumnMetadata,
+	DataChunk,
+	QueryResult,
+	QueryStats,
+	StreamingQueryOptions,
+} from "./result-types";
+
+const logger = createLogger("QueryExecutor");
+
+/**
+ * Detect SET timezone commands and update the database timezone store.
+ * Supports: SET timezone = 'X', SET TimeZone = 'X', SET TimeZone TO 'X'
+ */
+function detectAndUpdateTimezone(sql: string): void {
+	// Match: SET timezone = 'value' or SET TimeZone TO 'value' anywhere in the SQL
+	// Use global flag to find all occurrences (in case of multiple SET statements)
+	const regex = /\bSET\s+timezone\s*(?:=|TO)\s*['"]?([^'";\s]+)['"]?/gi;
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(sql)) !== null) {
+		const newTimezone = match[1];
+		logger.debug("Timezone detection: SET timezone =", newTimezone);
+		databaseTimezone.setTimezone(newTimezone);
+	}
+}
+
+export interface QueryExecutorDeps {
+	abortRegistry: AbortRegistry;
+	paginationPlanner: PaginationPlanner;
+	rowCountEstimator: RowCountEstimator;
+	getActiveConnector(): BaseConnector;
+	getActiveConnectorType(): ConnectorType;
+	getConnector(type: ConnectorType): BaseConnector | null;
+}
+
+export class QueryExecutor {
+	constructor(private readonly deps: QueryExecutorDeps) {}
+
+	async *executeStreamingQuery(
+		sql: string,
+		options: StreamingQueryOptions = {},
+	): AsyncGenerator<DataChunk> {
+		const queryId = `query_${Date.now()}_${Math.random()}`;
+		const abortController = this.deps.abortRegistry.register(queryId);
+
+		// Detect SET timezone commands and update the database timezone store
+		detectAndUpdateTimezone(sql);
+
+		const {
+			limit,
+			offset = 0,
+			chunkSize = 1000,
+			enablePagination = true,
+			signal,
+		} = options;
+
+		try {
+			const connector = this.deps.getActiveConnector();
+
+			// Invalidate any stream snapshot a mutating statement makes stale.
+			this.deps.paginationPlanner.invalidateIfMutating(sql);
+
+			// Pagination for DuckDB. Preferred path: materialise the query once
+			// into a temp table and page it with ORDER BY rowid — deterministic
+			// across page fetches (raw `sql LIMIT/OFFSET` per page re-executes
+			// the query each time with no ordering guarantee under
+			// preserve_insertion_order=false, so pages could repeat/skip rows).
+			// This also handles queries whose own LIMIT lives in a subquery, and
+			// large trailing user LIMITs (the temp table simply holds the
+			// limited result). Fallback for HTTP mode or shapes CREATE TABLE AS
+			// can't wrap: the legacy trailing-LIMIT injection, gated on the SAME
+			// end-anchored user-LIMIT test the UI uses (the old anywhere-match
+			// disagreed with the UI and made every "page" return the full set).
+			const plan = await this.deps.paginationPlanner.plan(sql, {
+				limit,
+				offset,
+				enablePagination,
+				activeConnector: this.deps.getActiveConnectorType(),
+				signal,
+			});
+			const paginatedSql = plan.sql;
+			const materializedTotal = plan.totalRows;
+
+			let currentIndex = offset;
+			let buffer: TableRow[] = [];
+			let columns: ColumnMetadata[] = [];
+			let totalRows: number | undefined = materializedTotal;
+			let queryStats: QueryStats | undefined;
+			let firstChunk = true;
+
+			// Stream from connector
+			for await (const chunk of connector.query(paginatedSql, options)) {
+				// Extract queryStats from final chunk if available (DuckDB provides this)
+				if (chunk.queryStats) {
+					queryStats = chunk.queryStats;
+				}
+				// Check for abort from internal or external signal
+				if (abortController.signal.aborted || signal?.aborted) {
+					const error = new Error("Query cancelled by user");
+					error.name = "AbortError";
+					throw error;
+				}
+
+				// Extract totalRows from the connector when the materialisation
+				// didn't already provide an exact one (BigQuery surfaces it).
+				if (totalRows === undefined && chunk.totalRows !== undefined) {
+					totalRows = chunk.totalRows;
+					logger.debug("Got totalRows from connector", { totalRows });
+				}
+
+				// Extract schema from first chunk's schema property (preferred)
+				// This gives us actual database types, not JavaScript types
+				if (firstChunk && chunk.schema?.tables?.[0]?.columns) {
+					columns = chunk.schema.tables[0].columns.map((col: ColumnInfo) => ({
+						name: col.name,
+						type: col.type,
+						nullable: col.nullable,
+					}));
+					firstChunk = false;
+				} else if (firstChunk && chunk.rows.length > 0) {
+					// Fallback: infer from JavaScript types if schema not available
+					columns = Object.keys(chunk.rows[0]).map((name) => ({
+						name,
+						type: typeof chunk.rows[0][name],
+					}));
+					firstChunk = false;
+				}
+
+				// Buffer rows and yield in chunks
+				// Use concat instead of spread operator to avoid "Maximum call stack size exceeded"
+				// when chunk.rows is very large (e.g., 1M rows)
+				buffer = buffer.concat(chunk.rows);
+
+				while (buffer.length >= chunkSize) {
+					const chunkData = buffer.splice(0, chunkSize);
+
+					yield {
+						rows: chunkData,
+						startIndex: currentIndex,
+						endIndex: currentIndex + chunkData.length - 1,
+						done: false,
+						columns,
+						totalRows,
+					};
+
+					currentIndex += chunkData.length;
+				}
+			}
+
+			// Yield remaining buffered rows
+			if (buffer.length > 0) {
+				yield {
+					rows: buffer,
+					startIndex: currentIndex,
+					endIndex: currentIndex + buffer.length - 1,
+					done: true,
+					columns,
+					totalRows,
+					queryStats,
+				};
+			}
+		} catch (error: unknown) {
+			// Enhance DuckDB-specific errors with helpful messages
+			const errorMessage =
+				error instanceof Error ? error.message : String(error);
+
+			// Check for common DuckDB-WASM browser limitations
+			if (errorMessage.includes("HTML FileReaders do not support writing")) {
+				const enhancedError = new Error(
+					"Cannot write to attached database files in browser.\n\n" +
+						"Solutions:\n" +
+						'• Remove database prefix (e.g., use "CREATE TABLE allrecs" instead of "CREATE TABLE data.main.allrecs")\n' +
+						'• Use TEMP tables: "CREATE TEMP TABLE allrecs AS ..."\n' +
+						"• Export to Parquet: \"COPY (...) TO 'file.parquet' (FORMAT PARQUET)\"\n\n" +
+						"Browser-based DuckDB can only write to the in-memory database and Parquet files.",
+				);
+				enhancedError.name =
+					error instanceof Error ? error.name : "DuckDBError";
+				throw enhancedError;
+			}
+
+			// Re-throw other errors as-is
+			throw error;
+		} finally {
+			this.deps.abortRegistry.release(queryId);
+		}
+	}
+
+	async getPage(
+		sql: string,
+		offset: number,
+		pageSize: number,
+		signal?: AbortSignal,
+	): Promise<DataChunk> {
+		logger.debug(`[getPage] offset=${offset}, pageSize=${pageSize}`);
+		const chunks: DataChunk[] = [];
+
+		for await (const chunk of this.executeStreamingQuery(sql, {
+			limit: pageSize,
+			offset,
+			chunkSize: pageSize,
+			enablePagination: true,
+			signal,
+		})) {
+			chunks.push(chunk);
+			if (chunk.done) break;
+		}
+
+		// Combine chunks into single page
+		const allRows = chunks.flatMap((c) => c.rows);
+		// Get columns from first chunk that has them
+		const columns = chunks.find((c) => c.columns)?.columns;
+		// Get queryStats from last chunk (only present on final chunk from DuckDB)
+		const queryStats = chunks.find((c) => c.queryStats)?.queryStats;
+
+		return {
+			rows: allRows,
+			startIndex: offset,
+			endIndex: offset + allRows.length - 1,
+			done: true,
+			columns,
+			queryStats,
+		};
+	}
+
+	async estimateMemoryUsage(sql: string): Promise<{
+		estimatedRows: number;
+		estimatedBytes: number;
+		estimatedMB: number;
+		isLarge: boolean;
+		recommendation: string;
+	}> {
+		try {
+			// Get row count
+			const { count: rowCount } = await this.deps.rowCountEstimator.getRowCount(sql);
+
+			if (rowCount <= 0) {
+				return {
+					estimatedRows: -1,
+					estimatedBytes: -1,
+					estimatedMB: -1,
+					isLarge: true,
+					recommendation:
+						"Unable to estimate - use virtual scrolling for safety",
+				};
+			}
+
+			// Sample first few rows to estimate row size
+			const connector = this.deps.getActiveConnector();
+			let avgRowSize = 200; // Default assumption: 200 bytes per row
+
+			try {
+				let sampleSize = 0;
+				let rowsSampled = 0;
+				const sampleLimit = Math.min(100, rowCount);
+
+				for await (const chunk of connector.query(
+					`${sql} LIMIT ${sampleLimit}`,
+				)) {
+					for (const row of chunk.rows) {
+						// Rough estimation: JSON.stringify size
+						sampleSize += JSON.stringify(row).length;
+						rowsSampled++;
+					}
+					break; // Only need first chunk
+				}
+
+				if (rowsSampled > 0) {
+					avgRowSize = Math.ceil(sampleSize / rowsSampled);
+				}
+			} catch (err) {
+				logger.warn(
+					"Could not sample rows for size estimation, using default",
+					err,
+				);
+			}
+
+			const estimatedBytes = rowCount * avgRowSize;
+			const estimatedMB = estimatedBytes / (1024 * 1024);
+
+			// Determine if query is large (>50MB or >100K rows)
+			const isLarge = estimatedMB > 50 || rowCount > 100000;
+
+			let recommendation = "";
+			if (estimatedMB > 500) {
+				recommendation =
+					"Very large result set (>500MB). Consider adding WHERE clause to filter data.";
+			} else if (estimatedMB > 100) {
+				recommendation = "Large result set. Virtual scrolling recommended.";
+			} else if (isLarge) {
+				recommendation =
+					"Moderate size. Virtual scrolling will be used for optimal performance.";
+			} else {
+				recommendation = "Small result set. Regular display will be used.";
+			}
+
+			return {
+				estimatedRows: rowCount,
+				estimatedBytes,
+				estimatedMB: Math.round(estimatedMB * 10) / 10,
+				isLarge,
+				recommendation,
+			};
+		} catch (error) {
+			logger.warn("Memory estimation failed", error);
+			return {
+				estimatedRows: -1,
+				estimatedBytes: -1,
+				estimatedMB: -1,
+				isLarge: true,
+				recommendation: "Unable to estimate - use virtual scrolling for safety",
+			};
+		}
+	}
+
+	private convertBigIntToNumber(obj: unknown): unknown {
+		if (obj === null || obj === undefined) {
+			return obj;
+		}
+
+		if (typeof obj === "bigint") {
+			return Number(obj);
+		}
+
+		// Preserve Date objects as-is
+		if (obj instanceof Date) {
+			return obj;
+		}
+
+		if (Array.isArray(obj)) {
+			return obj.map((item) => this.convertBigIntToNumber(item));
+		}
+
+		if (typeof obj === "object") {
+			const result: Record<string, unknown> = {};
+			const objRecord = obj as Record<string, unknown>;
+			const keys = Object.keys(objRecord);
+			if (keys.length > 0) {
+				for (const key of keys) {
+					const value = objRecord[key];
+					result[key] = this.convertBigIntToNumber(value);
+				}
+			} else {
+				for (const key in objRecord) {
+					result[key] = this.convertBigIntToNumber(objRecord[key]);
+				}
+			}
+			return result;
+		}
+
+		return obj;
+	}
+
+	async executeQueryOnConnector(
+		connectorType: ConnectorType,
+		sql: string,
+		signal?: AbortSignal,
+		silent?: boolean,
+	): Promise<QueryResult> {
+		const startTime = Date.now();
+		const connector = this.deps.getConnector(connectorType);
+
+		if (!connector) {
+			throw new Error(`Connector ${connectorType} not available`);
+		}
+
+		// Detect SET timezone commands and update the database timezone store
+		detectAndUpdateTimezone(sql);
+
+		const allRows: TableRow[] = [];
+		const columns: string[] = [];
+		let columnTypes: ColumnMetadata[] | undefined;
+		let connectorQueryId: string | undefined;
+
+		try {
+			for await (const chunk of connector.query(sql, { signal })) {
+				if (signal?.aborted) {
+					const abortError = new Error("Query aborted by user");
+					abortError.name = "AbortError";
+					throw abortError;
+				}
+
+				// Capture connector-side query identifier from the first chunk that surfaces one.
+				if (!connectorQueryId && chunk.connectorQueryId) {
+					connectorQueryId = chunk.connectorQueryId;
+				}
+
+				// Extract schema information from the first chunk
+				if (!columnTypes) {
+					if (chunk.schema?.tables?.[0]?.columns) {
+						columnTypes = chunk.schema.tables[0].columns.map(
+							(col: ColumnInfo) => ({
+								name: col.name,
+								type: col.type,
+								nullable: col.nullable,
+								comment: col.comment,
+							}),
+						);
+					}
+				}
+
+				if (chunk.rows) {
+					const convertedRows = this.convertBigIntToNumber(
+						chunk.rows,
+					) as TableRow[];
+					allRows.push(...convertedRows);
+
+					if (columns.length === 0 && convertedRows.length > 0) {
+						columns.push(...Object.keys(convertedRows[0]));
+					}
+				}
+
+				if (chunk.done) {
+					break;
+				}
+			}
+		} catch (error) {
+			if (!silent) {
+				logger.error(`${connectorType} query failed`, error);
+			}
+			throw error;
+		}
+
+		return {
+			columns,
+			rows: allRows,
+			totalRows: allRows.length,
+			executionTime: Date.now() - startTime,
+			columnTypes,
+			connectorQueryId,
+			connectorType,
+		};
+	}
+
+	async executeQuery(sql: string, signal?: AbortSignal): Promise<QueryResult> {
+		const startTime = Date.now();
+		const connector = this.deps.getActiveConnector();
+		const connectorType = this.deps.getActiveConnectorType();
+
+		// Detect SET timezone commands and update the database timezone store
+		detectAndUpdateTimezone(sql);
+		// Mutations make any stream snapshot stale.
+		this.deps.paginationPlanner.invalidateIfMutating(sql);
+
+		let serverTotalRows: number | undefined;
+		const allRows: TableRow[] = [];
+		const columns: string[] = [];
+		let columnTypes: ColumnMetadata[] | undefined;
+		let connectorQueryId: string | undefined;
+
+		try {
+			for await (const chunk of connector.query(sql, { signal })) {
+				if (signal?.aborted) {
+					const abortError = new Error("Query aborted by user");
+					abortError.name = "AbortError";
+					throw abortError;
+				}
+
+				if (!connectorQueryId && chunk.connectorQueryId) {
+					connectorQueryId = chunk.connectorQueryId;
+				}
+
+				// Server-reported result size (BigQuery surfaces it). Lets the
+				// caller detect that maxRows truncated the fetch.
+				if (chunk.totalRows !== undefined) {
+					serverTotalRows = chunk.totalRows;
+				}
+
+				// Extract schema information from the first chunk
+				if (!columnTypes) {
+					if (chunk.schema?.tables?.[0]?.columns) {
+						columnTypes = chunk.schema.tables[0].columns.map(
+							(col: ColumnInfo) => ({
+								name: col.name,
+								type: col.type,
+								nullable: col.nullable,
+								comment: col.comment,
+							}),
+						);
+					}
+				}
+
+				if (chunk.rows && chunk.rows.length > 0) {
+					const convertedRows = chunk.rows.map((row) =>
+						this.convertBigIntToNumber(row),
+					) as TableRow[];
+					allRows.push(...convertedRows);
+
+					if (columns.length === 0 && chunk.rows[0]) {
+						columns.push(...Object.keys(chunk.rows[0]));
+					}
+				}
+			}
+
+			return {
+				rows: allRows,
+				columns,
+				columnTypes,
+				totalRows: allRows.length,
+				serverTotalRows,
+				executionTime: Date.now() - startTime,
+				connectorQueryId,
+				connectorType,
+			};
+		} catch (error) {
+			logger.error("Query execution error", error);
+			throw error;
+		}
+	}
+
+}
