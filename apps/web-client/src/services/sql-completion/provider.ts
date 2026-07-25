@@ -82,6 +82,24 @@ export interface CompletionProviderDeps {
 	 * function suggestions to the dialect being queried.
 	 */
 	getDialect: () => DialectKey | undefined;
+	/**
+	 * Fetch a table's columns on demand when they are not already cached.
+	 *
+	 * Cloud sources load columns lazily: BigQuery's `listTables` carries no
+	 * schema, so a table the user references by name (rather than having
+	 * expanded it in the sidebar) has no columns in the completion schema.
+	 * When provided, the provider calls this on a qualified/alias dot so
+	 * `x.` works without a prior sidebar expand. The implementation is
+	 * expected to cache the result (e.g. into the catalog bridge) so the next
+	 * lookup is synchronous. Returns null when it cannot resolve them.
+	 *
+	 * Optional: DuckDB loads columns eagerly and needs no fetch.
+	 */
+	fetchColumns?: (ref: {
+		tableName: string;
+		databaseName?: string;
+		schemaName?: string;
+	}) => Promise<string[] | null>;
 	/** Monaco namespace; passed in to avoid re-importing inside the factory. */
 	monaco: typeof monaco;
 }
@@ -92,7 +110,7 @@ export interface CompletionProviderDeps {
 export function createCompletionProvider(
 	deps: CompletionProviderDeps,
 ): monaco.languages.CompletionItemProvider {
-	const { getMode, getDataSources, getDialect, monaco: m } = deps;
+	const { getMode, getDataSources, getDialect, fetchColumns, monaco: m } = deps;
 
 	return {
 		triggerCharacters: [" ", ".", "("],
@@ -238,9 +256,46 @@ export function createCompletionProvider(
 				});
 			};
 
+			// Resolve a table's columns for dot-completion, fetching them on
+			// demand when the completion schema doesn't already carry them.
+			//
+			// BigQuery (and any lazily-loaded cloud source) is the reason this
+			// exists: its table metadata lives in the explorer's own state, not
+			// in the completion schema, so `findTable` returns a table with no
+			// columns — or nothing at all. When we can name the table (alias or
+			// qualified ref gives project/dataset/table), we ask the connector
+			// directly; the result is connector-cached, so the first `x.` pays
+			// one round trip and the rest are instant.
+			const resolveColumns = async (
+				table: (typeof schema.tables)[number] | undefined,
+				ref: { tableName: string; databaseName?: string; schemaName?: string },
+			): Promise<{ columns: string[]; sourceType?: string } | null> => {
+				if (table && table.columns.length > 0) {
+					return { columns: table.columns, sourceType: table.sourceType };
+				}
+				if (fetchColumns) {
+					const fetched = await fetchColumns(ref).catch((err) => {
+						logger.debug("On-demand column fetch failed", err);
+						return null;
+					});
+					if (fetched && fetched.length > 0) {
+						return {
+							columns: fetched,
+							sourceType: table?.sourceType ?? activeDialect,
+						};
+					}
+				}
+				return table
+					? { columns: table.columns, sourceType: table.sourceType }
+					: null;
+			};
+
 			// Handle dot notation (e.g., "x." for alias, "data." for database, "data.main." for schema)
-			// Lite mode skips dot resolution entirely; it's a "full"-mode feature.
-			if (dotMatch && isFullMode) {
+			// Qualified/alias dot-resolution runs in lite too: it is scoped by a
+			// qualifier the user typed, so it is precise — not the noisy
+			// all-columns dump lite exists to suppress (that stays full-only,
+			// gated separately below).
+			if (dotMatch) {
 				// Strip trailing dot from prefix: "archforge_ui." -> "archforge_ui"
 				const fullPrefix = dotMatch[1].replace(/\.$/, "");
 				const parts = fullPrefix.split(".");
@@ -275,12 +330,17 @@ export function createCompletionProvider(
 							aliasInfo.databaseName,
 							aliasInfo.schemaName,
 						);
-						if (table) {
-							for (const c of table.columns) {
+						const resolved = await resolveColumns(table, {
+							tableName: aliasInfo.tableName,
+							databaseName: aliasInfo.databaseName,
+							schemaName: aliasInfo.schemaName,
+						});
+						if (resolved && resolved.columns.length > 0) {
+							for (const c of resolved.columns) {
 								suggestions.push({
 									label: c,
 									kind: m.languages.CompletionItemKind.Field,
-									insertText: quoteIdentifier(c, table.sourceType),
+									insertText: quoteIdentifier(c, resolved.sourceType),
 									detail: `Column (${aliasInfo.tableName})`,
 									documentation: `Column from ${aliasInfo.tableName} (alias: ${prefix})`,
 									range,
@@ -288,8 +348,8 @@ export function createCompletionProvider(
 							}
 							return { suggestions: rank(suggestions) };
 						}
-						// Alias found but table not in schema: return empty (don't show keywords)
-						logger.debug("Alias found but table not in schema:", {
+						// Alias found but no columns resolvable: return empty (don't show keywords)
+						logger.debug("Alias found but columns unavailable:", {
 							alias: prefix,
 							tableName: aliasInfo.tableName,
 						});
@@ -344,12 +404,17 @@ export function createCompletionProvider(
 					// 3. Check if prefix is a table name (show columns)
 					if (tableNames.has(prefix)) {
 						const table = schema.tables.find((x) => x.name === prefix);
-						if (table) {
-							for (const c of table.columns) {
+						const resolved = await resolveColumns(table, {
+							tableName: prefix,
+							databaseName: table?.databaseName,
+							schemaName: table?.schemaName,
+						});
+						if (resolved) {
+							for (const c of resolved.columns) {
 								suggestions.push({
 									label: c,
 									kind: m.languages.CompletionItemKind.Field,
-									insertText: quoteIdentifier(c, table.sourceType),
+									insertText: quoteIdentifier(c, resolved.sourceType),
 									detail: "Column",
 									documentation: `Column: ${prefix}.${c}`,
 									range,
@@ -384,12 +449,17 @@ export function createCompletionProvider(
 				if (parts.length === 3) {
 					const [dbName, schemaName, tableName] = parts;
 					const table = findTable(tableName, dbName, schemaName);
-					if (table) {
-						for (const c of table.columns) {
+					const resolved = await resolveColumns(table, {
+						tableName,
+						databaseName: dbName,
+						schemaName,
+					});
+					if (resolved) {
+						for (const c of resolved.columns) {
 							suggestions.push({
 								label: c,
 								kind: m.languages.CompletionItemKind.Field,
-								insertText: quoteIdentifier(c, table.sourceType),
+								insertText: quoteIdentifier(c, resolved.sourceType),
 								detail: `Column (${tableName})`,
 								documentation: `Column: ${dbName}.${schemaName}.${tableName}.${c}`,
 								range,

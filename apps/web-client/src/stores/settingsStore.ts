@@ -14,10 +14,11 @@ export type SaveStrategy = "auto" | "manual" | "prompt";
 /**
  * Autocomplete mode (v0.4 redesign):
  *   - "off"  : disable the custom provider entirely (Monaco word-match only).
- *   - "lite" : keywords + function names + table names. No column dump, no
- *              alias dot-resolution. Safe default for new users.
- *   - "full" : everything: dialect-aware keywords/functions, dot completion,
- *              alias resolution, FROM-clause column filtering.
+ *   - "lite" : keywords + function names + table names, plus qualified/alias
+ *              dot-resolution (x. -> that table's columns), which is precise.
+ *              No unqualified all-columns dump. Safe default for new users.
+ *   - "full" : everything lite has plus the unqualified column suggestions
+ *              (every column from every table in SELECT/WHERE context).
  *
  * Legacy values from earlier releases ("default", "experimental", "word") are
  * migrated transparently on first load — see migration in this store below.

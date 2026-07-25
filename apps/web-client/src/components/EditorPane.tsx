@@ -2,6 +2,7 @@ import * as monaco from "monaco-editor";
 import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
 import { format } from "sql-formatter";
 import { createCompletionProvider } from "../services/sql-completion";
+import { queryService } from "../services/streaming-query-service";
 import type { AutocompleteMode } from "../stores/settingsStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { getMonacoTheme, getNextTheme, registerMonacoThemes } from "../themes";
@@ -540,6 +541,41 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 					getMode: () => useSettingsStore.getState().autocompleteMode,
 					getDataSources: () => dataSourcesRef.current,
 					getDialect: () => activeConnectorRef.current,
+					// Cloud sources load table columns lazily, and BigQuery keeps
+					// its explorer tree in component state that never reaches the
+					// completion schema — so `x.` on a BigQuery table finds no
+					// columns to offer. Fetch them straight from the connector on
+					// demand; getTableMetadata is connector-cached, so this is one
+					// round trip the first time and instant thereafter.
+					fetchColumns: async ({ tableName, databaseName, schemaName }) => {
+						const dialect = activeConnectorRef.current;
+						// Both cloud paths need the project/dataset (or db/schema)
+						// qualifier to identify the table; a bare alias to an
+						// unqualified table can't be resolved this way.
+						if (!databaseName || !schemaName) return null;
+						try {
+							if (dialect === "bigquery") {
+								const meta = await queryService.getBigQueryTableMetadata(
+									databaseName,
+									schemaName,
+									tableName,
+								);
+								return (meta.columns ?? []).map((c) => c.name);
+							}
+							if (dialect === "snowflake") {
+								const meta = await queryService.getSnowflakeTableMetadata(
+									databaseName,
+									schemaName,
+									tableName,
+								);
+								return (meta.columns ?? []).map((c) => c.name);
+							}
+						} catch {
+							// Non-fatal: fall back to whatever the schema already had.
+							return null;
+						}
+						return null;
+					},
 					monaco,
 				}),
 			);

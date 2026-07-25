@@ -16,7 +16,7 @@
  * minimal shape the provider reads.
  */
 
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { DataSource } from "../../../types/data-source";
 import {
 	__resetCatalogBridgeForTests,
@@ -123,11 +123,17 @@ function makeProvider(opts: {
 	mode: "off" | "lite" | "full";
 	dataSources?: DataSource[];
 	dialect?: "duckdb" | "bigquery" | "snowflake";
+	fetchColumns?: (ref: {
+		tableName: string;
+		databaseName?: string;
+		schemaName?: string;
+	}) => Promise<string[] | null>;
 }) {
 	return createCompletionProvider({
 		getMode: () => opts.mode,
 		getDataSources: () => opts.dataSources ?? [],
 		getDialect: () => opts.dialect,
+		fetchColumns: opts.fetchColumns,
 		monaco: fakeMonaco,
 	});
 }
@@ -247,7 +253,7 @@ describe("provider — dialect dispatch", () => {
 	});
 });
 
-describe("provider — dot completion (full mode only)", () => {
+describe("provider — dot completion", () => {
 	test("'full' resolves alias-dot to columns when schema has the table", async () => {
 		const provider = makeProvider({
 			mode: "full",
@@ -264,7 +270,7 @@ describe("provider — dot completion (full mode only)", () => {
 		expect(labels).toContain("total");
 	});
 
-	test("'lite' suppresses alias-dot completion (no columns when typing x.)", async () => {
+	test("'lite' allows alias-dot completion (qualified, so precise not noisy)", async () => {
 		const provider = makeProvider({
 			mode: "lite",
 			dataSources: [fileDataSource("orders", ["order_id", "customer_id"])],
@@ -275,7 +281,107 @@ describe("provider — dot completion (full mode only)", () => {
 		});
 		const suggestions = await getSuggestions(provider, model);
 		const labels = suggestions.map((s) => s.label);
-		// Lite skips dot resolution. Column names should NOT appear.
+		// A qualified `o.` is scoped by a qualifier the user typed, so lite
+		// resolves it — unlike the unqualified column dump, which lite still
+		// suppresses (covered separately below).
+		expect(labels).toContain("order_id");
+		expect(labels).toContain("customer_id");
+	});
+
+	test("fetches columns on demand for an alias when the schema has none (the BigQuery case)", async () => {
+		// BigQuery's tables never reach the completion schema, so `x.` finds a
+		// table with no columns — or no table at all. The on-demand fetch, keyed
+		// off the alias's project/dataset/table, is what makes it work.
+		const fetchColumns = vi.fn(async () => ["date", "airline", "airline_code"]);
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "bigquery",
+			fetchColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM `proj.ds.flights` as x",
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
+
+		expect(fetchColumns).toHaveBeenCalledWith({
+			tableName: "flights",
+			databaseName: "proj",
+			schemaName: "ds",
+		});
+		expect(labels).toEqual(["date", "airline", "airline_code"]);
+	});
+
+	test("on-demand fetch also works in lite mode", async () => {
+		const fetchColumns = vi.fn(async () => ["date", "airline"]);
+		const provider = makeProvider({
+			mode: "lite",
+			dataSources: [],
+			dialect: "bigquery",
+			fetchColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM `proj.ds.flights` as x",
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const labels = (await getSuggestions(provider, model)).map((s) => s.label);
+
+		expect(labels).toEqual(["date", "airline"]);
+	});
+
+	test("does not fetch when the schema already has the columns", async () => {
+		const fetchColumns = vi.fn(async () => ["never"]);
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [fileDataSource("orders", ["order_id", "customer_id"])],
+			dialect: "duckdb",
+			fetchColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT o. FROM orders o",
+			cursorOffset: "SELECT o.".length,
+		});
+
+		const labels = (await getSuggestions(provider, model)).map((s) => s.label);
+
+		expect(fetchColumns).not.toHaveBeenCalled();
+		expect(labels).toContain("order_id");
+	});
+
+	test("returns no suggestions when the on-demand fetch yields nothing", async () => {
+		const fetchColumns = vi.fn(async () => null);
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "bigquery",
+			fetchColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM `proj.ds.flights` as x",
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const suggestions = await getSuggestions(provider, model);
+
+		// Empty, not a fall-through to keywords.
+		expect(suggestions).toEqual([]);
+	});
+
+	test("'lite' still suppresses the unqualified all-columns dump", async () => {
+		const provider = makeProvider({
+			mode: "lite",
+			dataSources: [fileDataSource("orders", ["order_id", "customer_id"])],
+			dialect: "duckdb",
+		});
+		// No qualifier: the noisy every-column-from-every-table path, which is
+		// what lite exists to keep quiet.
+		const model = makeFakeModel({ text: "SELECT " });
+		const suggestions = await getSuggestions(provider, model);
+		const labels = suggestions.map((s) => s.label);
 		expect(labels).not.toContain("order_id");
 		expect(labels).not.toContain("customer_id");
 	});
