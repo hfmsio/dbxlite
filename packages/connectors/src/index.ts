@@ -16,7 +16,8 @@ export type {
   ParquetExportCapable
 } from './base'
 
-export { isParquetExportCapable } from './base'
+export { isParquetExportCapable, isOpfsExportCapable } from './base'
+export type { OpfsExportCapable } from './base'
 
 // Connector state events (WS-B): the signal that replaces UI state polling.
 export {

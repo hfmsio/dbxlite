@@ -45,6 +45,34 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
   }
 
   /**
+   * Whether the OPFS-streamed export path is usable in this browser. Cached by
+   * the adapter; safe to call repeatedly. Callers fall back to copyFileToBuffer
+   * when this is false.
+   */
+  async probeOpfsExport(): Promise<boolean> {
+    if (!this.adapter) {
+      await this.connect({ options: {} })
+    }
+    return await this.adapter!.probeOpfsExport()
+  }
+
+  /** Register an OPFS file as a writable Parquet COPY target. */
+  async registerOpfsOutput(fileName: string): Promise<void> {
+    if (!this.adapter) {
+      await this.connect({ options: {} })
+    }
+    return await this.adapter!.registerOpfsOutput(fileName)
+  }
+
+  /** Flush + release DuckDB's OPFS output handle so the file can be read. */
+  async releaseOpfsOutput(fileName: string): Promise<void> {
+    if (!this.adapter) {
+      await this.connect({ options: {} })
+    }
+    return await this.adapter!.releaseOpfsOutput(fileName)
+  }
+
+  /**
    * Convert BigInt to Number in a value (handles nested objects/arrays)
    */
   private convertBigInt(value: unknown): unknown {

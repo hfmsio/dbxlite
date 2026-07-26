@@ -253,6 +253,28 @@ export function isParquetExportCapable(c: unknown): c is ParquetExportCapable {
 }
 
 /**
+ * Capability: connector can stream a Parquet COPY straight to an OPFS file,
+ * avoiding the whole-file buffer that copyFileToBuffer materializes. Consumers
+ * probe at runtime (probeOpfsExport) and fall back when it isn't available.
+ */
+export interface OpfsExportCapable {
+  probeOpfsExport(): Promise<boolean>
+  registerOpfsOutput(fileName: string): Promise<void>
+  releaseOpfsOutput(fileName: string): Promise<void>
+}
+
+export function isOpfsExportCapable(c: unknown): c is OpfsExportCapable {
+  return (
+    !!c &&
+    typeof c === "object" &&
+    typeof (c as { probeOpfsExport?: unknown }).probeOpfsExport === "function" &&
+    typeof (c as { registerOpfsOutput?: unknown }).registerOpfsOutput ===
+      "function" &&
+    typeof (c as { releaseOpfsOutput?: unknown }).releaseOpfsOutput === "function"
+  )
+}
+
+/**
  * Extended connector interface for cloud data warehouses
  */
 export interface CloudConnector extends BaseConnector {

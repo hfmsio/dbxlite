@@ -23,6 +23,19 @@ interface FileRegisteredMessage extends WorkerMessageBase {
   id: string;
 }
 
+interface OpfsOutputRegisteredMessage extends WorkerMessageBase {
+  type: 'opfs_output_registered';
+}
+
+interface OpfsOutputReleasedMessage extends WorkerMessageBase {
+  type: 'opfs_output_released';
+}
+
+interface OpfsProbeResultMessage extends WorkerMessageBase {
+  type: 'opfs_probe_result';
+  ok: boolean;
+}
+
 interface FileDroppedMessage extends WorkerMessageBase {
   type: 'file_dropped';
   id: string;
@@ -88,7 +101,10 @@ type WorkerMessage =
   | ArrowMessage
   | DoneMessage
   | CancelledMessage
-  | QueryStatsMessage;
+  | QueryStatsMessage
+  | OpfsOutputRegisteredMessage
+  | OpfsOutputReleasedMessage
+  | OpfsProbeResultMessage;
 
 const ADAPTER_VERSION = '1.0.2-decimal-fix';
 // Version logged only in development
@@ -185,6 +201,81 @@ export class DuckDBWorkerAdapter {
       }
       this.handlers.set(id, handler)
       this.worker!.postMessage({ type: 'drop_file', id, fileName })
+    })
+  }
+
+  /**
+   * Round-trip a tiny Parquet through OPFS to decide, once, whether the OPFS
+   * export path works in this browser. Cached: the probe only runs once per
+   * adapter instance. Never rejects — resolves false on any failure so callers
+   * fall back cleanly.
+   */
+  private opfsProbe: Promise<boolean> | null = null
+  async probeOpfsExport(): Promise<boolean> {
+    if (this.opfsProbe) return this.opfsProbe
+    this.opfsProbe = (async () => {
+      // Cheap main-thread gate before paying for a worker round trip.
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.storage?.getDirectory ||
+        !(globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated
+      ) {
+        return false
+      }
+      if(!this.worker) await this.init()
+      return new Promise<boolean>((resolve) => {
+        const id = `opfsprobe_${Date.now()}`
+        const handler = (msg: WorkerMessage) => {
+          if (msg.type === 'opfs_probe_result') {
+            this.handlers.delete(id)
+            resolve((msg as OpfsProbeResultMessage).ok)
+          } else if (msg.type === 'error') {
+            this.handlers.delete(id)
+            resolve(false)
+          }
+        }
+        this.handlers.set(id, handler)
+        this.worker!.postMessage({ type: 'opfs_probe', id })
+      })
+    })().catch(() => false)
+    return this.opfsProbe
+  }
+
+  /** Register an OPFS file as a writable COPY target. */
+  async registerOpfsOutput(fileName: string): Promise<void> {
+    if(!this.worker) await this.init()
+    return new Promise((resolve, reject) => {
+      const id = `opfsreg_${Date.now()}`
+      const handler = (msg: WorkerMessage) => {
+        if (msg.type === 'opfs_output_registered') {
+          this.handlers.delete(id)
+          resolve()
+        } else if (msg.type === 'error') {
+          this.handlers.delete(id)
+          reject(new Error((msg as ErrorMessage).error))
+        }
+      }
+      this.handlers.set(id, handler)
+      this.worker!.postMessage({ type: 'opfs_register_output', id, fileName })
+    })
+  }
+
+  /** Flush + release DuckDB's OPFS handle so the file is complete and readable. */
+  async releaseOpfsOutput(fileName: string): Promise<void> {
+    if(!this.worker) await this.init()
+    return new Promise((resolve, reject) => {
+      const id = `opfsrel_${Date.now()}`
+      const handler = (msg: WorkerMessage) => {
+        if (msg.type === 'opfs_output_released') {
+          this.handlers.delete(id)
+          resolve()
+        } else if (msg.type === 'error') {
+          this.handlers.delete(id)
+          reject(new Error((msg as ErrorMessage).error))
+        }
+      }
+      this.handlers.set(id, handler)
+      this.worker!.postMessage({ type: 'opfs_release_output', id, fileName })
     })
   }
 
