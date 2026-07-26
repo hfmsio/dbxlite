@@ -736,3 +736,90 @@ describe("engine detection", () => {
 		).toBe(false);
 	});
 });
+
+describe("catalog-aware engine detection", () => {
+	it("auto-switches to DuckDB when a bare name matches an attached DuckDB db", async () => {
+		// Active connector is BigQuery (sticky from a prior query); the query
+		// targets a DuckDB database `hits`. Syntax alone is ambiguous, so the
+		// detector mock returns unknown — the catalog override must kick in.
+		vi.mocked(detectQueryEngine).mockReturnValue({
+			engine: "unknown",
+			confidence: "low",
+			signals: [],
+			scores: {},
+		});
+		vi.mocked(extractQueryAtCursor).mockReturnValue(
+			"SELECT * FROM hits.main.hits100k",
+		);
+		vi.mocked(queryService.getRowCount).mockResolvedValue({
+			count: 1,
+			isEstimated: false,
+		});
+		vi.mocked(queryService.executeQuery).mockResolvedValue({
+			rows: [],
+			columns: [],
+			totalRows: 0,
+			executionTime: 1,
+		});
+		const switchConnector = vi.fn(() => true);
+		const options = createDefaultOptions({
+			switchConnector,
+			activeConnector: "bigquery" as const,
+			engineDetectionMode: "auto" as const,
+			dataSources: [
+				{
+					id: "hits",
+					name: "hits",
+					type: "duckdb",
+					attachedAs: "hits",
+					schemas: [
+						{ name: "main", tables: [{ name: "hits100k", columns: [] }] },
+					],
+				},
+			],
+		});
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).toHaveBeenCalledWith("duckdb");
+	});
+
+	it("does not override for a bare name that is not attached", async () => {
+		vi.mocked(detectQueryEngine).mockReturnValue({
+			engine: "unknown",
+			confidence: "low",
+			signals: [],
+			scores: {},
+		});
+		vi.mocked(extractQueryAtCursor).mockReturnValue(
+			"SELECT * FROM someproj.ds.tbl",
+		);
+		vi.mocked(queryService.getRowCount).mockResolvedValue({
+			count: 1,
+			isEstimated: false,
+		});
+		vi.mocked(queryService.executeQuery).mockResolvedValue({
+			rows: [],
+			columns: [],
+			totalRows: 0,
+			executionTime: 1,
+		});
+		const switchConnector = vi.fn(() => true);
+		const options = createDefaultOptions({
+			switchConnector,
+			activeConnector: "bigquery" as const,
+			engineDetectionMode: "auto" as const,
+			dataSources: [],
+		});
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).not.toHaveBeenCalled();
+	});
+});
