@@ -51,10 +51,13 @@ export const duckdbCopyStrategy: ExportStrategy = {
 				totalSteps: 3,
 			});
 
-			await queryService.executeQuery(
+			// DuckDB's `COPY … TO` returns a single row with the number of rows
+			// written, so we get the real count for free — no extra COUNT query.
+			const copyResult = await queryService.executeQuery(
 				`COPY (${cleanSql}) TO '${ctx.fileName}' (FORMAT ${formatOption})`,
 				ctx.signal,
 			);
+			const rowsExported = copyRowCount(copyResult);
 
 			if (ctx.signal.aborted) throw new Error("Export cancelled by user");
 
@@ -72,7 +75,7 @@ export const duckdbCopyStrategy: ExportStrategy = {
 				await saveToFileHandle(fileHandle, buffer);
 				return {
 					fileHandleName: fileHandle.name,
-					rowsExported: 0, // DuckDB-COPY doesn't surface row count cheaply
+					rowsExported,
 					fileSizeStr,
 				};
 			}
@@ -81,7 +84,7 @@ export const duckdbCopyStrategy: ExportStrategy = {
 			downloadAsBlob(buffer, ctx.fileName, mimeFor(ctx.format));
 			return {
 				fileHandleName: ctx.fileName,
-				rowsExported: 0,
+				rowsExported,
 				fileSizeStr,
 			};
 		} finally {
@@ -96,4 +99,20 @@ function mimeFor(format: ExportContext["format"]): string {
 	if (format === "csv") return "text/csv";
 	if (format === "json") return "application/json";
 	return "application/octet-stream";
+}
+
+/**
+ * Read the row count DuckDB returns from `COPY … TO`. The result is one row
+ * whose (single) column holds the number of rows written — named "Count" in
+ * current DuckDB, but read positionally to be resilient to a rename.
+ */
+function copyRowCount(result: {
+	rows?: Array<Record<string, unknown>>;
+}): number {
+	const row = result.rows?.[0];
+	if (!row) return 0;
+	const value =
+		(row.Count as unknown) ?? (row.count as unknown) ?? Object.values(row)[0];
+	const n = typeof value === "number" ? value : Number(value);
+	return Number.isFinite(n) ? n : 0;
 }
