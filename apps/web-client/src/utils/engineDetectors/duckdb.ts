@@ -41,22 +41,33 @@ export const duckdbDetector: EngineDetectorPlugin = {
 			definitive: true,
 		},
 
-		// File path patterns in FROM clause
+		// Selecting straight from a file is DuckDB-exclusive — BigQuery and
+		// Snowflake reach files only through stages/external tables, never a
+		// bare `FROM '<path>'`. Definitive.
+		//
+		// Covers globs (`data/*.parquet`), a broad extension set, and an
+		// optional compression suffix (`.parquet.gz`). The path class allows
+		// `* ? [ ]` for globs alongside the usual path characters.
 		{
-			regex: /FROM\s+['"][\w./\\-]+\.(csv|parquet|json|jsonl|tsv)['"]/i,
+			regex:
+				/\bFROM\s+['"][\w./\\*?[\]-]+\.(csv|tsv|txt|parquet|json|jsonl|ndjson|xlsx|xls|arrow|feather)(\.gz|\.zst|\.bz2)?['"]/i,
 			signal: "file path reference",
 			weight: 10,
 			definitive: true,
 		},
+		// URL-scheme sources in a FROM clause are also DuckDB-only.
 		{
-			regex: /FROM\s+['"]s3:\/\//i,
-			signal: "S3 path reference",
-			weight: 9,
+			regex: /\bFROM\s+['"](?:s3|gcs|gs|az|azure|r2|http|https):\/\//i,
+			signal: "URL source reference",
+			weight: 10,
+			definitive: true,
 		},
+		// A glob without a recognised extension (e.g. FROM 'data/*') — still a
+		// file source, but weaker, so lean rather than definitive.
 		{
-			regex: /FROM\s+['"]https?:\/\//i,
-			signal: "HTTP URL reference",
-			weight: 8,
+			regex: /\bFROM\s+['"][\w./\\-]*[*?][\w./\\*?[\]-]*['"]/i,
+			signal: "file glob reference",
+			weight: 9,
 		},
 
 		// DuckDB-specific statements

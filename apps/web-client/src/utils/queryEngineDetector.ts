@@ -69,6 +69,56 @@ export function getRegisteredEngines(): string[] {
 }
 
 /**
+ * Remove SQL comments while preserving string/identifier literals.
+ *
+ * Detection matches on the result, so a token inside a comment
+ * (`-- read_csv`, `/* @stage *​/`) can never trigger a false detection. Quoted
+ * spans ('...', "...", `...`) are copied through untouched — a DuckDB file
+ * path lives inside a single-quoted string and must survive, and a `--` or
+ * `/*` inside a string is data, not a comment.
+ */
+export function stripSqlComments(sql: string): string {
+	let out = "";
+	let quote: string | null = null;
+	for (let i = 0; i < sql.length; i++) {
+		const c = sql[i];
+		const next = sql[i + 1];
+		if (quote) {
+			out += c;
+			if (c === quote) {
+				// Doubled quote ('' / "") is an escaped quote, not a close.
+				if (next === quote) {
+					out += next;
+					i++;
+				} else {
+					quote = null;
+				}
+			}
+			continue;
+		}
+		if (c === "'" || c === '"' || c === "`") {
+			quote = c;
+			out += c;
+			continue;
+		}
+		if (c === "-" && next === "-") {
+			while (i < sql.length && sql[i] !== "\n") i++;
+			out += "\n"; // keep the line break so \b boundaries still hold
+			continue;
+		}
+		if (c === "/" && next === "*") {
+			i += 2;
+			while (i < sql.length && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+			i++; // land on the '/', loop's i++ steps past it
+			out += " ";
+			continue;
+		}
+		out += c;
+	}
+	return out;
+}
+
+/**
  * Confidence thresholds based on total score
  */
 const CONFIDENCE_THRESHOLDS = {
@@ -103,8 +153,12 @@ export function detectQueryEngine(sql: string): EngineDetection {
 		};
 	}
 
-	// Normalize SQL for matching (but keep original for regex matching)
-	const normalizedSql = sql.trim();
+	// Match against SQL with comments removed. A commented-out token
+	// (`-- uses read_csv`) or a `/* @stage */` note must not trigger a
+	// detection, least of all a definitive one that auto-switches the engine.
+	// String literals are preserved: a DuckDB file path (`FROM 'x.parquet'`)
+	// deliberately lives inside a single-quoted string.
+	const normalizedSql = stripSqlComments(sql.trim());
 
 	// Score each registered engine
 	const scores: Record<string, number> = {};
