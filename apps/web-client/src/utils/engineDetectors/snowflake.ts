@@ -17,13 +17,14 @@ import type { EngineDetectorPlugin } from "../queryEngineDetector"
 export const snowflakeDetector: EngineDetectorPlugin = {
 	engineId: "snowflake",
 	patterns: [
-		// Stage references (most distinctive Snowflake pattern)
-		{ regex: /@[\w]+(?:\/[\w./]+)?/, signal: "@stage reference", weight: 10 },
-		{ regex: /@%[\w]+/, signal: "@%table stage reference", weight: 10 },
+		// Stage references (most distinctive Snowflake pattern). Definitive:
+		// @stage / @%table syntax and USE WAREHOUSE/ROLE parse on no other engine.
+		{ regex: /@[\w]+(?:\/[\w./]+)?/, signal: "@stage reference", weight: 10, definitive: true },
+		{ regex: /@%[\w]+/, signal: "@%table stage reference", weight: 10, definitive: true },
 
 		// Snowflake-specific session statements
-		{ regex: /\bUSE\s+WAREHOUSE\s+\w+/i, signal: "USE WAREHOUSE statement", weight: 10 },
-		{ regex: /\bUSE\s+ROLE\s+\w+/i, signal: "USE ROLE statement", weight: 10 },
+		{ regex: /\bUSE\s+WAREHOUSE\s+\w+/i, signal: "USE WAREHOUSE statement", weight: 10, definitive: true },
+		{ regex: /\bUSE\s+ROLE\s+\w+/i, signal: "USE ROLE statement", weight: 10, definitive: true },
 		{ regex: /\bUSE\s+DATABASE\s+\w+/i, signal: "USE DATABASE statement", weight: 8 },
 		{ regex: /\bUSE\s+SCHEMA\s+\w+/i, signal: "USE SCHEMA statement", weight: 8 },
 

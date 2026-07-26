@@ -13,6 +13,14 @@ export interface DetectionPattern {
 	regex: RegExp;
 	signal: string; // Human-readable description of what was matched
 	weight: number; // 1-10, higher = stronger signal
+	/**
+	 * A pattern only one engine could possibly use — the others can't even
+	 * parse it (a backtick project.dataset.table for BigQuery, read_parquet()
+	 * or a local file path for DuckDB). When one matches and its engine is the
+	 * clear winner, confidence is forced to "high" regardless of raw score, so
+	 * auto-switch fires. Weight still feeds scoring for the winner margin.
+	 */
+	definitive?: boolean;
 }
 
 /**
@@ -101,6 +109,8 @@ export function detectQueryEngine(sql: string): EngineDetection {
 	// Score each registered engine
 	const scores: Record<string, number> = {};
 	const signalsByEngine: Record<string, string[]> = {};
+	// Engines that matched at least one engine-exclusive pattern.
+	const definitiveEngines = new Set<string>();
 
 	for (const detector of engineDetectors) {
 		let engineScore = 0;
@@ -110,6 +120,7 @@ export function detectQueryEngine(sql: string): EngineDetection {
 			if (pattern.regex.test(normalizedSql)) {
 				engineScore += pattern.weight;
 				matchedSignals.push(pattern.signal);
+				if (pattern.definitive) definitiveEngines.add(detector.engineId);
 			}
 		}
 
@@ -168,6 +179,14 @@ export function detectQueryEngine(sql: string): EngineDetection {
 		confidence = "medium";
 	} else {
 		confidence = "low";
+	}
+
+	// A definitive signal for the winning engine (one the others can't parse)
+	// forces high confidence — a backtick project.dataset.table is unambiguous
+	// even though it alone scores only "medium". We reach here only after the
+	// clear-winner margin check, so this can't fire on an ambiguous tie.
+	if (definitiveEngines.has(topEngine)) {
+		confidence = "high";
 	}
 
 	return {

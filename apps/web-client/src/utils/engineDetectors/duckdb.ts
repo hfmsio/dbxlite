@@ -14,26 +14,31 @@ export const duckdbDetector: EngineDetectorPlugin = {
 			regex: /\bread_csv\s*\(/i,
 			signal: "read_csv() function",
 			weight: 10,
+			definitive: true,
 		},
 		{
 			regex: /\bread_parquet\s*\(/i,
 			signal: "read_parquet() function",
 			weight: 10,
+			definitive: true,
 		},
 		{
 			regex: /\bread_json\s*\(/i,
 			signal: "read_json() function",
 			weight: 10,
+			definitive: true,
 		},
 		{
 			regex: /\bread_json_auto\s*\(/i,
 			signal: "read_json_auto() function",
 			weight: 10,
+			definitive: true,
 		},
 		{
 			regex: /\bread_csv_auto\s*\(/i,
 			signal: "read_csv_auto() function",
 			weight: 10,
+			definitive: true,
 		},
 
 		// File path patterns in FROM clause
@@ -41,6 +46,7 @@ export const duckdbDetector: EngineDetectorPlugin = {
 			regex: /FROM\s+['"][\w./\\-]+\.(csv|parquet|json|jsonl|tsv)['"]/i,
 			signal: "file path reference",
 			weight: 10,
+			definitive: true,
 		},
 		{
 			regex: /FROM\s+['"]s3:\/\//i,
