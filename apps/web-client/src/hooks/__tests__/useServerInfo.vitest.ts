@@ -317,12 +317,21 @@ describe("useServerInfo", () => {
 			const { result } = renderHook(() => useServerInfo(true));
 
 			// Start action
+			let pending!: Promise<unknown>;
 			act(() => {
-				result.current.performExtensionAction("httpfs", "load");
+				pending = result.current.performExtensionAction("httpfs", "load");
 			});
 
 			// Should have action in progress
 			expect(result.current.actionInProgress).toBe("load:httpfs");
+
+			// Let the action settle inside this test. Without this the action's
+			// follow-up refresh queries resolve after the test has ended and are
+			// counted against whichever test happens to be running then, which
+			// made the exact-call-count assertion below order-dependent.
+			await act(async () => {
+				await pending;
+			});
 		});
 
 		it("should clear actionInProgress after action completes", async () => {

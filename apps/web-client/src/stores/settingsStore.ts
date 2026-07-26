@@ -14,10 +14,11 @@ export type SaveStrategy = "auto" | "manual" | "prompt";
 /**
  * Autocomplete mode (v0.4 redesign):
  *   - "off"  : disable the custom provider entirely (Monaco word-match only).
- *   - "lite" : keywords + function names + table names. No column dump, no
- *              alias dot-resolution. Safe default for new users.
- *   - "full" : everything: dialect-aware keywords/functions, dot completion,
- *              alias resolution, FROM-clause column filtering.
+ *   - "lite" : keywords + function names + table names, plus qualified/alias
+ *              dot-resolution (x. -> that table's columns), which is precise.
+ *              No unqualified all-columns dump. Safe default for new users.
+ *   - "full" : everything lite has plus the unqualified column suggestions
+ *              (every column from every table in SELECT/WHERE context).
  *
  * Legacy values from earlier releases ("default", "experimental", "word") are
  * migrated transparently on first load — see migration in this store below.
@@ -49,6 +50,16 @@ export function migrateAutocompleteMode(
 }
 export type EngineDetectionMode = "off" | "suggest" | "auto";
 
+/**
+ * Parquet compression codec for exports, applied to the downloaded file.
+ *   - "zstd": smallest files (~20-40% under snappy) for a modest CPU cost;
+ *     read by every modern Parquet reader. Default.
+ *   - "snappy": DuckDB's own default — fastest write, widest compatibility.
+ *   - "gzip": smaller than snappy, slower than zstd, universally readable.
+ *   - "none": uncompressed — largest, fastest, for re-compression downstream.
+ */
+export type ParquetCompression = "zstd" | "snappy" | "gzip" | "none";
+
 interface SettingsState {
 	// Editor settings
 	editorTheme: string;
@@ -67,6 +78,8 @@ interface SettingsState {
 	saveStrategy: SaveStrategy;
 	// Query settings
 	engineDetectionMode: EngineDetectionMode;
+	// Export settings
+	parquetCompression: ParquetCompression;
 }
 
 interface SettingsActions {
@@ -82,6 +95,7 @@ interface SettingsActions {
 	setExplorerSortOrder: (order: ExplorerSortOrder) => void;
 	setSaveStrategy: (strategy: SaveStrategy) => void;
 	setEngineDetectionMode: (mode: EngineDetectionMode) => void;
+	setParquetCompression: (codec: ParquetCompression) => void;
 	// Bulk update for hydration
 	hydrate: (state: Partial<SettingsState>) => void;
 }
@@ -101,6 +115,7 @@ const DEFAULT_SETTINGS: SettingsState = {
 	explorerSortOrder: "none",
 	saveStrategy: "auto",
 	engineDetectionMode: "suggest",
+	parquetCompression: "zstd",
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -135,6 +150,8 @@ export const useSettingsStore = create<SettingsStore>()(
 			setSaveStrategy: (strategy) => set({ saveStrategy: strategy }),
 
 			setEngineDetectionMode: (mode) => set({ engineDetectionMode: mode }),
+
+			setParquetCompression: (codec) => set({ parquetCompression: codec }),
 
 			hydrate: (state) => set(state),
 		}),
@@ -232,3 +249,5 @@ export const useExplorerSortOrder = () =>
 export const useSaveStrategy = () => useSettingsStore((s) => s.saveStrategy);
 export const useEngineDetectionMode = () =>
 	useSettingsStore((s) => s.engineDetectionMode);
+export const useParquetCompression = () =>
+	useSettingsStore((s) => s.parquetCompression);

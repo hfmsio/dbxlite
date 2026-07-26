@@ -15,13 +15,35 @@
  * implements the same chunk-yielding query() will be picked up
  * automatically.
  */
-import { isParquetExportCapable } from "@ide/connectors";
+import {
+	type BaseConnector,
+	type OpfsExportCapable,
+	type ParquetExportCapable,
+	isOpfsExportCapable,
+	isParquetExportCapable,
+} from "@ide/connectors";
 import { queryService } from "../../../services/streaming-query-service";
 import { createLogger } from "../../../utils/logger";
 import { saveToFileHandle, showExportFilePicker } from "../exportUtils";
+import {
+	opfsExportName,
+	removeOpfsFile,
+	streamOpfsFileToWritable,
+} from "./opfsExport";
 import type { ExportContext, ExportResult, ExportStrategy } from "./types";
 
 const logger = createLogger("export:cloudStreaming");
+
+/**
+ * Row ceiling for a cloud Parquet export.
+ *
+ * Not a policy choice so much as a memory one: the finished Parquet file is
+ * read out of DuckDB's VFS as a single Uint8Array before being written to disk
+ * (DuckDB-WASM exposes no ranged read), so the whole file must fit in browser
+ * memory. Surfaced to the user via the export confirmation rather than applied
+ * silently.
+ */
+export const CLOUD_PARQUET_ROW_CAP = 10_000_000;
 
 export const cloudStreamingStrategy: ExportStrategy = {
 	name: "cloud-streaming",
@@ -61,25 +83,93 @@ export const cloudStreamingStrategy: ExportStrategy = {
 			throw new Error("DuckDB Parquet writer not available");
 		}
 
-		ctx.onProgress({
-			currentStage: `Step 2/3: Streaming ${activeConnectorType} → Parquet...`,
-			currentStep: 2,
-			totalSteps: 3,
-		});
-
-		const t0 = performance.now();
-		const dataGenerator = sourceConnector.query(cleanSql, {
-			maxRows: 10_000_000,
-		});
-
 		const exportColumns =
 			ctx.result?.columns ?? ctx.columns.map((c) => c.name);
 		const exportColumnTypes = (ctx.result?.columnTypes ?? ctx.columns).map(
 			(c) => ({ name: c.name, type: c.type ?? "VARCHAR" }),
 		);
 
+		// Decide the path up front — the query generator is single-use, so the
+		// choice has to be made before it's consumed. The probe is cached and
+		// only trips OPFS on when a tiny round-trip actually worked in this
+		// browser; otherwise we take the buffered+capped fallback.
+		const opfsAvailable =
+			isOpfsExportCapable(duckdb) && (await duckdb.probeOpfsExport());
+
+		if (opfsAvailable && isOpfsExportCapable(duckdb)) {
+			return runOpfsExport(ctx, {
+				duckdb,
+				sourceConnector,
+				cleanSql,
+				fileHandle,
+				exportColumns,
+				exportColumnTypes,
+				activeConnectorType,
+			});
+		}
+
+		return runBufferedExport(ctx, {
+			duckdb,
+			sourceConnector,
+			cleanSql,
+			fileHandle,
+			exportColumns,
+			exportColumnTypes,
+			activeConnectorType,
+		});
+	},
+};
+
+interface ExportRunArgs {
+	duckdb: ParquetExportCapable;
+	sourceConnector: { query: BaseConnector["query"] };
+	cleanSql: string;
+	fileHandle: FileSystemFileHandle;
+	exportColumns: string[];
+	exportColumnTypes: Array<{ name: string; type: string }>;
+	activeConnectorType: string;
+}
+
+/**
+ * OPFS fast path: DuckDB COPYs the Parquet straight to an OPFS file, which is
+ * then streamed to the Save-picker destination. No row cap and no whole-file
+ * buffer — memory stays bounded even for a 70M-row table. Any failure cleans
+ * up the scratch file and throws (the generator is already consumed, so we
+ * can't silently retry) — it never leaves a partial file looking complete.
+ */
+async function runOpfsExport(
+	ctx: ExportContext,
+	args: ExportRunArgs & { duckdb: ParquetExportCapable & OpfsExportCapable },
+): Promise<ExportResult> {
+	const {
+		duckdb,
+		sourceConnector,
+		cleanSql,
+		fileHandle,
+		exportColumns,
+		exportColumnTypes,
+		activeConnectorType,
+	} = args;
+	const opfsName = opfsExportName(activeConnectorType);
+
+	ctx.onProgress({
+		currentStage: `Step 2/3: Streaming ${activeConnectorType} → Parquet...`,
+		currentStep: 2,
+		totalSteps: 3,
+	});
+
+	// No cap: stream every page. Thread the abort signal so ESC stops the
+	// fetch loop and cancels the server-side job (BigQuery keeps billing an
+	// uncancelled job), not just the local write.
+	const dataGenerator = sourceConnector.query(cleanSql, {
+		maxRows: Number.MAX_SAFE_INTEGER,
+		signal: ctx.signal,
+	});
+
+	try {
+		await duckdb.registerOpfsOutput(opfsName);
 		const totalRows = await duckdb.exportToParquetStreaming(
-			ctx.fileName,
+			opfsName,
 			dataGenerator,
 			exportColumns,
 			exportColumnTypes,
@@ -90,41 +180,104 @@ export const cloudStreamingStrategy: ExportStrategy = {
 					totalSteps: 3,
 				});
 			},
+			ctx.parquetCompression,
 		);
-		const tStreamDone = performance.now();
-		logger.info(
-			`[export-timing] streaming + COPY TO + DROP: ${(tStreamDone - t0).toFixed(0)} ms (${totalRows.toLocaleString()} rows)`,
-		);
+		await duckdb.releaseOpfsOutput(opfsName);
 
 		ctx.onProgress({
-			currentStage: "Step 3/3: Reading Parquet from DuckDB...",
+			currentStage: "Step 3/3: Writing to disk...",
 			currentStep: 3,
 			totalSteps: 3,
 		});
-		const buffer = await queryService.copyFileToBuffer(ctx.fileName);
-		const tBufDone = performance.now();
+		const writable = await fileHandle.createWritable();
+		const bytes = await streamOpfsFileToWritable(
+			opfsName,
+			writable,
+			(w, total) => {
+				ctx.onProgress({
+					currentStage: `Step 3/3: Writing ${(w / 1024 / 1024).toFixed(1)} / ${(total / 1024 / 1024).toFixed(1)} MB to disk...`,
+					currentStep: 3,
+					totalSteps: 3,
+				});
+			},
+		);
 		logger.info(
-			`[export-timing] copyFileToBuffer: ${(tBufDone - tStreamDone).toFixed(0)} ms (${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB)`,
+			`[export] OPFS-streamed ${totalRows.toLocaleString()} rows, ${(bytes / 1024 / 1024).toFixed(1)} MB, to ${fileHandle.name}`,
 		);
 
-		ctx.onProgress({
-			currentStage: `Step 3/3: Writing ${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB to disk...`,
-			currentStep: 3,
-			totalSteps: 3,
-		});
-		await saveToFileHandle(fileHandle, buffer);
-		logger.info(
-			`[export-timing] saveToFileHandle: ${(performance.now() - tBufDone).toFixed(0)} ms · total ${(performance.now() - t0).toFixed(0)} ms`,
-		);
+		await removeOpfsFile(opfsName);
+		return { fileHandleName: fileHandle.name, rowsExported: totalRows };
+	} catch (err) {
+		await removeOpfsFile(opfsName);
+		await duckdb.releaseOpfsOutput(opfsName).catch(() => {});
+		throw err;
+	}
+}
 
-		// Fire-and-forget VFS cleanup so the modal dismisses immediately.
-		queryService.dropFile(ctx.fileName).catch((e) => {
-			logger.warn("Failed to drop export file from VFS:", e);
-		});
+/**
+ * Buffered fallback: the original path. DuckDB writes the Parquet to its
+ * in-memory VFS, the whole file is copied into JS memory, then saved. Capped
+ * at CLOUD_PARQUET_ROW_CAP because the whole file must fit in memory; the
+ * caller surfaces that cap and warns on truncation.
+ */
+async function runBufferedExport(
+	ctx: ExportContext,
+	args: ExportRunArgs,
+): Promise<ExportResult> {
+	const {
+		duckdb,
+		sourceConnector,
+		cleanSql,
+		fileHandle,
+		exportColumns,
+		exportColumnTypes,
+		activeConnectorType,
+	} = args;
 
-		return {
-			fileHandleName: fileHandle.name,
-			rowsExported: totalRows,
-		};
-	},
-};
+	ctx.onProgress({
+		currentStage: `Step 2/3: Streaming ${activeConnectorType} → Parquet...`,
+		currentStep: 2,
+		totalSteps: 3,
+	});
+
+	const dataGenerator = sourceConnector.query(cleanSql, {
+		maxRows: CLOUD_PARQUET_ROW_CAP,
+		signal: ctx.signal,
+	});
+
+	const totalRows = await duckdb.exportToParquetStreaming(
+		ctx.fileName,
+		dataGenerator,
+		exportColumns,
+		exportColumnTypes,
+		(rowsProcessed) => {
+			ctx.onProgress({
+				currentStage: `Streaming ${activeConnectorType}: ${rowsProcessed.toLocaleString()} rows...`,
+				currentStep: 2,
+				totalSteps: 3,
+			});
+		},
+		ctx.parquetCompression,
+	);
+
+	ctx.onProgress({
+		currentStage: "Step 3/3: Reading Parquet from DuckDB...",
+		currentStep: 3,
+		totalSteps: 3,
+	});
+	const buffer = await queryService.copyFileToBuffer(ctx.fileName);
+
+	ctx.onProgress({
+		currentStage: `Step 3/3: Writing ${(buffer.byteLength / 1024 / 1024).toFixed(1)} MB to disk...`,
+		currentStep: 3,
+		totalSteps: 3,
+	});
+	await saveToFileHandle(fileHandle, buffer);
+
+	// Fire-and-forget VFS cleanup so the modal dismisses immediately.
+	queryService.dropFile(ctx.fileName).catch((e) => {
+		logger.warn("Failed to drop export file from VFS:", e);
+	});
+
+	return { fileHandleName: fileHandle.name, rowsExported: totalRows };
+}

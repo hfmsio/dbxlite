@@ -4,7 +4,8 @@
  */
 
 import type React from "react";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { usePermissionRecheck } from "../hooks/usePermissionRecheck";
 import { useRemoveDataSource, useUpdateDataSource } from "../stores/dataSourceStore";
 import { fileHandleStore } from "../services/file-handle-store";
 import type { DataSource, Schema, Table } from "../types/data-source";
@@ -47,80 +48,71 @@ export function DatabaseTree({
 		variant?: "danger" | "warning" | "info";
 	} | null>(null);
 
-	// Check database handle permissions periodically
-	useEffect(() => {
-		const checkPermissions = async () => {
-			logger.debug("Checking permissions for databases", databases.length);
-			for (const db of databases) {
-				logger.debug(`Checking ${db.name}`, {
-					hasFileHandle: db.hasFileHandle,
-					permissionStatus: db.permissionStatus,
-				});
+	const checkPermissions = useCallback(async () => {
+		logger.debug("Checking permissions for databases", databases.length);
+		for (const db of databases) {
+			logger.debug(`Checking ${db.name}`, {
+				hasFileHandle: db.hasFileHandle,
+				permissionStatus: db.permissionStatus,
+			});
 
-				// Only check databases with handles
-				if (!db.hasFileHandle) {
-					continue;
-				}
-
-				try {
-					const storedHandle = await fileHandleStore.getHandle(db.id);
-					if (storedHandle) {
-						// Try to actually read the file to verify permission (not just query cached state)
-						let hasPermission = false;
-						try {
-							await storedHandle.handle.getFile();
-							hasPermission = true;
-						} catch (err) {
-							// If we can't read the file, permission is not actually granted
-							hasPermission = false;
-							logger.debug(
-								`${db.name} failed to read file: ${String(err).substring(0, 100)}`,
-							);
-						}
-
-						const newStatus = hasPermission ? "granted" : "prompt";
-
-						// Update status if changed
-						if (db.permissionStatus !== newStatus) {
-							logger.debug(
-								`${db.name} updating status from ${db.permissionStatus} to ${newStatus}`,
-							);
-							updateDataSource(db.id, { permissionStatus: newStatus });
-						}
-					} else {
-						// No handle found - this means the file handle was lost
-						// Update the data source to reflect this
-						logger.debug(
-							`${db.name} no stored handle found - clearing hasFileHandle flag`,
-						);
-						if (
-							db.permissionStatus !== "unknown" ||
-							db.hasFileHandle
-						) {
-							updateDataSource(db.id, {
-								permissionStatus: "unknown",
-								hasFileHandle: false,
-								isAttached: false,
-							});
-						}
-					}
-				} catch (error) {
-					logger.warn(
-						`Failed to check permission for database ${db.name}:`,
-						error,
-					);
-					updateDataSource(db.id, { permissionStatus: "unknown" });
-				}
+			// Only check databases with handles
+			if (!db.hasFileHandle) {
+				continue;
 			}
-		};
 
-		// Check immediately
-		checkPermissions();
+			try {
+				const storedHandle = await fileHandleStore.getHandle(db.id);
+				if (storedHandle) {
+					// Try to actually read the file to verify permission (not just query cached state)
+					let hasPermission = false;
+					try {
+						await storedHandle.handle.getFile();
+						hasPermission = true;
+					} catch (err) {
+						// If we can't read the file, permission is not actually granted
+						hasPermission = false;
+						logger.debug(
+							`${db.name} failed to read file: ${String(err).substring(0, 100)}`,
+						);
+					}
 
-		// Check every 5 seconds
-		const interval = setInterval(checkPermissions, 5000);
-		return () => clearInterval(interval);
+					const newStatus = hasPermission ? "granted" : "prompt";
+
+					// Update status if changed
+					if (db.permissionStatus !== newStatus) {
+						logger.debug(
+							`${db.name} updating status from ${db.permissionStatus} to ${newStatus}`,
+						);
+						updateDataSource(db.id, { permissionStatus: newStatus });
+					}
+				} else {
+					// No handle found - this means the file handle was lost
+					// Update the data source to reflect this
+					logger.debug(
+						`${db.name} no stored handle found - clearing hasFileHandle flag`,
+					);
+					if (db.permissionStatus !== "unknown" || db.hasFileHandle) {
+						updateDataSource(db.id, {
+							permissionStatus: "unknown",
+							hasFileHandle: false,
+							isAttached: false,
+						});
+					}
+				}
+			} catch (error) {
+				logger.warn(
+					`Failed to check permission for database ${db.name}:`,
+					error,
+				);
+				updateDataSource(db.id, { permissionStatus: "unknown" });
+			}
+		}
 	}, [databases, updateDataSource]);
+
+	// Permissions can only change while the user is away from the tab (or via
+	// the browser's own UI), so re-check on return rather than on a fast poll.
+	usePermissionRecheck(checkPermissions);
 
 	// Helper to check if database is available
 	const isDatabaseAvailable = (db: DataSource): boolean => {

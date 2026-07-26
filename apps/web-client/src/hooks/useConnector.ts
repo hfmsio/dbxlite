@@ -74,9 +74,18 @@ export function useConnector({
 		}
 	}, [activeConnector]);
 
-	// Check connection status periodically. isSnowflakeConnected is now
-	// a public typed method on StreamingQueryService — call it directly,
-	// no `as unknown as { … }` escape hatch.
+	// Track connection status. This used to poll every 2s; it now runs the
+	// same check, driven by queryService.onConnectorState.
+	//
+	// The event is a *trigger*, not the source of truth: the check still reads
+	// isBigQueryConnected()/isSnowflakeConnected(), exactly as the poll did, so
+	// the derived state cannot drift from what the connectors actually report.
+	//
+	// Every way a connection can end still reaches here. Explicit endings (the
+	// settings Disconnect button, revoke) emit from the service's lifecycle
+	// paths; an expired token or dropped session has no such moment and is
+	// discovered on the next failed request, which is why the connector emits
+	// from its 401 path.
 	useEffect(() => {
 		const check = () => {
 			const bq = queryService.isBigQueryConnected();
@@ -84,11 +93,9 @@ export function useConnector({
 
 			// A connection ending is the one event that truly invalidates the
 			// catalog metadata autocomplete has cached, so evict on the
-			// connected → disconnected edge. This poll is the only place that
-			// sees every such ending: the settings Disconnect button, an
-			// expired token, or a dropped session all land here. The catalog
-			// explorer's own unmount is not a substitute — it also fires when
-			// the sidebar is merely collapsed.
+			// connected → disconnected edge. The catalog explorer's own unmount
+			// is not a substitute — it also fires when the sidebar is merely
+			// collapsed.
 			if (prevBigQueryConnected.current && !bq) clearProviderState("bigquery");
 			if (prevSnowflakeConnected.current && !sf)
 				clearProviderState("snowflake");
@@ -101,10 +108,7 @@ export function useConnector({
 
 		check();
 
-		// Check every 2 seconds. Will be replaced with event subscription
-		// in Phase 4.2 alongside the App.tsx context-poll retirement.
-		const interval = setInterval(check, 2000);
-		return () => clearInterval(interval);
+		return queryService.onConnectorState(check);
 	}, []);
 
 	// Check if a connector is available for use

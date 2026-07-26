@@ -17,13 +17,24 @@ import type { EngineDetectorPlugin } from "../queryEngineDetector"
 export const snowflakeDetector: EngineDetectorPlugin = {
 	engineId: "snowflake",
 	patterns: [
-		// Stage references (most distinctive Snowflake pattern)
-		{ regex: /@[\w]+(?:\/[\w./]+)?/, signal: "@stage reference", weight: 10 },
-		{ regex: /@%[\w]+/, signal: "@%table stage reference", weight: 10 },
+		// Stage references (most distinctive Snowflake pattern). Definitive:
+		// @stage / @%table syntax parses on no other engine.
+		//
+		// The leading (^|[^\w.@]) is load-bearing: it requires a token boundary
+		// before the @, so an email in a string literal (`'user@host.com'`,
+		// where a word char precedes @) can NOT match and falsely force a
+		// Snowflake auto-switch. A real stage always follows FROM/COPY/PUT/GET/
+		// LIST or whitespace, i.e. a non-word char.
+		{
+			regex: /(?:^|[^\w.@])@%?[\w$]+(?:\/[\w./]+)?/,
+			signal: "@stage reference",
+			weight: 10,
+			definitive: true,
+		},
 
 		// Snowflake-specific session statements
-		{ regex: /\bUSE\s+WAREHOUSE\s+\w+/i, signal: "USE WAREHOUSE statement", weight: 10 },
-		{ regex: /\bUSE\s+ROLE\s+\w+/i, signal: "USE ROLE statement", weight: 10 },
+		{ regex: /\bUSE\s+WAREHOUSE\s+\w+/i, signal: "USE WAREHOUSE statement", weight: 10, definitive: true },
+		{ regex: /\bUSE\s+ROLE\s+\w+/i, signal: "USE ROLE statement", weight: 10, definitive: true },
 		{ regex: /\bUSE\s+DATABASE\s+\w+/i, signal: "USE DATABASE statement", weight: 8 },
 		{ regex: /\bUSE\s+SCHEMA\s+\w+/i, signal: "USE SCHEMA statement", weight: 8 },
 

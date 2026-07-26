@@ -6,6 +6,10 @@ import {
 import type { EngineDetectionMode } from "../stores/settingsStore";
 import { errorMonitor } from "../utils/errorMonitor";
 import { detectQueryEngine } from "../utils/engineDetectors";
+import {
+	duckdbCatalogNames,
+	referencesKnownDuckDB,
+} from "../utils/engineDetectors/catalogDetector";
 import { createLogger } from "../utils/logger";
 import { formatQueryError } from "../utils/queryErrorFormatter";
 import { extractQueryAtCursor } from "../utils/queryExtractor";
@@ -254,7 +258,26 @@ export function useQueryExecution({
 		//   "suggest" — show a non-blocking toast; execution proceeds anyway
 		//   "off"     — no detection at all
 		if (engineDetectionMode !== "off") {
-			const detection = detectQueryEngine(sql);
+			let detection = detectQueryEngine(sql);
+
+			// Catalog-aware override for the ambiguous case syntax can't resolve:
+			// a bare `db.schema.table` matches both DuckDB and BigQuery shapes.
+			// If the FROM target is a known attached DuckDB object, it's
+			// definitively DuckDB — this is what stops a DuckDB query from being
+			// sent to a still-active BigQuery connector. Only consulted when
+			// syntax wasn't already sure, so it can't override a real BQ/SF query.
+			if (detection.confidence !== "high") {
+				const duckdbNames = duckdbCatalogNames(dataSources);
+				if (referencesKnownDuckDB(sql, duckdbNames)) {
+					detection = {
+						engine: "duckdb",
+						confidence: "high",
+						signals: ["matches an attached DuckDB object"],
+						scores: {},
+					};
+				}
+			}
+
 			const detectedEngine = detection.engine as ConnectorType | "unknown";
 
 			const isReal = (e: ConnectorType | "unknown"): e is ConnectorType =>
@@ -265,11 +288,21 @@ export function useQueryExecution({
 					? ` (${detection.signals.slice(0, 2).join(", ")})`
 					: "";
 
-			// Only act when (a) detection is real, (b) confidence is high,
-			// and (c) it disagrees with the active connector.
+			// Match the confidence bar to how disruptive the action is. A
+			// non-blocking suggestion is cheap, so it fires on medium-or-better
+			// (a single strong signal like a backtick project.dataset.table —
+			// weight 10 — lands at "medium", never "high", so gating suggest on
+			// "high" meant it effectively never fired). Auto-switch changes the
+			// active connector, so it still demands "high".
+			const confidentEnough =
+				engineDetectionMode === "auto"
+					? detection.confidence === "high"
+					: detection.confidence !== "low";
+			// Only act when (a) detection is real, (b) confidence clears the
+			// per-mode bar, and (c) it disagrees with the active connector.
 			if (
 				isReal(detectedEngine) &&
-				detection.confidence === "high" &&
+				confidentEnough &&
 				detectedEngine !== effectiveConnector
 			) {
 				if (engineDetectionMode === "auto") {

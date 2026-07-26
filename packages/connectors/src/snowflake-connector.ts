@@ -35,6 +35,11 @@ import type {
 } from "./base"
 import { type CredentialStoreLike, EncryptionManager } from "@ide/storage"
 import { createLogger } from "./logger"
+import {
+	ConnectorStateEmitter,
+	type ConnectorStateListener,
+	classifyAuthFailure,
+} from "./connector-state"
 import { BrowserTransport, RequestTransport } from "./transport"
 import { parseSnowflakeAccount } from "./snowflake-account"
 import { parseSnowflakeValue } from "./snowflake-parse-shared"
@@ -251,6 +256,11 @@ export class SnowflakeConnector implements CloudConnector {
 	private readonly configKey = "snowflake-config"
 
 	private token: OAuthToken | null = null
+	/**
+	 * Connection-state signal (WS-B). Emitted at real transitions so the UI no
+	 * longer has to poll isConnected().
+	 */
+	private readonly stateEmitter = new ConnectorStateEmitter()
 	/**
 	 * In-flight refresh-token promise. Coalesces concurrent refresh attempts
 	 * so we don't fire multiple parallel `/oauth/token-request` calls for
@@ -814,7 +824,23 @@ export class SnowflakeConnector implements CloudConnector {
 		} else if (response.status === 403) {
 			message += "\n\nPlease ensure you have the necessary permissions."
 		}
+
+		// Hazard 2: an expired token or a revoked session produces no explicit
+		// disconnect — it is only discovered here, on the next failed request.
+		// Announce it so consumers stop having to poll for it. Transient
+		// failures (5xx, rate limiting, a network blip) deliberately emit
+		// nothing: a spurious `disconnected` would evict the autocomplete
+		// catalog every time the network hiccuped.
+		if (classifyAuthFailure(response.status) === "auth") {
+			this.stateEmitter.emit("disconnected", "auth")
+		}
+
 		throw new Error(message)
+	}
+
+	/** Subscribe to connection-state transitions. Returns an unsubscribe. */
+	onStateChange(listener: ConnectorStateListener): () => void {
+		return this.stateEmitter.onStateChange(listener)
 	}
 
 	private async executeStatement(

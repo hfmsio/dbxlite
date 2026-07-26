@@ -145,4 +145,8 @@ export interface BackendRegistry {
 	get(id: string): ChatBackend | undefined;
 	register(backend: ChatBackend): void;
 	unregister(id: string): void;
+	/** Subscribe to changes in what listAvailable() would return. */
+	onChange(listener: () => void): () => void;
+	/** Announce an availability change this registry cannot observe itself. */
+	notifyAvailabilityChanged(): void;
 }

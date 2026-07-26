@@ -107,8 +107,9 @@ function AppContent() {
 			}
 		};
 		update();
-		const id = setInterval(update, 3000);
-		return () => clearInterval(id);
+		// Role and warehouse only change when the connection is (re)configured,
+		// which is exactly what sessionContextChange announces.
+		return queryService.onConnectorState(update);
 	}, [isSnowflakeConnected]);
 
 	const {

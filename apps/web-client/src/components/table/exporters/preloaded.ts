@@ -78,6 +78,7 @@ export const preloadedStrategy: ExportStrategy = {
 			rows,
 			columns,
 			columnTypes as { name: string; type: string }[] | undefined,
+			ctx.parquetCompression,
 		);
 
 		if (ctx.signal.aborted) {

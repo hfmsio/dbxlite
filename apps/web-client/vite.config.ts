@@ -177,7 +177,12 @@ export default defineConfig({
     target: 'esnext'
   },
   server: {
-    port: 5173,
+    port: 5177,
+    // Fail loudly rather than walking to the next free port. OAuth redirect
+    // URIs are registered per exact origin in Google Cloud, so a silent hop to
+    // 5178 turns a working BigQuery connection into `redirect_uri_mismatch`
+    // with no obvious cause. Better to be told the port is busy.
+    strictPort: true,
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       // Use credentialless mode instead of require-corp to allow fetching remote files
@@ -187,8 +192,9 @@ export default defineConfig({
     // Allow connections from DuckDB -ui proxy
     cors: true,
     hmr: {
-      // When accessed via DuckDB proxy, HMR should connect to Vite server directly
-      clientPort: 5173
+      // When accessed via DuckDB proxy, HMR should connect to Vite server
+      // directly. Keep this in step with `port` above.
+      clientPort: 5177
     },
   }
 })

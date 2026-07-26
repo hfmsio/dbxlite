@@ -6,6 +6,7 @@
  * universal fallback last.
  */
 import { cloudStreamingStrategy } from "./cloudStreaming";
+import { cloudStreamingTextStrategy } from "./cloudStreamingText";
 import { duckdbCopyStrategy } from "./duckdbCopy";
 import { preloadedStrategy } from "./preloaded";
 import type { ExportContext, ExportStrategy } from "./types";
@@ -15,6 +16,7 @@ export type { ExportContext, ExportFormat, ExportResult, ExportStrategy } from "
 export const ALL_STRATEGIES: ExportStrategy[] = [
 	duckdbCopyStrategy,
 	cloudStreamingStrategy,
+	cloudStreamingTextStrategy,
 	preloadedStrategy,
 ];
 

@@ -9,16 +9,19 @@ import type { EngineDetectorPlugin } from "../queryEngineDetector";
 export const bigqueryDetector: EngineDetectorPlugin = {
 	engineId: "bigquery",
 	patterns: [
-		// Backtick-quoted identifiers (most distinctive BQ pattern)
+		// Backtick-quoted identifiers (most distinctive BQ pattern).
+		// Definitive: DuckDB/Snowflake reject backtick identifiers outright.
 		{
 			regex: /`[\w-]+\.[\w-]+\.[\w-]+`/,
 			signal: "backtick project.dataset.table",
 			weight: 10,
+			definitive: true,
 		},
 		{
 			regex: /`[\w-]+\.[\w-]+`/,
 			signal: "backtick dataset.table",
 			weight: 8,
+			definitive: true,
 		},
 
 		// Project-qualified names with hyphens (GCP project naming)

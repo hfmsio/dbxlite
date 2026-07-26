@@ -618,3 +618,208 @@ describe("useQueryExecution", () => {
 		});
 	});
 });
+
+describe("engine detection", () => {
+	const setup = (overrides: Record<string, unknown>) => {
+		vi.mocked(extractQueryAtCursor).mockReturnValue(
+			"SELECT * FROM `p.d.t`",
+		);
+		vi.mocked(queryService.getRowCount).mockResolvedValue({
+			count: 1,
+			isEstimated: false,
+		});
+		vi.mocked(queryService.executeQuery).mockResolvedValue({
+			rows: [],
+			columns: [],
+			totalRows: 0,
+			executionTime: 1,
+		});
+		const showToast = vi.fn();
+		const switchConnector = vi.fn(() => true);
+		const options = createDefaultOptions({
+			showToast,
+			switchConnector,
+			activeConnector: "duckdb" as const,
+			...overrides,
+		});
+		return { showToast, switchConnector, options };
+	};
+
+	const detected = (confidence: "low" | "medium" | "high") =>
+		vi.mocked(detectQueryEngine).mockReturnValue({
+			engine: "bigquery",
+			confidence,
+			signals: ["backtick project.dataset.table"],
+			scores: { bigquery: confidence === "high" ? 20 : 10 },
+		});
+
+	it("suggests on a medium-confidence cross-engine query (the reported bug)", async () => {
+		// A backtick FQN scores 10 = medium. Suggest must still fire; gating on
+		// 'high' is what made detection appear dead.
+		detected("medium");
+		const { showToast, options } = setup({ engineDetectionMode: "suggest" });
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(
+			showToast.mock.calls.some(
+				([msg]) => typeof msg === "string" && /looks like bigquery/i.test(msg),
+			),
+		).toBe(true);
+	});
+
+	it("does not suggest on low confidence", async () => {
+		detected("low");
+		const { showToast, options } = setup({ engineDetectionMode: "suggest" });
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(
+			showToast.mock.calls.some(
+				([msg]) => typeof msg === "string" && /looks like/i.test(msg),
+			),
+		).toBe(false);
+	});
+
+	it("auto-switch requires high confidence, not medium", async () => {
+		detected("medium");
+		const { switchConnector, options } = setup({
+			engineDetectionMode: "auto",
+		});
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).not.toHaveBeenCalled();
+	});
+
+	it("auto-switches on high confidence", async () => {
+		detected("high");
+		const { switchConnector, options } = setup({
+			engineDetectionMode: "auto",
+		});
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).toHaveBeenCalledWith("bigquery");
+	});
+
+	it("does nothing when detection matches the active connector", async () => {
+		detected("high");
+		const { showToast, switchConnector, options } = setup({
+			engineDetectionMode: "suggest",
+			activeConnector: "bigquery" as const,
+		});
+		vi.mocked(queryService.getActiveConnectorType).mockReturnValue("bigquery");
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).not.toHaveBeenCalled();
+		expect(
+			showToast.mock.calls.some(
+				([msg]) => typeof msg === "string" && /looks like/i.test(msg),
+			),
+		).toBe(false);
+	});
+});
+
+describe("catalog-aware engine detection", () => {
+	it("auto-switches to DuckDB when a bare name matches an attached DuckDB db", async () => {
+		// Active connector is BigQuery (sticky from a prior query); the query
+		// targets a DuckDB database `hits`. Syntax alone is ambiguous, so the
+		// detector mock returns unknown — the catalog override must kick in.
+		vi.mocked(detectQueryEngine).mockReturnValue({
+			engine: "unknown",
+			confidence: "low",
+			signals: [],
+			scores: {},
+		});
+		vi.mocked(extractQueryAtCursor).mockReturnValue(
+			"SELECT * FROM hits.main.hits100k",
+		);
+		vi.mocked(queryService.getRowCount).mockResolvedValue({
+			count: 1,
+			isEstimated: false,
+		});
+		vi.mocked(queryService.executeQuery).mockResolvedValue({
+			rows: [],
+			columns: [],
+			totalRows: 0,
+			executionTime: 1,
+		});
+		const switchConnector = vi.fn(() => true);
+		const options = createDefaultOptions({
+			switchConnector,
+			activeConnector: "bigquery" as const,
+			engineDetectionMode: "auto" as const,
+			dataSources: [
+				{
+					id: "hits",
+					name: "hits",
+					type: "duckdb",
+					attachedAs: "hits",
+					schemas: [
+						{ name: "main", tables: [{ name: "hits100k", columns: [] }] },
+					],
+				},
+			],
+		});
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).toHaveBeenCalledWith("duckdb");
+	});
+
+	it("does not override for a bare name that is not attached", async () => {
+		vi.mocked(detectQueryEngine).mockReturnValue({
+			engine: "unknown",
+			confidence: "low",
+			signals: [],
+			scores: {},
+		});
+		vi.mocked(extractQueryAtCursor).mockReturnValue(
+			"SELECT * FROM someproj.ds.tbl",
+		);
+		vi.mocked(queryService.getRowCount).mockResolvedValue({
+			count: 1,
+			isEstimated: false,
+		});
+		vi.mocked(queryService.executeQuery).mockResolvedValue({
+			rows: [],
+			columns: [],
+			totalRows: 0,
+			executionTime: 1,
+		});
+		const switchConnector = vi.fn(() => true);
+		const options = createDefaultOptions({
+			switchConnector,
+			activeConnector: "bigquery" as const,
+			engineDetectionMode: "auto" as const,
+			dataSources: [],
+		});
+		const { result } = renderHook(() => useQueryExecution(options));
+
+		await act(async () => {
+			await result.current.handleRunQuery();
+		});
+
+		expect(switchConnector).not.toHaveBeenCalled();
+	});
+});

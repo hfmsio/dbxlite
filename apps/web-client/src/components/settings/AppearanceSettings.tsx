@@ -2,6 +2,7 @@ import type React from "react";
 import {
 	type AutocompleteMode,
 	type EngineDetectionMode,
+	type ParquetCompression,
 	useSettingsStore,
 } from "../../stores/settingsStore";
 import { themes } from "../../themes";
@@ -89,6 +90,10 @@ export default function AppearanceSettings({
 	const engineDetectionMode = useSettingsStore((s) => s.engineDetectionMode);
 	const setEngineDetectionMode = useSettingsStore(
 		(s) => s.setEngineDetectionMode,
+	);
+	const parquetCompression = useSettingsStore((s) => s.parquetCompression);
+	const setParquetCompression = useSettingsStore(
+		(s) => s.setParquetCompression,
 	);
 
 	return (
@@ -224,6 +229,34 @@ export default function AppearanceSettings({
 							}}
 						>
 							Detect query engine from SQL syntax
+						</p>
+					</div>
+
+					{/* Parquet compression */}
+					<div style={controlGroupStyle}>
+						<label style={labelStyle}>Parquet Compression</label>
+						<select
+							value={parquetCompression}
+							onChange={(e) =>
+								setParquetCompression(e.target.value as ParquetCompression)
+							}
+							style={selectStyle}
+						>
+							<option value="zstd">ZSTD (smallest)</option>
+							<option value="snappy">Snappy (fastest)</option>
+							<option value="gzip">Gzip</option>
+							<option value="none">None (uncompressed)</option>
+						</select>
+						<p
+							style={{
+								fontSize: 10,
+								color: "var(--text-muted)",
+								marginTop: 4,
+								marginBottom: 0,
+								lineHeight: 1.3,
+							}}
+						>
+							Codec for exported .parquet files
 						</p>
 					</div>
 

@@ -847,6 +847,76 @@ self.addEventListener('message', async (ev) => {
       } catch (err) {
         self.postMessage({ type: 'error', id, error: String(err) });
       }
+    } else if (msg.type === 'opfs_register_output') {
+      // Register an OPFS-backed file as a writable COPY target. DuckDB writes
+      // the Parquet straight to disk (OPFS), so the WASM heap never holds the
+      // finished file and the main thread never buffers it. OPFS-only: a real
+      // Save-picker handle can't back a sync-access handle, so OPFS is the
+      // staging area the finished file is streamed out of afterwards.
+      const { id, fileName } = msg;
+      try {
+        if (!db) throw new Error('Database not initialized');
+        if (!DuckDBDataProtocol) throw new Error('DuckDBDataProtocol not loaded');
+        const root = await navigator.storage.getDirectory();
+        const handle = await root.getFileHandle(fileName, { create: true });
+        await db.registerFileHandle(
+          fileName,
+          handle,
+          DuckDBDataProtocol.BROWSER_FSACCESS,
+          true,
+        );
+        self.postMessage({ type: 'opfs_output_registered', id });
+      } catch (err) {
+        self.postMessage({ type: 'error', id, error: String(err) });
+      }
+    } else if (msg.type === 'opfs_release_output') {
+      // Drop DuckDB's registration so its sync-access handle is flushed and
+      // closed — only then is the OPFS file complete and readable elsewhere.
+      const { id, fileName } = msg;
+      try {
+        if (!db) throw new Error('Database not initialized');
+        await db.dropFile(fileName);
+        self.postMessage({ type: 'opfs_output_released', id });
+      } catch (err) {
+        self.postMessage({ type: 'error', id, error: String(err) });
+      }
+    } else if (msg.type === 'opfs_probe') {
+      // Round-trip a tiny Parquet through OPFS to decide, once per session,
+      // whether the OPFS export path is actually usable in this browser. Any
+      // failure resolves to ok:false so the caller falls back — this never
+      // throws to the caller.
+      const { id } = msg;
+      const probeName = `__opfs_probe_${Date.now()}.parquet`;
+      const removeProbe = async () => {
+        try {
+          const root = await navigator.storage.getDirectory();
+          await root.removeEntry(probeName);
+        } catch {
+          /* nothing to clean */
+        }
+      };
+      try {
+        if (!db || !conn || !DuckDBDataProtocol) {
+          throw new Error('Database not initialized');
+        }
+        const root = await navigator.storage.getDirectory();
+        const handle = await root.getFileHandle(probeName, { create: true });
+        await db.registerFileHandle(
+          probeName,
+          handle,
+          DuckDBDataProtocol.BROWSER_FSACCESS,
+          true,
+        );
+        await conn.query(`COPY (SELECT 1 AS a) TO '${probeName}' (FORMAT PARQUET)`);
+        await db.dropFile(probeName);
+        const written = await (await root.getFileHandle(probeName)).getFile();
+        const ok = written.size > 0;
+        await removeProbe();
+        self.postMessage({ type: 'opfs_probe_result', id, ok });
+      } catch (err) {
+        await removeProbe();
+        self.postMessage({ type: 'opfs_probe_result', id, ok: false });
+      }
     }
   } catch (e) {
     // Send error without id for init errors

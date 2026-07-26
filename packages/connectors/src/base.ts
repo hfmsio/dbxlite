@@ -219,12 +219,16 @@ export interface BaseConnector {
  *   - Replacing the writer (e.g. with parquet-wasm) means changing one
  *     class, not hunting `as { exportToParquet?: ... }` casts
  */
+/** Parquet compression codec for the written file. */
+export type ParquetCompression = 'zstd' | 'snappy' | 'gzip' | 'none'
+
 export interface ParquetExportCapable {
   exportToParquet(
     fileName: string,
     rows: Row[],
     columns: string[],
     columnTypes?: { name: string; type: string }[],
+    compression?: ParquetCompression,
   ): Promise<void>
 
   exportToParquetStreaming(
@@ -237,7 +241,28 @@ export interface ParquetExportCapable {
     columns: string[],
     columnTypes?: { name: string; type: string }[],
     onProgress?: (rowsProcessed: number, totalRows?: number) => void,
+    compression?: ParquetCompression,
   ): Promise<number>
+}
+
+/**
+ * The COPY clause for a Parquet codec. Empty for snappy (DuckDB's default) so
+ * existing behavior is byte-identical when unspecified. "none" maps to
+ * DuckDB's `uncompressed`.
+ */
+export function parquetCompressionClause(
+  compression?: ParquetCompression,
+): string {
+  switch (compression) {
+    case 'zstd':
+      return ", COMPRESSION 'zstd'"
+    case 'gzip':
+      return ", COMPRESSION 'gzip'"
+    case 'none':
+      return ", COMPRESSION 'uncompressed'"
+    default:
+      return '' // snappy / undefined → DuckDB default
+  }
 }
 
 export function isParquetExportCapable(c: unknown): c is ParquetExportCapable {
@@ -249,6 +274,28 @@ export function isParquetExportCapable(c: unknown): c is ParquetExportCapable {
     "exportToParquetStreaming" in c &&
     typeof (c as { exportToParquetStreaming?: unknown })
       .exportToParquetStreaming === "function"
+  )
+}
+
+/**
+ * Capability: connector can stream a Parquet COPY straight to an OPFS file,
+ * avoiding the whole-file buffer that copyFileToBuffer materializes. Consumers
+ * probe at runtime (probeOpfsExport) and fall back when it isn't available.
+ */
+export interface OpfsExportCapable {
+  probeOpfsExport(): Promise<boolean>
+  registerOpfsOutput(fileName: string): Promise<void>
+  releaseOpfsOutput(fileName: string): Promise<void>
+}
+
+export function isOpfsExportCapable(c: unknown): c is OpfsExportCapable {
+  return (
+    !!c &&
+    typeof c === "object" &&
+    typeof (c as { probeOpfsExport?: unknown }).probeOpfsExport === "function" &&
+    typeof (c as { registerOpfsOutput?: unknown }).registerOpfsOutput ===
+      "function" &&
+    typeof (c as { releaseOpfsOutput?: unknown }).releaseOpfsOutput === "function"
   )
 }
 

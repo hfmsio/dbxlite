@@ -3,13 +3,24 @@ import { detectQueryEngine } from "../engineDetectors";
 
 describe("queryEngineDetector", () => {
 	describe("BigQuery detection", () => {
-		it("detects backtick project.dataset.table pattern", () => {
+		it("detects backtick project.dataset.table with HIGH confidence (definitive)", () => {
+			// DuckDB/Snowflake can't parse backtick FQNs, so a single match is
+			// definitive → high, which is what lets auto-switch fire.
 			const result = detectQueryEngine(
 				"SELECT * FROM `myproject.mydataset.mytable`",
 			);
 			expect(result.engine).toBe("bigquery");
-			expect(result.confidence).toBe("medium"); // weight 10 = medium
+			expect(result.confidence).toBe("high");
 			expect(result.signals).toContain("backtick project.dataset.table");
+		});
+
+		it("treats the hyphenated-project backtick FQN as high too", () => {
+			// The exact shape from the bug report.
+			const result = detectQueryEngine(
+				"SELECT * FROM `s1project-272120.bqtest.flights` LIMIT 100",
+			);
+			expect(result.engine).toBe("bigquery");
+			expect(result.confidence).toBe("high");
 		});
 
 		it("detects backtick dataset.table pattern", () => {
@@ -54,11 +65,18 @@ describe("queryEngineDetector", () => {
 	});
 
 	describe("DuckDB detection", () => {
-		it("detects read_csv function", () => {
+		it("detects read_csv function with HIGH confidence (definitive)", () => {
+			// read_* is DuckDB-exclusive, so a single match is definitive.
 			const result = detectQueryEngine("SELECT * FROM read_csv('data.csv')");
 			expect(result.engine).toBe("duckdb");
-			expect(result.confidence).toBe("medium"); // weight 10 = medium
+			expect(result.confidence).toBe("high");
 			expect(result.signals).toContain("read_csv() function");
+		});
+
+		it("treats a local file path as high (the mirror of the BigQuery bug)", () => {
+			const result = detectQueryEngine("SELECT * FROM 'bqflights100k.parquet'");
+			expect(result.engine).toBe("duckdb");
+			expect(result.confidence).toBe("high");
 		});
 
 		it("detects read_parquet function", () => {
@@ -86,7 +104,8 @@ describe("queryEngineDetector", () => {
 				"SELECT * FROM 's3://bucket/path/file.parquet'",
 			);
 			expect(result.engine).toBe("duckdb");
-			expect(result.signals).toContain("S3 path reference");
+			// s3/gs/http/... FROM-clause URLs are one consolidated signal now.
+			expect(result.signals).toContain("URL source reference");
 		});
 
 		it("detects ATTACH statement", () => {
@@ -165,5 +184,86 @@ describe("queryEngineDetector", () => {
 			expect(result.engine).toBe("bigquery");
 			expect(result.confidence).toBe("low");
 		});
+	});
+});
+
+describe("false-positive hardening (definitive patterns)", () => {
+	it("does NOT read an email literal as a Snowflake @stage", () => {
+		const result = detectQueryEngine(
+			"SELECT * FROM users WHERE email = 'alice@example.com'",
+		);
+		// Must not force a Snowflake auto-switch off an email in the data.
+		expect(result.engine).not.toBe("snowflake");
+	});
+
+	it("still detects a real @stage as Snowflake (high)", () => {
+		const result = detectQueryEngine("SELECT * FROM @my_stage/data/");
+		expect(result.engine).toBe("snowflake");
+		expect(result.confidence).toBe("high");
+	});
+
+	it("detects @%table stage", () => {
+		const result = detectQueryEngine("LIST @%mytable");
+		expect(result.engine).toBe("snowflake");
+	});
+
+	it("ignores a DuckDB token inside a line comment", () => {
+		const result = detectQueryEngine(
+			"SELECT 1 -- example using read_parquet('x.parquet')",
+		);
+		expect(result.engine).not.toBe("duckdb");
+	});
+
+	it("ignores a backtick FQN inside a block comment", () => {
+		const result = detectQueryEngine(
+			"SELECT 1 /* was `proj.ds.tbl` */ FROM t",
+		);
+		expect(result.engine).not.toBe("bigquery");
+	});
+
+	it("still detects read_parquet in live SQL", () => {
+		const result = detectQueryEngine(
+			"SELECT 1 -- note\nFROM read_parquet('x.parquet')",
+		);
+		expect(result.engine).toBe("duckdb");
+		expect(result.confidence).toBe("high");
+	});
+});
+
+describe("DuckDB file-source detection", () => {
+	it.each([
+		["FROM 'data.csv'", "csv"],
+		["FROM 'data.parquet'", "parquet"],
+		["FROM 'data.jsonl'", "jsonl"],
+		["FROM 'sales.xlsx'", "xlsx"],
+		["FROM 'events.ndjson'", "ndjson"],
+		["FROM 'part.parquet.gz'", "compressed parquet"],
+	])("treats %s as DuckDB (high)", (frag) => {
+		const result = detectQueryEngine(`SELECT * ${frag}`);
+		expect(result.engine).toBe("duckdb");
+		expect(result.confidence).toBe("high");
+	});
+
+	it("treats a glob parquet path as DuckDB (high)", () => {
+		const result = detectQueryEngine("SELECT * FROM 'data/*.parquet'");
+		expect(result.engine).toBe("duckdb");
+		expect(result.confidence).toBe("high");
+	});
+
+	it("treats a URL source as DuckDB (high)", () => {
+		for (const url of [
+			"s3://bucket/x.parquet",
+			"gs://bucket/x.parquet",
+			"https://example.com/x.parquet",
+		]) {
+			const result = detectQueryEngine(`SELECT * FROM '${url}'`);
+			expect(result.engine).toBe("duckdb");
+			expect(result.confidence).toBe("high");
+		}
+	});
+
+	it("treats a bare glob (no extension) as a weaker DuckDB lean", () => {
+		const result = detectQueryEngine("SELECT * FROM 'data/*'");
+		expect(result.engine).toBe("duckdb");
 	});
 });

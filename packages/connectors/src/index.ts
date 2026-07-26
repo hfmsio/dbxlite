@@ -16,10 +16,30 @@ export type {
   ParquetExportCapable
 } from './base'
 
-export { isParquetExportCapable } from './base'
+export {
+  isParquetExportCapable,
+  isOpfsExportCapable,
+  parquetCompressionClause,
+} from './base'
+export type { OpfsExportCapable, ParquetCompression } from './base'
+
+// Connector state events (WS-B): the signal that replaces UI state polling.
+export {
+  ConnectorStateEmitter,
+  classifyAuthFailure,
+  isConnectorStateSource,
+} from './connector-state'
+export type {
+  ConnectorStatus,
+  ConnectorStatusReason,
+  ConnectorStateEvent,
+  ConnectorStateListener,
+  ConnectorStateSource,
+} from './connector-state'
 
 // Export connector implementations
-export { BigQueryConnector } from './bigquery-connector'
+export { BigQueryConnector, OAUTH_SCOPES } from './bigquery-connector'
+export type { BigQueryAuth } from './bigquery-connector'
 export { DuckDBConnector } from './duckdb-connector'
 export { DuckDBHttpConnector } from './duckdb-http-connector'
 export { SnowflakeConnector } from './snowflake-connector'

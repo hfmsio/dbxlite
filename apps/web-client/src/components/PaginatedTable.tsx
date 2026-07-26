@@ -9,6 +9,8 @@ import React, {
 import type { QueryResult } from "../services/streaming-query-service";
 import { CellModal, type CellModalData } from "./table/CellModal";
 import { ColumnContextMenu } from "./table/ColumnContextMenu";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { ExportConfirmDialog } from "./table/ExportConfirmDialog";
 import {
 	useColumnResize,
 	useContextMenu,
@@ -40,6 +42,7 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 		{
 			sql,
 			result,
+			exportSql,
 			tabId,
 			error: externalError,
 			onError,
@@ -122,21 +125,36 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 		});
 
 		// Export functionality
-		const { isExporting, exportComplete, setExportComplete, handleExport } =
-			useTableExport({
-				sql,
-				result: result ?? undefined,
-				columns,
-				showToast,
-				onExportStart: onExportStart
-					? (params) => onExportStart(params)
-					: undefined,
-				onExportProgress: onExportProgress
-					? (params) => onExportProgress(params)
-					: undefined,
-				onExportComplete,
-				onExportError,
-			});
+		const {
+			isExporting,
+			exportComplete,
+			setExportComplete,
+			handleExport,
+			exportPreview,
+			confirmExportPreview,
+			cancelExportPreview,
+			cancelPrompt,
+			confirmCancelExport,
+			dismissCancelExport,
+		} = useTableExport({
+			// Export re-runs this to get the full result; falls back to the
+			// in-memory `result` (preloaded) only when exportSql is undefined,
+			// i.e. the buffer is already complete.
+			sql: exportSql,
+			result: result ?? undefined,
+			columns,
+			estimatedRowCount,
+			rowCountIsEstimated,
+			showToast,
+			onExportStart: onExportStart
+				? (params) => onExportStart(params)
+				: undefined,
+			onExportProgress: onExportProgress
+				? (params) => onExportProgress(params)
+				: undefined,
+			onExportComplete,
+			onExportError,
+		});
 
 		// Context menu hook
 		const { contextMenu, showContextMenu, hideContextMenu } = useContextMenu();
@@ -355,6 +373,23 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 
 		return (
 			<div className="results-pane-compact">
+				{exportPreview && (
+					<ExportConfirmDialog
+						preview={exportPreview}
+						onConfirm={confirmExportPreview}
+						onCancel={cancelExportPreview}
+					/>
+				)}
+				<ConfirmDialog
+					isOpen={cancelPrompt}
+					title="Cancel export?"
+					message="The export is still running. Cancel it and discard the progress so far?"
+					confirmText="Cancel export"
+					cancelText="Keep exporting"
+					variant="danger"
+					onConfirm={confirmCancelExport}
+					onCancel={dismissCancelExport}
+				/>
 				{/* Show error in body area OR normal header+body */}
 				{displayError && !loading ? (
 					<div

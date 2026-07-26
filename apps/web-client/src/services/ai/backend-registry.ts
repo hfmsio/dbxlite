@@ -13,6 +13,7 @@ import type { BackendRegistry, ChatBackend } from "./types";
 
 class BackendRegistryImpl implements BackendRegistry {
 	private backends = new Map<string, ChatBackend>();
+	private readonly listeners = new Set<() => void>();
 
 	list(): ChatBackend[] {
 		return Array.from(this.backends.values());
@@ -30,10 +31,41 @@ class BackendRegistryImpl implements BackendRegistry {
 
 	register(backend: ChatBackend): void {
 		this.backends.set(backend.id, backend);
+		this.notifyAvailabilityChanged();
 	}
 
 	unregister(id: string): void {
 		this.backends.delete(id);
+		this.notifyAvailabilityChanged();
+	}
+
+	/**
+	 * Subscribe to anything that can change what listAvailable() returns.
+	 * Returns an unsubscribe, matching the shape used elsewhere.
+	 */
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+
+	/**
+	 * Announce that availability may have changed.
+	 *
+	 * Called by register/unregister, and also from outside when a source this
+	 * registry cannot observe changes — specifically a BYO backend's
+	 * `isAvailable()` reads whether an API key is stored, so adding or removing
+	 * a key changes the answer without touching the registry at all.
+	 */
+	notifyAvailabilityChanged(): void {
+		for (const listener of [...this.listeners]) {
+			try {
+				listener();
+			} catch {
+				// A failing subscriber must not stop the others being told.
+			}
+		}
 	}
 }
 

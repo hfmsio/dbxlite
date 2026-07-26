@@ -13,6 +13,14 @@ export interface DetectionPattern {
 	regex: RegExp;
 	signal: string; // Human-readable description of what was matched
 	weight: number; // 1-10, higher = stronger signal
+	/**
+	 * A pattern only one engine could possibly use — the others can't even
+	 * parse it (a backtick project.dataset.table for BigQuery, read_parquet()
+	 * or a local file path for DuckDB). When one matches and its engine is the
+	 * clear winner, confidence is forced to "high" regardless of raw score, so
+	 * auto-switch fires. Weight still feeds scoring for the winner margin.
+	 */
+	definitive?: boolean;
 }
 
 /**
@@ -61,6 +69,56 @@ export function getRegisteredEngines(): string[] {
 }
 
 /**
+ * Remove SQL comments while preserving string/identifier literals.
+ *
+ * Detection matches on the result, so a token inside a comment
+ * (`-- read_csv`, `/* @stage *​/`) can never trigger a false detection. Quoted
+ * spans ('...', "...", `...`) are copied through untouched — a DuckDB file
+ * path lives inside a single-quoted string and must survive, and a `--` or
+ * `/*` inside a string is data, not a comment.
+ */
+export function stripSqlComments(sql: string): string {
+	let out = "";
+	let quote: string | null = null;
+	for (let i = 0; i < sql.length; i++) {
+		const c = sql[i];
+		const next = sql[i + 1];
+		if (quote) {
+			out += c;
+			if (c === quote) {
+				// Doubled quote ('' / "") is an escaped quote, not a close.
+				if (next === quote) {
+					out += next;
+					i++;
+				} else {
+					quote = null;
+				}
+			}
+			continue;
+		}
+		if (c === "'" || c === '"' || c === "`") {
+			quote = c;
+			out += c;
+			continue;
+		}
+		if (c === "-" && next === "-") {
+			while (i < sql.length && sql[i] !== "\n") i++;
+			out += "\n"; // keep the line break so \b boundaries still hold
+			continue;
+		}
+		if (c === "/" && next === "*") {
+			i += 2;
+			while (i < sql.length && !(sql[i] === "*" && sql[i + 1] === "/")) i++;
+			i++; // land on the '/', loop's i++ steps past it
+			out += " ";
+			continue;
+		}
+		out += c;
+	}
+	return out;
+}
+
+/**
  * Confidence thresholds based on total score
  */
 const CONFIDENCE_THRESHOLDS = {
@@ -95,12 +153,18 @@ export function detectQueryEngine(sql: string): EngineDetection {
 		};
 	}
 
-	// Normalize SQL for matching (but keep original for regex matching)
-	const normalizedSql = sql.trim();
+	// Match against SQL with comments removed. A commented-out token
+	// (`-- uses read_csv`) or a `/* @stage */` note must not trigger a
+	// detection, least of all a definitive one that auto-switches the engine.
+	// String literals are preserved: a DuckDB file path (`FROM 'x.parquet'`)
+	// deliberately lives inside a single-quoted string.
+	const normalizedSql = stripSqlComments(sql.trim());
 
 	// Score each registered engine
 	const scores: Record<string, number> = {};
 	const signalsByEngine: Record<string, string[]> = {};
+	// Engines that matched at least one engine-exclusive pattern.
+	const definitiveEngines = new Set<string>();
 
 	for (const detector of engineDetectors) {
 		let engineScore = 0;
@@ -110,6 +174,7 @@ export function detectQueryEngine(sql: string): EngineDetection {
 			if (pattern.regex.test(normalizedSql)) {
 				engineScore += pattern.weight;
 				matchedSignals.push(pattern.signal);
+				if (pattern.definitive) definitiveEngines.add(detector.engineId);
 			}
 		}
 
@@ -168,6 +233,14 @@ export function detectQueryEngine(sql: string): EngineDetection {
 		confidence = "medium";
 	} else {
 		confidence = "low";
+	}
+
+	// A definitive signal for the winning engine (one the others can't parse)
+	// forces high confidence — a backtick project.dataset.table is unambiguous
+	// even though it alone scores only "medium". We reach here only after the
+	// clear-winner margin check, so this can't fire on an ambiguous tie.
+	if (definitiveEngines.has(topEngine)) {
+		confidence = "high";
 	}
 
 	return {

@@ -10,6 +10,7 @@
  * Picking a strategy is a capability check (NOT a connector-name check)
  * so adding a new connector type doesn't require changing the dispatcher.
  */
+import type { ParquetCompression } from "@ide/connectors";
 import type { QueryResult } from "../../../services/streaming-query-service";
 import type { ColumnInfo } from "../types";
 
@@ -24,6 +25,8 @@ export interface ExportContext {
 	result?: QueryResult | null;
 	/** Column info from the table — used when no result is available. */
 	columns: ColumnInfo[];
+	/** Parquet codec for the output file (from settings). Parquet only. */
+	parquetCompression?: ParquetCompression;
 	/** Aborted by user (ESC) or unmount. */
 	signal: AbortSignal;
 	/** Progress reporting hook. */

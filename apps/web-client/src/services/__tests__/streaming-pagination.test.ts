@@ -10,8 +10,7 @@
  * The service is a singleton with private connector wiring, so tests inject
  * a recording fake connector directly into its map.
  */
-import { beforeEach, describe, expect, it } from "vitest";
-import { queryService } from "../streaming-query-service";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /** Recording fake DuckDB connector. */
 class FakeDuckDB {
@@ -42,25 +41,27 @@ class FakeDuckDB {
 }
 
 type ServiceInternals = {
-	connectors: Map<string, unknown>;
-	activeConnector: string;
-	mode: string;
-	streamMaterialization: unknown;
-	lastStreamTable: string | null;
-	countCache: Map<string, unknown>;
+	registry: {
+		set(slot: string, connector: unknown): void;
+		setActive(slot: string): void;
+	};
 };
 
-const internals = queryService as unknown as ServiceInternals;
 let fake: FakeDuckDB;
+let queryService: typeof import("../streaming-query-service").queryService;
 
-beforeEach(() => {
+// A fresh module instance per test. Resetting the singleton by poking private
+// field names is what this used to do, and it broke silently the moment the
+// materialisation state moved into PaginationPlanner. Re-importing gives a
+// genuinely clean service without depending on its internal shape: mode
+// defaults to wasm, and the planner and count cache start empty.
+beforeEach(async () => {
+	vi.resetModules();
+	({ queryService } = await import("../streaming-query-service"));
 	fake = new FakeDuckDB();
-	internals.connectors = new Map([["duckdb", fake]]);
-	internals.activeConnector = "duckdb";
-	internals.mode = "wasm";
-	internals.streamMaterialization = null;
-	internals.lastStreamTable = null;
-	internals.countCache = new Map();
+	const internals = queryService as unknown as ServiceInternals;
+	internals.registry.set("duckdb", fake);
+	internals.registry.setActive("duckdb");
 });
 
 describe("stream materialisation paging", () => {

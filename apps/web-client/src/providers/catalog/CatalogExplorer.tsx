@@ -31,6 +31,7 @@ import type {
 	NodeAction,
 	SessionContextChip,
 } from "./types"
+import { queryService } from "../../services/streaming-query-service"
 import QueryHistoryModal from "./components/QueryHistoryModal"
 import SessionChipRenderer from "./components/SessionChipRenderer"
 import { searchTree } from "./searchTree"
@@ -163,13 +164,14 @@ export default function CatalogExplorer({
 		loadCatalogs()
 	}, [provider, loadCatalogs])
 
-	// Periodically refresh session-context chips so they reflect edits.
+	// Refresh session-context chips when the connection is (re)configured.
+	// The event carries no payload on purpose — the chips are re-read from the
+	// provider, exactly as the previous 3s refresh did.
 	useEffect(() => {
 		if (!provider.getSessionContext) return
 		const update = () => setContextChips(provider.getSessionContext!())
 		update()
-		const id = setInterval(update, 3000)
-		return () => clearInterval(id)
+		return queryService.onConnectorState(update)
 	}, [provider])
 
 	const refresh = useCallback(() => {
