@@ -70,6 +70,12 @@ export interface UseTableExportReturn {
 	confirmExportPreview: () => void;
 	/** Resolve the preview: abort the export. */
 	cancelExportPreview: () => void;
+	/** True while the ESC-triggered "cancel export?" prompt is showing. */
+	cancelPrompt: boolean;
+	/** Confirm the prompt: actually abort the running export. */
+	confirmCancelExport: () => void;
+	/** Dismiss the prompt: keep exporting. */
+	dismissCancelExport: () => void;
 }
 
 export function useTableExport({
@@ -108,19 +114,38 @@ export function useTableExport({
 		[settlePreview],
 	);
 
-	// ESC cancels in-flight export
+	// ESC asks before cancelling an in-flight export. Cancelling a nearly-done
+	// 70M-row export on a stray keypress would waste all the progress (and the
+	// BigQuery scan already billed), so ESC opens a confirmation rather than
+	// aborting outright.
+	const [cancelPrompt, setCancelPrompt] = useState(false);
+	// Read the latest prompt state from the stable capture handler below.
+	const cancelPromptRef = useRef(false);
+	cancelPromptRef.current = cancelPrompt;
+
 	useEffect(() => {
 		if (!isExporting) return;
 		const onKey = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				e.stopPropagation();
-				exportAbortControllerRef.current?.abort();
-			}
+			if (e.key !== "Escape") return;
+			// If the prompt is already open, let ConfirmDialog handle Esc
+			// (its Esc = "keep exporting", the safe default).
+			if (cancelPromptRef.current) return;
+			// Capture + stop so the editor's own Esc handling doesn't also fire.
+			e.preventDefault();
+			e.stopPropagation();
+			setCancelPrompt(true);
 		};
-		document.addEventListener("keydown", onKey);
-		return () => document.removeEventListener("keydown", onKey);
+		// Capture phase: reliably intercept Esc even when the editor is focused.
+		document.addEventListener("keydown", onKey, true);
+		return () => document.removeEventListener("keydown", onKey, true);
 	}, [isExporting]);
+
+	const confirmCancelExport = useCallback(() => {
+		setCancelPrompt(false);
+		exportAbortControllerRef.current?.abort();
+	}, []);
+
+	const dismissCancelExport = useCallback(() => setCancelPrompt(false), []);
 
 	// Dismiss completion message on user interaction
 	useEffect(() => {
@@ -271,10 +296,18 @@ export function useTableExport({
 					error instanceof Error ? error.message : String(error);
 				logger.error("Export failed:", errorMsg);
 
-				if (errorMsg === "Export cancelled by user") {
+				// An aborted export can surface as our own message or as the
+				// connector's AbortError (e.g. "Query aborted by user" from the
+				// cancelled BigQuery job) — all are user cancellations.
+				const cancelled =
+					errorMsg === "Export cancelled by user" ||
+					(error instanceof Error && error.name === "AbortError") ||
+					/aborted|cancelled/i.test(errorMsg);
+				if (cancelled) {
 					setExportComplete(
 						createExportCompletionStatus(fileName, 0, format, "cancelled"),
 					);
+					showToast?.("Export cancelled", "info", 3000);
 					onExportComplete?.();
 				} else {
 					setExportComplete(
@@ -292,6 +325,7 @@ export function useTableExport({
 			} finally {
 				setIsExporting(false);
 				exportAbortControllerRef.current = null;
+				setCancelPrompt(false);
 			}
 		},
 		[
@@ -322,5 +356,8 @@ export function useTableExport({
 		exportPreview,
 		confirmExportPreview,
 		cancelExportPreview,
+		cancelPrompt,
+		confirmCancelExport,
+		dismissCancelExport,
 	};
 }

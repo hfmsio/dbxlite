@@ -158,9 +158,12 @@ async function runOpfsExport(
 		totalSteps: 3,
 	});
 
-	// No cap: stream every page.
+	// No cap: stream every page. Thread the abort signal so ESC stops the
+	// fetch loop and cancels the server-side job (BigQuery keeps billing an
+	// uncancelled job), not just the local write.
 	const dataGenerator = sourceConnector.query(cleanSql, {
 		maxRows: Number.MAX_SAFE_INTEGER,
+		signal: ctx.signal,
 	});
 
 	try {
@@ -238,6 +241,7 @@ async function runBufferedExport(
 
 	const dataGenerator = sourceConnector.query(cleanSql, {
 		maxRows: CLOUD_PARQUET_ROW_CAP,
+		signal: ctx.signal,
 	});
 
 	const totalRows = await duckdb.exportToParquetStreaming(

@@ -9,6 +9,7 @@ import React, {
 import type { QueryResult } from "../services/streaming-query-service";
 import { CellModal, type CellModalData } from "./table/CellModal";
 import { ColumnContextMenu } from "./table/ColumnContextMenu";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { ExportConfirmDialog } from "./table/ExportConfirmDialog";
 import {
 	useColumnResize,
@@ -132,6 +133,9 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 			exportPreview,
 			confirmExportPreview,
 			cancelExportPreview,
+			cancelPrompt,
+			confirmCancelExport,
+			dismissCancelExport,
 		} = useTableExport({
 			// Export re-runs this to get the full result; falls back to the
 			// in-memory `result` (preloaded) only when exportSql is undefined,
@@ -376,6 +380,16 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 						onCancel={cancelExportPreview}
 					/>
 				)}
+				<ConfirmDialog
+					isOpen={cancelPrompt}
+					title="Cancel export?"
+					message="The export is still running. Cancel it and discard the progress so far?"
+					confirmText="Cancel export"
+					cancelText="Keep exporting"
+					variant="danger"
+					onConfirm={confirmCancelExport}
+					onCancel={dismissCancelExport}
+				/>
 				{/* Show error in body area OR normal header+body */}
 				{displayError && !loading ? (
 					<div

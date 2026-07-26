@@ -9,7 +9,7 @@
  */
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	getActiveConnectorType: vi.fn(() => "duckdb"),
@@ -224,5 +224,119 @@ describe("useTableExport truncation warning", () => {
 			([msg]) => typeof msg === "string" && msg.includes("TRUNCATED"),
 		);
 		expect(truncated).toBe(false);
+	});
+});
+
+describe("useTableExport ESC cancel confirmation", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.getActiveConnectorType.mockReturnValue("bigquery");
+		mocks.estimateBigQueryCost.mockResolvedValue({
+			estimatedBytes: 1,
+			estimatedCostUSD: 0.01,
+			cachingPossible: false,
+		});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	const pressEsc = () =>
+		document.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+		);
+
+	/** Start an export that hangs in execute() so it stays in-flight. */
+	function startHangingExport() {
+		let release!: () => void;
+		mocks.execute.mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					release = () =>
+						resolve({ fileHandleName: "out.parquet", rowsExported: 5 });
+				}),
+		);
+		return { release: () => release() };
+	}
+
+	it("ESC opens a confirm prompt instead of aborting immediately", async () => {
+		startHangingExport();
+		const { view } = setup();
+
+		let pending!: Promise<void>;
+		await act(async () => {
+			pending = view.result.current.handleExport("parquet");
+		});
+		await act(async () => {
+			view.result.current.confirmExportPreview();
+		});
+
+		expect(view.result.current.isExporting).toBe(true);
+		expect(view.result.current.cancelPrompt).toBe(false);
+
+		await act(async () => {
+			pressEsc();
+		});
+
+		// Prompted, not cancelled — the export is still running.
+		expect(view.result.current.cancelPrompt).toBe(true);
+		expect(view.result.current.isExporting).toBe(true);
+		void pending;
+	});
+
+	it("dismissing the prompt keeps the export running", async () => {
+		startHangingExport();
+		const { view } = setup();
+		await act(async () => {
+			view.result.current.handleExport("parquet");
+		});
+		await act(async () => {
+			view.result.current.confirmExportPreview();
+		});
+		await act(async () => {
+			pressEsc();
+		});
+
+		await act(async () => {
+			view.result.current.dismissCancelExport();
+		});
+
+		expect(view.result.current.cancelPrompt).toBe(false);
+		expect(view.result.current.isExporting).toBe(true);
+	});
+
+	it("confirming the prompt aborts the export", async () => {
+		let seenSignal: AbortSignal | undefined;
+		mocks.execute.mockImplementation(
+			(c: { signal: AbortSignal }) =>
+				new Promise((_resolve, reject) => {
+					seenSignal = c.signal;
+					c.signal.addEventListener("abort", () => {
+						const err = new Error("Export cancelled by user");
+						reject(err);
+					});
+				}),
+		);
+		const { view } = setup();
+		let pending!: Promise<void>;
+		await act(async () => {
+			pending = view.result.current.handleExport("parquet");
+		});
+		await act(async () => {
+			view.result.current.confirmExportPreview();
+		});
+		await act(async () => {
+			pressEsc();
+		});
+
+		await act(async () => {
+			view.result.current.confirmCancelExport();
+			await pending;
+		});
+
+		expect(seenSignal?.aborted).toBe(true);
+		expect(view.result.current.isExporting).toBe(false);
+		expect(view.result.current.cancelPrompt).toBe(false);
 	});
 });

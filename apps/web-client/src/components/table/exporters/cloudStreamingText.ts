@@ -80,7 +80,10 @@ export const cloudStreamingTextStrategy: ExportStrategy = {
 				await writable.write("[\n");
 			}
 
-			const gen = sourceConnector.query(cleanSql, { maxRows: NO_ROW_LIMIT });
+			const gen = sourceConnector.query(cleanSql, {
+				maxRows: NO_ROW_LIMIT,
+				signal: ctx.signal,
+			});
 			for await (const chunk of gen) {
 				failIfAborted();
 				const rows = chunk.rows ?? [];
