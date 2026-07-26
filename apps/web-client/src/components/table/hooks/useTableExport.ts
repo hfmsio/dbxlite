@@ -15,6 +15,7 @@ import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { queryService } from "../../../services/streaming-query-service";
 import type { QueryResult } from "../../../services/streaming-query-service";
+import { useSettingsStore } from "../../../stores/settingsStore";
 import { createLogger } from "../../../utils/logger";
 import type { ExportPreview } from "../ExportConfirmDialog";
 import {
@@ -237,6 +238,8 @@ export function useTableExport({
 				sql,
 				result,
 				columns,
+				parquetCompression:
+					useSettingsStore.getState().parquetCompression,
 				signal: exportAbortControllerRef.current.signal,
 				onProgress,
 			};

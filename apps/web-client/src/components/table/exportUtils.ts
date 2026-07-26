@@ -3,6 +3,11 @@
  * These are pure/simple utilities that can be safely extracted
  */
 
+import {
+	type ParquetCompression,
+	parquetCompressionClause,
+} from "@ide/connectors";
+
 export type ExportFormat = "csv" | "json" | "parquet";
 
 /**
@@ -33,6 +38,7 @@ export function getExportExtension(format: "csv" | "json" | "parquet"): string {
  */
 export function getDuckDBFormatOption(
 	format: "csv" | "json" | "parquet",
+	parquetCompression?: ParquetCompression,
 ): string {
 	switch (format) {
 		case "csv":
@@ -40,7 +46,7 @@ export function getDuckDBFormatOption(
 		case "json":
 			return "JSON";
 		case "parquet":
-			return "PARQUET";
+			return `PARQUET${parquetCompressionClause(parquetCompression)}`;
 		default:
 			return "CSV, HEADER TRUE";
 	}

@@ -219,12 +219,16 @@ export interface BaseConnector {
  *   - Replacing the writer (e.g. with parquet-wasm) means changing one
  *     class, not hunting `as { exportToParquet?: ... }` casts
  */
+/** Parquet compression codec for the written file. */
+export type ParquetCompression = 'zstd' | 'snappy' | 'gzip' | 'none'
+
 export interface ParquetExportCapable {
   exportToParquet(
     fileName: string,
     rows: Row[],
     columns: string[],
     columnTypes?: { name: string; type: string }[],
+    compression?: ParquetCompression,
   ): Promise<void>
 
   exportToParquetStreaming(
@@ -237,7 +241,28 @@ export interface ParquetExportCapable {
     columns: string[],
     columnTypes?: { name: string; type: string }[],
     onProgress?: (rowsProcessed: number, totalRows?: number) => void,
+    compression?: ParquetCompression,
   ): Promise<number>
+}
+
+/**
+ * The COPY clause for a Parquet codec. Empty for snappy (DuckDB's default) so
+ * existing behavior is byte-identical when unspecified. "none" maps to
+ * DuckDB's `uncompressed`.
+ */
+export function parquetCompressionClause(
+  compression?: ParquetCompression,
+): string {
+  switch (compression) {
+    case 'zstd':
+      return ", COMPRESSION 'zstd'"
+    case 'gzip':
+      return ", COMPRESSION 'gzip'"
+    case 'none':
+      return ", COMPRESSION 'uncompressed'"
+    default:
+      return '' // snappy / undefined → DuckDB default
+  }
 }
 
 export function isParquetExportCapable(c: unknown): c is ParquetExportCapable {

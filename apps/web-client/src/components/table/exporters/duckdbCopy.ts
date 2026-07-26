@@ -41,7 +41,10 @@ export const duckdbCopyStrategy: ExportStrategy = {
 		const fileHandle = await showExportFilePicker(ctx.fileName, ctx.format);
 
 		try {
-			const formatOption = getDuckDBFormatOption(ctx.format);
+			const formatOption = getDuckDBFormatOption(
+				ctx.format,
+				ctx.parquetCompression,
+			);
 			ctx.onProgress({
 				currentStage: `Step 2/3: Exporting to ${ctx.format.toUpperCase()} (DuckDB processing)...`,
 				currentStep: 2,

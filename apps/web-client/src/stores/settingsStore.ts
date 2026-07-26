@@ -50,6 +50,16 @@ export function migrateAutocompleteMode(
 }
 export type EngineDetectionMode = "off" | "suggest" | "auto";
 
+/**
+ * Parquet compression codec for exports, applied to the downloaded file.
+ *   - "zstd": smallest files (~20-40% under snappy) for a modest CPU cost;
+ *     read by every modern Parquet reader. Default.
+ *   - "snappy": DuckDB's own default — fastest write, widest compatibility.
+ *   - "gzip": smaller than snappy, slower than zstd, universally readable.
+ *   - "none": uncompressed — largest, fastest, for re-compression downstream.
+ */
+export type ParquetCompression = "zstd" | "snappy" | "gzip" | "none";
+
 interface SettingsState {
 	// Editor settings
 	editorTheme: string;
@@ -68,6 +78,8 @@ interface SettingsState {
 	saveStrategy: SaveStrategy;
 	// Query settings
 	engineDetectionMode: EngineDetectionMode;
+	// Export settings
+	parquetCompression: ParquetCompression;
 }
 
 interface SettingsActions {
@@ -83,6 +95,7 @@ interface SettingsActions {
 	setExplorerSortOrder: (order: ExplorerSortOrder) => void;
 	setSaveStrategy: (strategy: SaveStrategy) => void;
 	setEngineDetectionMode: (mode: EngineDetectionMode) => void;
+	setParquetCompression: (codec: ParquetCompression) => void;
 	// Bulk update for hydration
 	hydrate: (state: Partial<SettingsState>) => void;
 }
@@ -102,6 +115,7 @@ const DEFAULT_SETTINGS: SettingsState = {
 	explorerSortOrder: "none",
 	saveStrategy: "auto",
 	engineDetectionMode: "suggest",
+	parquetCompression: "zstd",
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -136,6 +150,8 @@ export const useSettingsStore = create<SettingsStore>()(
 			setSaveStrategy: (strategy) => set({ saveStrategy: strategy }),
 
 			setEngineDetectionMode: (mode) => set({ engineDetectionMode: mode }),
+
+			setParquetCompression: (codec) => set({ parquetCompression: codec }),
 
 			hydrate: (state) => set(state),
 		}),
@@ -233,3 +249,5 @@ export const useExplorerSortOrder = () =>
 export const useSaveStrategy = () => useSettingsStore((s) => s.saveStrategy);
 export const useEngineDetectionMode = () =>
 	useSettingsStore((s) => s.engineDetectionMode);
+export const useParquetCompression = () =>
+	useSettingsStore((s) => s.parquetCompression);

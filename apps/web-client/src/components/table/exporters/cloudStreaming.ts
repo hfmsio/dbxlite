@@ -180,6 +180,7 @@ async function runOpfsExport(
 					totalSteps: 3,
 				});
 			},
+			ctx.parquetCompression,
 		);
 		await duckdb.releaseOpfsOutput(opfsName);
 
@@ -256,6 +257,7 @@ async function runBufferedExport(
 				totalSteps: 3,
 			});
 		},
+		ctx.parquetCompression,
 	);
 
 	ctx.onProgress({

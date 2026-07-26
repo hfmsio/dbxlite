@@ -1,4 +1,4 @@
-import { BaseConnector, ConnectionConfig, QueryOptions, QueryChunk, Schema, TableInfo, ColumnInfo, Row, QueryStats, ParquetExportCapable } from './base'
+import { BaseConnector, ConnectionConfig, QueryOptions, QueryChunk, Schema, TableInfo, ColumnInfo, Row, QueryStats, ParquetExportCapable, ParquetCompression, parquetCompressionClause } from './base'
 import { DuckDBWorkerAdapter, QueryStats as AdapterQueryStats } from '@ide/duckdb-adapter'
 
 export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
@@ -439,10 +439,11 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
    * @param columnTypes - Optional array of column type information for better type inference
    * @returns Promise that resolves when export is complete
    */
-  async exportToParquet(fileName: string, data: Row[], columns: string[], columnTypes?: Array<{name: string, type: string}>): Promise<void> {
+  async exportToParquet(fileName: string, data: Row[], columns: string[], columnTypes?: Array<{name: string, type: string}>, compression?: ParquetCompression): Promise<void> {
     if (!this.adapter) {
       await this.connect({ options: {} })
     }
+    const codec = parquetCompressionClause(compression)
 
     // Create a temporary table with the data
     const tempTableName = `temp_export_${Date.now()}_${Math.random().toString(36).substring(7)}`
@@ -536,7 +537,7 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
       }
 
       // Export to Parquet
-      await this.executeSimpleQuery(`COPY ${tempTableName} TO '${fileName}' (FORMAT PARQUET)`)
+      await this.executeSimpleQuery(`COPY ${tempTableName} TO '${fileName}' (FORMAT PARQUET${codec})`)
 
       // Export complete
     } finally {
@@ -814,8 +815,14 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
     dataGenerator: AsyncGenerator<{rows: Row[], done: boolean, totalRows?: number}>,
     columns: string[],
     columnTypes?: Array<{name: string, type: string}>,
-    onProgress?: (rowsProcessed: number, totalRows?: number) => void
+    onProgress?: (rowsProcessed: number, totalRows?: number) => void,
+    compression?: ParquetCompression
   ): Promise<number> {
+    // The chosen codec applies to the FINAL merged file only — the per-chunk
+    // scratch Parquets stay on DuckDB's default (snappy) since they're
+    // transient and re-read immediately, so their codec doesn't affect the
+    // download and fast is better there.
+    const codec = parquetCompressionClause(compression)
     // True chunked Parquet write.
     //
     // Earlier implementations buffered every chunk into a DuckDB temp table
@@ -904,7 +911,7 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
         // Generator yielded zero rows — write an empty parquet using a
         // dummy schema. DuckDB's COPY needs at least an SELECT statement.
         await this.executeSimpleQuery(
-          `COPY (SELECT NULL::VARCHAR AS empty WHERE 1=0) TO '${fileName}' (FORMAT PARQUET)`
+          `COPY (SELECT NULL::VARCHAR AS empty WHERE 1=0) TO '${fileName}' (FORMAT PARQUET${codec})`
         )
         return 0
       }
@@ -913,7 +920,7 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
         // Single chunk — rename in-place via re-COPY (DuckDB-WASM has no
         // rename API). Cheaper than a no-op merge.
         await this.executeSimpleQuery(
-          `COPY (SELECT * FROM read_parquet('${chunkParquetFiles[0]}')) TO '${fileName}' (FORMAT PARQUET)`
+          `COPY (SELECT * FROM read_parquet('${chunkParquetFiles[0]}')) TO '${fileName}' (FORMAT PARQUET${codec})`
         )
       } else {
         // Multiple chunks — merge via read_parquet([…]). DuckDB streams
@@ -921,7 +928,7 @@ export class DuckDBConnector implements BaseConnector, ParquetExportCapable {
         // chunk Parquet rather than the full result.
         const fileList = chunkParquetFiles.map((f) => `'${f}'`).join(', ')
         await this.executeSimpleQuery(
-          `COPY (SELECT * FROM read_parquet([${fileList}])) TO '${fileName}' (FORMAT PARQUET)`
+          `COPY (SELECT * FROM read_parquet([${fileList}])) TO '${fileName}' (FORMAT PARQUET${codec})`
         )
       }
 
