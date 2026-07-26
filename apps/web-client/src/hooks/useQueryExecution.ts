@@ -265,11 +265,21 @@ export function useQueryExecution({
 					? ` (${detection.signals.slice(0, 2).join(", ")})`
 					: "";
 
-			// Only act when (a) detection is real, (b) confidence is high,
-			// and (c) it disagrees with the active connector.
+			// Match the confidence bar to how disruptive the action is. A
+			// non-blocking suggestion is cheap, so it fires on medium-or-better
+			// (a single strong signal like a backtick project.dataset.table —
+			// weight 10 — lands at "medium", never "high", so gating suggest on
+			// "high" meant it effectively never fired). Auto-switch changes the
+			// active connector, so it still demands "high".
+			const confidentEnough =
+				engineDetectionMode === "auto"
+					? detection.confidence === "high"
+					: detection.confidence !== "low";
+			// Only act when (a) detection is real, (b) confidence clears the
+			// per-mode bar, and (c) it disagrees with the active connector.
 			if (
 				isReal(detectedEngine) &&
-				detection.confidence === "high" &&
+				confidentEnough &&
 				detectedEngine !== effectiveConnector
 			) {
 				if (engineDetectionMode === "auto") {
