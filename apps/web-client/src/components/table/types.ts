@@ -9,6 +9,12 @@ export interface PaginatedTableProps {
 	sql?: string;
 	// Mode 2: Pre-loaded mode (BigQuery, small datasets)
 	result?: QueryResult | null;
+	// The query an export re-runs to fetch the FULL result set, independent of
+	// the display mode above. Undefined when the in-memory `result` is already
+	// complete, so the export can use those rows without a re-scan. This is what
+	// lets a non-virtual BigQuery result (grid capped at one page) still export
+	// every row.
+	exportSql?: string;
 
 	// Tab ID for loading state management (prevents wrong tab updates on tab switch)
 	tabId?: string;

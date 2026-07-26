@@ -4,6 +4,7 @@ import type { DataSource } from "../types/data-source";
 import EditorPane, { type EditorPaneHandle } from "./EditorPane";
 import Overlays from "./Overlays";
 import PaginatedTable, { type PaginatedTableHandle } from "./PaginatedTable";
+import { computeExportSql } from "./table/exporters/exportSql";
 
 interface UploadProgress {
 	currentFile: string;
@@ -195,6 +196,7 @@ export default function MainContent({
 					ref={gridRef}
 					sql={activeTab.useVirtualTable ? activeTab.executedSql : undefined}
 					result={!activeTab.useVirtualTable ? activeTab.result : undefined}
+					exportSql={computeExportSql(activeTab)}
 					tabId={activeTab.id}
 					error={activeTab.error}
 					estimatedRowCount={activeTab.estimatedRowCount}

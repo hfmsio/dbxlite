@@ -41,6 +41,7 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 		{
 			sql,
 			result,
+			exportSql,
 			tabId,
 			error: externalError,
 			onError,
@@ -132,7 +133,10 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 			confirmExportPreview,
 			cancelExportPreview,
 		} = useTableExport({
-			sql,
+			// Export re-runs this to get the full result; falls back to the
+			// in-memory `result` (preloaded) only when exportSql is undefined,
+			// i.e. the buffer is already complete.
+			sql: exportSql,
 			result: result ?? undefined,
 			columns,
 			estimatedRowCount,
