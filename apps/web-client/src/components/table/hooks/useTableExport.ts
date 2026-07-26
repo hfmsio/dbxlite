@@ -13,8 +13,10 @@
  */
 import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { queryService } from "../../../services/streaming-query-service";
 import type { QueryResult } from "../../../services/streaming-query-service";
 import { createLogger } from "../../../utils/logger";
+import type { ExportPreview } from "../ExportConfirmDialog";
 import {
 	type ExportCompletionStatus,
 	type ExportFormat,
@@ -23,6 +25,7 @@ import {
 	generateExportFileName,
 } from "../exportUtils";
 import { type ExportContext, pickStrategy } from "../exporters";
+import { CLOUD_PARQUET_ROW_CAP } from "../exporters/cloudStreaming";
 import type { ColumnInfo } from "../types";
 
 const logger = createLogger("useTableExport");
@@ -31,6 +34,9 @@ interface UseTableExportOptions {
 	sql?: string;
 	result?: QueryResult | null;
 	columns: ColumnInfo[];
+	/** Best-known total row count, for the cost preview + truncation warning. */
+	estimatedRowCount?: number;
+	rowCountIsEstimated?: boolean;
 	showToast?: (
 		message: string,
 		type?: "success" | "error" | "info" | "warning",
@@ -58,12 +64,20 @@ export interface UseTableExportReturn {
 	handleExport: (format: ExportFormat) => Promise<void>;
 	cancelExport: () => void;
 	clearExportComplete: () => void;
+	/** Cost/scope preview awaiting the user's decision, or null. */
+	exportPreview: ExportPreview | null;
+	/** Resolve the preview: proceed with the export. */
+	confirmExportPreview: () => void;
+	/** Resolve the preview: abort the export. */
+	cancelExportPreview: () => void;
 }
 
 export function useTableExport({
 	sql,
 	result,
 	columns,
+	estimatedRowCount,
+	rowCountIsEstimated,
 	showToast,
 	onExportStart,
 	onExportProgress,
@@ -74,6 +88,25 @@ export function useTableExport({
 	const [exportComplete, setExportComplete] =
 		useState<ExportCompletionStatus | null>(null);
 	const exportAbortControllerRef = useRef<AbortController | null>(null);
+	// Cost/scope confirmation gate. The promise resolver is held in a ref so
+	// the dialog's confirm/cancel buttons can settle the awaited handleExport.
+	const [exportPreview, setExportPreview] = useState<ExportPreview | null>(null);
+	const previewResolveRef = useRef<((proceed: boolean) => void) | null>(null);
+
+	const settlePreview = useCallback((proceed: boolean) => {
+		previewResolveRef.current?.(proceed);
+		previewResolveRef.current = null;
+		setExportPreview(null);
+	}, []);
+
+	const confirmExportPreview = useCallback(
+		() => settlePreview(true),
+		[settlePreview],
+	);
+	const cancelExportPreview = useCallback(
+		() => settlePreview(false),
+		[settlePreview],
+	);
 
 	// ESC cancels in-flight export
 	useEffect(() => {
@@ -118,6 +151,47 @@ export function useTableExport({
 				return;
 			}
 
+			// Cost/scope gate. A cloud export re-runs the query and scans the
+			// data again (BigQuery bills for it), which is not obvious from a
+			// "Download" click — so confirm before spending. DuckDB is local and
+			// free, so it skips the gate entirely.
+			const connectorType = queryService.getActiveConnectorType();
+			const rerunsRemotely =
+				!!sql &&
+				(connectorType === "bigquery" || connectorType === "snowflake");
+			if (rerunsRemotely) {
+				let estimatedBytes: number | undefined;
+				let estimatedCostUSD: number | undefined;
+				let cachingPossible: boolean | undefined;
+				if (connectorType === "bigquery" && sql) {
+					try {
+						// A BigQuery dry-run: free, scans nothing, just sizes the job.
+						const est = await queryService.estimateBigQueryCost(sql);
+						estimatedBytes = est.estimatedBytes;
+						estimatedCostUSD = est.estimatedCostUSD;
+						cachingPossible = est.cachingPossible;
+					} catch (e) {
+						logger.debug("Export cost estimate failed", e);
+					}
+				}
+				const proceed = await new Promise<boolean>((resolve) => {
+					previewResolveRef.current = resolve;
+					setExportPreview({
+						format,
+						connectorType,
+						rerunsRemotely: true,
+						estimatedBytes,
+						estimatedCostUSD,
+						cachingPossible,
+						estimatedRows: estimatedRowCount,
+						rowCountIsEstimated,
+						rowCap:
+							format === "parquet" ? CLOUD_PARQUET_ROW_CAP : undefined,
+					});
+				});
+				if (!proceed) return; // user declined; nothing ran, nothing billed
+			}
+
 			const fileName = generateExportFileName(format);
 			exportAbortControllerRef.current = new AbortController();
 			setIsExporting(true);
@@ -152,15 +226,37 @@ export function useTableExport({
 				});
 				const result = await strategy.execute(ctx);
 
+				// Loud truncation: a cloud Parquet export stops at the row cap.
+				// Never let a partial file look complete — say what was dropped.
+				const cap =
+					format === "parquet" && rerunsRemotely
+						? CLOUD_PARQUET_ROW_CAP
+						: undefined;
+				const truncated =
+					cap !== undefined && result.rowsExported >= cap;
+
 				const sizeNote = result.fileSizeStr ? ` (${result.fileSizeStr})` : "";
 				const rowsNote = result.rowsExported
 					? `${result.rowsExported.toLocaleString()} rows`
 					: result.fileSizeStr ?? "";
-				showToast?.(
-					`✓ Exported ${rowsNote} to ${result.fileHandleName}${sizeNote}`,
-					"success",
-					5000,
-				);
+
+				if (truncated) {
+					const droppedNote =
+						estimatedRowCount && estimatedRowCount > result.rowsExported
+							? ` of ${rowCountIsEstimated ? "~" : ""}${estimatedRowCount.toLocaleString()}`
+							: "";
+					showToast?.(
+						`⚠️ Export TRUNCATED at ${rowsNote}${droppedNote}. The file is incomplete — the browser can't hold a larger ${format.toUpperCase()} file in memory.`,
+						"warning",
+						12000,
+					);
+				} else {
+					showToast?.(
+						`✓ Exported ${rowsNote} to ${result.fileHandleName}${sizeNote}`,
+						"success",
+						5000,
+					);
+				}
 				setExportComplete(
 					createExportCompletionStatus(
 						result.fileHandleName,
@@ -202,6 +298,8 @@ export function useTableExport({
 			sql,
 			result,
 			columns,
+			estimatedRowCount,
+			rowCountIsEstimated,
 			showToast,
 			isExporting,
 			onExportStart,
@@ -221,5 +319,8 @@ export function useTableExport({
 		handleExport,
 		cancelExport,
 		clearExportComplete,
+		exportPreview,
+		confirmExportPreview,
+		cancelExportPreview,
 	};
 }

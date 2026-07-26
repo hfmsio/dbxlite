@@ -23,6 +23,17 @@ import type { ExportContext, ExportResult, ExportStrategy } from "./types";
 
 const logger = createLogger("export:cloudStreaming");
 
+/**
+ * Row ceiling for a cloud Parquet export.
+ *
+ * Not a policy choice so much as a memory one: the finished Parquet file is
+ * read out of DuckDB's VFS as a single Uint8Array before being written to disk
+ * (DuckDB-WASM exposes no ranged read), so the whole file must fit in browser
+ * memory. Surfaced to the user via the export confirmation rather than applied
+ * silently.
+ */
+export const CLOUD_PARQUET_ROW_CAP = 10_000_000;
+
 export const cloudStreamingStrategy: ExportStrategy = {
 	name: "cloud-streaming",
 
@@ -69,7 +80,7 @@ export const cloudStreamingStrategy: ExportStrategy = {
 
 		const t0 = performance.now();
 		const dataGenerator = sourceConnector.query(cleanSql, {
-			maxRows: 10_000_000,
+			maxRows: CLOUD_PARQUET_ROW_CAP,
 		});
 
 		const exportColumns =
