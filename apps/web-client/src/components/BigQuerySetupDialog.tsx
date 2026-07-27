@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
 	explainOAuthFailure,
 	runPreflight,
@@ -60,6 +60,9 @@ export default function BigQuerySetupDialog({
 	const [isConnecting, setIsConnecting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [preflight, setPreflight] = useState<PreflightResult | null>(null);
+	// Lets the Cancel button abort an in-flight OAuth consent wait so a closed
+	// or stuck Google popup returns immediately instead of hanging.
+	const abortRef = useRef<AbortController | null>(null);
 
 	const redirectUri = `${window.location.origin}/oauth-callback`;
 
@@ -91,6 +94,9 @@ export default function BigQuerySetupDialog({
 		setError(null);
 		setPreflight(null);
 
+		// Only OAuth opens a popup that can hang; the token path is a quick fetch.
+		const controller = mode === "oauth" ? new AbortController() : null;
+		abortRef.current = controller;
 		try {
 			if (mode === "token") {
 				await queryService.setupBigQueryWithAccessToken(accessToken.trim());
@@ -100,16 +106,25 @@ export default function BigQuerySetupDialog({
 				await queryService.setupBigQuery(
 					clientId.trim(),
 					clientSecret.trim(),
+					controller?.signal,
 				);
 			}
 			await finish();
 		} catch (err) {
-			const explained = explainOAuthFailure(err);
+			const msg = err instanceof Error ? err.message : String(err);
+			// A user-initiated cancel is not a failure: show it inline, no red toast.
+			const cancelled = /cancel/i.test(msg);
+			const explained = cancelled ? msg : explainOAuthFailure(err);
 			setError(explained);
-			showToast?.(explained, "error", 6000);
+			if (!cancelled) showToast?.(explained, "error", 6000);
 		} finally {
+			abortRef.current = null;
 			setIsConnecting(false);
 		}
+	};
+
+	const handleCancelConnect = () => {
+		abortRef.current?.abort();
 	};
 
 	const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -467,8 +482,7 @@ export default function BigQuerySetupDialog({
 				>
 					<button
 						type="button"
-						onClick={onClose}
-						disabled={isConnecting}
+						onClick={isConnecting ? handleCancelConnect : onClose}
 						style={{
 							padding: "8px 14px",
 							background: "transparent",
@@ -476,10 +490,10 @@ export default function BigQuerySetupDialog({
 							border: "1px solid var(--border)",
 							borderRadius: 4,
 							fontSize: 13,
-							cursor: isConnecting ? "not-allowed" : "pointer",
+							cursor: "pointer",
 						}}
 					>
-						Cancel
+						{isConnecting ? "Cancel sign-in" : "Cancel"}
 					</button>
 					<button
 						type="button"

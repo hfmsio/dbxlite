@@ -7,10 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **BigQuery onboarding wizard**: staged setup with live post-connect preflight, a minimal OAuth scope set, and a paste-a-token auth mode for users who can't run the OAuth flow.
+- **Export cost confirmation**: a pre-run dialog surfaces row/scope and potential warehouse cost before a full-result export, so large pulls are never triggered silently.
+- **Full-result export with no row cap**: exports always re-run the query for the complete result set. OPFS-streamed Parquet and streamed CSV/JSON, with a buffered fallback when OPFS is unavailable.
+- **Parquet compression setting** (default ZSTD).
+- **ESC-to-cancel exports** with a confirmation prompt to guard against accidental cancellation of long-running downloads.
+- Catalog-aware engine auto-detection: switches on definitive single-engine syntax and on table names present in the attached DuckDB catalog.
+
+### Changed
+- Decomposed the `streaming-query-service` god object into individually tested collaborators (connector registry, pagination planner, query executor, row-count estimator, abort registry, file VFS, per-connector lifecycles) behind an unchanged public facade.
+- Replaced ten UI state-sync polling loops with a connector event surface plus ref-counted remote probes and focus/visibility permission rechecks.
+
+### Fixed
+- BigQuery project listing no longer strands users on a disabled API (projects.list primary, Cloud Resource Manager fallback).
+- BigQuery dot-completion (`alias.` / `table.`) now resolves columns on demand.
+- DuckDB Parquet export reports the real exported row count instead of 0.
+
 ### Planned
-- Native Parquet export via parquetjs (currently uses JSON intermediate)
+- Native Parquet export via parquetjs (cloud export currently uses a JSON intermediate)
 - Advanced connection testing for cloud connectors
-- Query result caching layer
 - BigQuery → CatalogProvider migration (UX parity with Snowflake)
 - Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
 - Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models

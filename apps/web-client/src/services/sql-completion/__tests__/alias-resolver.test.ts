@@ -113,6 +113,19 @@ describe("parseTableAliases", () => {
 		]);
 	});
 
+	test("parses single-quoted remote URL source (kept whole, not split on dots)", () => {
+		const url =
+			"https://huggingface.co/datasets/allenai/c4/resolve/refs%2Fconvert%2Fparquet/en/partial-train/0000.parquet";
+		const result = parseTableAliases(`SELECT x. FROM '${url}' as x`);
+		expect(result).toEqual([
+			{
+				alias: "x",
+				tableName: url,
+				isCTE: false,
+			},
+		]);
+	});
+
 	test("parses single-quoted file path with directory prefix", () => {
 		const result = parseTableAliases(
 			"SELECT * FROM 'data/2026/orders.csv' o WHERE o.id > 10",

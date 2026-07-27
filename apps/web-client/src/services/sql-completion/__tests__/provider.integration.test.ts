@@ -84,6 +84,12 @@ function makeFakeModel(opts: FakeModelOpts) {
 		getValueInRange: () => upToCursor,
 		getValue: () => text,
 		getLineContent: () => lineContent,
+		getOffsetAt: (pos: { lineNumber: number; column: number }) => {
+			const lines = text.split("\n");
+			let off = 0;
+			for (let i = 0; i < pos.lineNumber - 1; i++) off += lines[i].length + 1;
+			return off + (pos.column - 1);
+		},
 		__position: { lineNumber, column },
 	};
 }
@@ -128,12 +134,18 @@ function makeProvider(opts: {
 		databaseName?: string;
 		schemaName?: string;
 	}) => Promise<string[] | null>;
+	lookupColumns?: (ref: {
+		tableName: string;
+		databaseName?: string;
+		schemaName?: string;
+	}) => { columns: string[] } | { loading: true } | null;
 }) {
 	return createCompletionProvider({
 		getMode: () => opts.mode,
 		getDataSources: () => opts.dataSources ?? [],
 		getDialect: () => opts.dialect,
 		fetchColumns: opts.fetchColumns,
+		lookupColumns: opts.lookupColumns,
 		monaco: fakeMonaco,
 	});
 }
@@ -270,6 +282,60 @@ describe("provider — dot completion", () => {
 		expect(labels).toContain("total");
 	});
 
+	test("file-source column inserts as an identifier, never a single-quoted string", async () => {
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [
+				fileDataSource("bqflightall.parquet", ["airline", "arrival delay"]),
+			],
+			dialect: "duckdb",
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM 'bqflightall.parquet' as x",
+			cursorOffset: "SELECT x.".length,
+		});
+		const items = await getSuggestions(provider, model);
+
+		// Bare identifier. Single quotes would make it the string literal
+		// `SELECT x.'airline'`, which is a parser error.
+		expect(items.find((s) => s.label === "airline")?.insertText).toBe("airline");
+		// A name that can't be bare is double-quoted (still an identifier),
+		// not single-quoted.
+		expect(items.find((s) => s.label === "arrival delay")?.insertText).toBe(
+			'"arrival delay"',
+		);
+	});
+
+	test("alias resolution is scoped to the statement under the cursor", async () => {
+		// Two statements both alias `x`. The cursor is in the FIRST; its columns
+		// must come from the first statement's source, not the second's — parsing
+		// the whole editor would let the later `as x` shadow this one.
+		const lookupColumns = vi.fn(({ tableName }: { tableName: string }) =>
+			tableName === "remote.parquet"
+				? { columns: ["colA", "colB"] }
+				: { columns: ["wrong1", "wrong2"] },
+		);
+		const first = "SELECT x. FROM 'remote.parquet' as x;";
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "duckdb",
+			lookupColumns,
+		});
+		const model = makeFakeModel({
+			text: `${first}\nSELECT x. FROM 'other.parquet' as x;`,
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const labels = (await getSuggestions(provider, model)).map((s) => s.label);
+		expect(lookupColumns).toHaveBeenCalledWith({
+			tableName: "remote.parquet",
+			databaseName: undefined,
+			schemaName: undefined,
+		});
+		expect(labels).toEqual(["colA", "colB"]);
+	});
+
 	test("'lite' allows alias-dot completion (qualified, so precise not noisy)", async () => {
 		const provider = makeProvider({
 			mode: "lite",
@@ -313,6 +379,71 @@ describe("provider — dot completion", () => {
 			schemaName: "ds",
 		});
 		expect(labels).toEqual(["date", "airline", "airline_code"]);
+	});
+
+	test("lookupColumns 'loading' shows a single placeholder, not an empty list", async () => {
+		const lookupColumns = vi.fn(() => ({ loading: true }) as const);
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "bigquery",
+			lookupColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM `proj.ds.flights` as x",
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const suggestions = await getSuggestions(provider, model);
+
+		expect(lookupColumns).toHaveBeenCalledWith({
+			tableName: "flights",
+			databaseName: "proj",
+			schemaName: "ds",
+		});
+		expect(suggestions).toHaveLength(1);
+		expect(String(suggestions[0].label)).toContain("Loading columns for flights");
+		// The placeholder inserts nothing if accidentally accepted.
+		expect(suggestions[0].insertText).toBe("");
+	});
+
+	test("lookupColumns cached columns are shown directly", async () => {
+		const lookupColumns = vi.fn(() => ({ columns: ["date", "airline"] }));
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "bigquery",
+			lookupColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM `proj.ds.flights` as x",
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const labels = (await getSuggestions(provider, model)).map((s) => s.label);
+		expect(labels).toEqual(["date", "airline"]);
+	});
+
+	test("duckdb inline file-source alias resolves columns via lookupColumns", async () => {
+		const lookupColumns = vi.fn(() => ({ columns: ["text", "timestamp", "url"] }));
+		const provider = makeProvider({
+			mode: "full",
+			dataSources: [],
+			dialect: "duckdb",
+			lookupColumns,
+		});
+		const model = makeFakeModel({
+			text: "SELECT x. FROM 'https://example.com/data/0000.parquet' as x",
+			cursorOffset: "SELECT x.".length,
+		});
+
+		const labels = (await getSuggestions(provider, model)).map((s) => s.label);
+		expect(lookupColumns).toHaveBeenCalledWith({
+			tableName: "https://example.com/data/0000.parquet",
+			databaseName: undefined,
+			schemaName: undefined,
+		});
+		expect(labels).toEqual(["text", "timestamp", "url"]);
 	});
 
 	test("on-demand fetch also works in lite mode", async () => {

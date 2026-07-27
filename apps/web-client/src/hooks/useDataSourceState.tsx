@@ -39,7 +39,7 @@ export interface DataSourceStateProps {
 	onBigQueryCacheClear?: (clearFn: () => void) => void;
 	onBigQueryDataLoad?: (loadFn: () => Promise<void>) => void;
 	onLocalDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
-	onServerDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
+	onServerDatabaseRefresh?: (refreshFn: (() => Promise<void>) | null) => void;
 	onFileDelete: (id: string) => void;
 	onDatabaseDelete: (dbName: string) => void;
 	onDeleteFolder: (domain: string, path: string) => void;
@@ -182,12 +182,17 @@ export function useDataSourceState({
 		}
 	}, [onLocalDatabaseRefresh, localDatabase.refreshSchema]);
 
-	// Expose server database refresh function to parent (for ATTACH/DETACH detection)
+	// Expose server database refresh function to parent (for ATTACH/DETACH
+	// detection) ONLY in HTTP/server mode. In WASM mode this ref must stay null:
+	// App.tsx treats a set ref as "server mode" and routes ATTACH there,
+	// returning before the database is added to the in-browser explorer. Clear
+	// it (pass null) when not in HTTP mode so a mode switch can't leave it stale.
 	useEffect(() => {
-		if (onServerDatabaseRefresh) {
-			onServerDatabaseRefresh(serverDatabases.refreshDatabases);
-		}
-	}, [onServerDatabaseRefresh, serverDatabases.refreshDatabases]);
+		if (!onServerDatabaseRefresh) return;
+		onServerDatabaseRefresh(
+			isHttpMode ? serverDatabases.refreshDatabases : null,
+		);
+	}, [onServerDatabaseRefresh, serverDatabases.refreshDatabases, isHttpMode]);
 
 	// Manual BigQuery data loading
 	const loadBigQueryData = useCallback(async () => {

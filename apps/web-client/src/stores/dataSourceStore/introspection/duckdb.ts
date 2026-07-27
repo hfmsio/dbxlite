@@ -9,7 +9,6 @@ import { queryService } from "../../../services/streaming-query-service";
 import { generateDatabaseAlias } from "../../../utils/duckdbOperations";
 import {
 	buildAttachSQL,
-	escapeIdentifier,
 	escapeStringLiteral,
 } from "../../../utils/sqlSanitizer";
 import { createLogger } from "../../../utils/logger";
@@ -87,113 +86,86 @@ async function introspectTables(
 	attachedAs?: string,
 ): Promise<Table[]> {
 	const escapedSchema = escapeStringLiteral(schemaName);
-	const tablesQuery = attachedAs
-		? `SELECT
-         table_schema,
-         table_name,
-         table_type
+	// Shared catalog predicate for the information_schema queries.
+	const catalogFilter = attachedAs
+		? `table_catalog = ${escapeStringLiteral(attachedAs)} AND `
+		: "";
+
+	// Three fixed queries per schema, regardless of how many tables it holds.
+	// The previous implementation ran one column query AND one SELECT COUNT(*)
+	// per table, so a large attached database issued thousands of statements
+	// (many of them full scans) before the editor became usable. Batching keeps
+	// attach time flat as the catalog grows.
+
+	// 1. Table list + type (includes views).
+	const tablesResult = await queryService.executeQueryOnConnector(
+		"duckdb",
+		`SELECT table_name, table_type
        FROM information_schema.tables
-       WHERE table_catalog = ${escapeStringLiteral(attachedAs)}
-         AND table_schema = ${escapedSchema}
-       ORDER BY table_name`
-		: `SELECT
-         table_schema,
-         table_name,
-         table_type
-       FROM information_schema.tables
-       WHERE table_schema = ${escapedSchema}
-       ORDER BY table_name`;
+       WHERE ${catalogFilter}table_schema = ${escapedSchema}
+       ORDER BY table_name`,
+	);
 
-	const tablesResult = await queryService.executeQueryOnConnector("duckdb", tablesQuery);
-	const tables: Table[] = [];
-
-	for (const tableRow of tablesResult.rows) {
-		const tableName = String(tableRow.table_name);
-		const columns = await introspectColumns(schemaName, tableName, attachedAs);
-		const rowCount = await getTableRowCount(schemaName, tableName, attachedAs);
-
-		tables.push({
-			name: tableName,
-			schema: schemaName,
-			columns,
-			rowCount,
-			type: tableRow.table_type === "VIEW" ? "view" : "table",
+	// 2. Every column in the schema in one query, grouped by table.
+	const columnsResult = await queryService.executeQueryOnConnector(
+		"duckdb",
+		`SELECT table_name, column_name, data_type, is_nullable
+       FROM information_schema.columns
+       WHERE ${catalogFilter}table_schema = ${escapedSchema}
+       ORDER BY table_name, ordinal_position`,
+	);
+	const columnsByTable = new Map<string, Column[]>();
+	for (const row of columnsResult.rows) {
+		const tableName = String(row.table_name);
+		let list = columnsByTable.get(tableName);
+		if (!list) {
+			list = [];
+			columnsByTable.set(tableName, list);
+		}
+		list.push({
+			name: String(row.column_name),
+			type: String(row.data_type),
+			nullable: row.is_nullable === "YES",
 		});
 	}
 
-	return tables;
-}
-
-/**
- * Introspect columns for a table
- */
-async function introspectColumns(
-	schemaName: string,
-	tableName: string,
-	attachedAs?: string,
-): Promise<Column[]> {
-	const escapedSchema = escapeStringLiteral(schemaName);
-	const escapedTableName = escapeStringLiteral(tableName);
-
-	const columnsQuery = attachedAs
-		? `SELECT
-         column_name,
-         data_type,
-         is_nullable
-       FROM information_schema.columns
-       WHERE table_catalog = ${escapeStringLiteral(attachedAs)}
-         AND table_schema = ${escapedSchema}
-         AND table_name = ${escapedTableName}
-       ORDER BY ordinal_position`
-		: `SELECT
-         column_name,
-         data_type,
-         is_nullable
-       FROM information_schema.columns
-       WHERE table_schema = ${escapedSchema}
-         AND table_name = ${escapedTableName}
-       ORDER BY ordinal_position`;
-
-	const columnsResult = await queryService.executeQueryOnConnector("duckdb", columnsQuery);
-	const columns: Column[] = [];
-
-	for (const colRow of columnsResult.rows) {
-		columns.push({
-			name: String(colRow.column_name),
-			type: String(colRow.data_type),
-			nullable: colRow.is_nullable === "YES",
-		});
-	}
-
-	return columns;
-}
-
-/**
- * Get row count for a table
- */
-async function getTableRowCount(
-	schemaName: string,
-	tableName: string,
-	attachedAs?: string,
-): Promise<number> {
+	// 3. Estimated row counts in one query via duckdb_tables().estimated_size,
+	//    replacing the per-table SELECT COUNT(*). Estimates are what mainstream
+	//    tools display for large catalogs; the exact count runs when the user
+	//    actually queries the table. Best-effort: if the pragma is unavailable
+	//    we simply omit counts. duckdb_tables() covers base tables only, so
+	//    views keep an undefined count (the explorer renders that cleanly).
+	const rowCountByTable = new Map<string, number>();
 	try {
-		// escapeIdentifier doubles embedded quotes — names inside an attached
-		// .duckdb file are attacker-controlled (a crafted DB attaches and
-		// auto-introspects), so raw interpolation here was an injection vector.
-		const fullTableName = attachedAs
-			? `${escapeIdentifier(attachedAs)}.${escapeIdentifier(schemaName)}.${escapeIdentifier(tableName)}`
-			: `${escapeIdentifier(schemaName)}.${escapeIdentifier(tableName)}`;
-
-		const countResult = await queryService.executeQueryOnConnector("duckdb", 
-			`SELECT COUNT(*) as cnt FROM ${fullTableName}`,
+		const dbFilter = attachedAs
+			? `database_name = ${escapeStringLiteral(attachedAs)} AND `
+			: "";
+		const estResult = await queryService.executeQueryOnConnector(
+			"duckdb",
+			`SELECT table_name, estimated_size
+         FROM duckdb_tables()
+         WHERE ${dbFilter}schema_name = ${escapedSchema}`,
 		);
-
-		if (countResult.rows.length > 0) {
-			return Number(countResult.rows[0].cnt);
+		for (const row of estResult.rows) {
+			if (row.estimated_size != null) {
+				rowCountByTable.set(
+					String(row.table_name),
+					Number(row.estimated_size),
+				);
+			}
 		}
 	} catch (error) {
-		logger.warn(`Failed to get row count for ${schemaName}.${tableName}:`, error);
+		logger.warn("Failed to load estimated row counts:", error);
 	}
 
-	return 0;
+	return tablesResult.rows.map((row) => {
+		const tableName = String(row.table_name);
+		return {
+			name: tableName,
+			schema: schemaName,
+			columns: columnsByTable.get(tableName) ?? [],
+			rowCount: rowCountByTable.get(tableName),
+			type: row.table_type === "VIEW" ? "view" : "table",
+		} as Table;
+	});
 }

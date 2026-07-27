@@ -599,7 +599,9 @@ export function DatabaseTree({
 																			{table.name}
 																		</span>
 																		<span className="tree-meta">
-																			{formatNumber(table.rowCount)} rows
+																			{table.rowCount != null
+																				? `~${formatNumber(table.rowCount)} rows`
+																				: ""}
 																		</span>
 																	</div>
 

@@ -370,8 +370,12 @@ class StreamingQueryService {
 	/**
 	 * Set up BigQuery connector with OAuth
 	 */
-	async setupBigQuery(clientId: string, clientSecret: string) {
-		return this.registry.bigquery.setup(clientId, clientSecret);
+	async setupBigQuery(
+		clientId: string,
+		clientSecret: string,
+		signal?: AbortSignal,
+	) {
+		return this.registry.bigquery.setup(clientId, clientSecret, signal);
 	}
 
 	/** Connect BigQuery with a pre-minted access token instead of OAuth. */

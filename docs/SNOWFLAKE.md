@@ -146,7 +146,7 @@ Wire-format quirks to expect: every cloud warehouse has them. The Snowflake list
 ```bash
 cd ~/dev/dbxlite
 pnpm dev
-# Visit http://localhost:5173 (or 5174 if 5173 is taken)
+# Visit http://localhost:5173 (the dev port is pinned; it fails loudly if busy)
 # Settings → Connections → Snowflake → Configure
 ```
 

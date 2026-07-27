@@ -43,6 +43,7 @@ vi.stubGlobal('crypto', {
     }
     return array
   },
+  randomUUID: () => '00000000-0000-4000-8000-000000000000',
   subtle: {
     digest: vi.fn().mockResolvedValue(new ArrayBuffer(32)),
   },
@@ -135,6 +136,33 @@ describe('BigQueryConnector', () => {
           obtained_at: expect.any(Number)
         })
       )
+    })
+
+    it('rejects gracefully when the abort signal is already aborted', async () => {
+      const popup = { close: vi.fn() }
+      ;(window.open as Mock).mockReturnValue(popup)
+      const controller = new AbortController()
+      controller.abort()
+
+      await expect(
+        connector.connect({ options: { signal: controller.signal } }),
+      ).rejects.toThrow(/cancel/i)
+      // The popup is closed rather than left orphaned.
+      expect(popup.close).toHaveBeenCalled()
+    })
+
+    it('rejects when the OAuth wait is cancelled mid-flight', async () => {
+      const popup = { close: vi.fn() }
+      ;(window.open as Mock).mockReturnValue(popup)
+      const controller = new AbortController()
+
+      const p = connector.connect({ options: { signal: controller.signal } })
+      // Let connect open the popup and register listeners, then cancel.
+      await Promise.resolve()
+      controller.abort()
+
+      await expect(p).rejects.toThrow(/cancel/i)
+      expect(popup.close).toHaveBeenCalled()
     })
 
     it('should refresh expired tokens', async () => {

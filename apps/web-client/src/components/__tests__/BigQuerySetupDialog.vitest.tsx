@@ -108,6 +108,7 @@ describe("BigQuerySetupDialog", () => {
 			expect(mocks.setupBigQuery).toHaveBeenCalledWith(
 				"abc.apps.googleusercontent.com",
 				"",
+				expect.any(AbortSignal),
 			);
 		});
 
@@ -120,7 +121,11 @@ describe("BigQuerySetupDialog", () => {
 				fireEvent.click(screen.getByText("Connect"));
 			});
 
-			expect(mocks.setupBigQuery).toHaveBeenCalledWith("abc", "GOCSPX-x");
+			expect(mocks.setupBigQuery).toHaveBeenCalledWith(
+				"abc",
+				"GOCSPX-x",
+				expect.any(AbortSignal),
+			);
 		});
 
 		it("explains a redirect_uri_mismatch instead of echoing the code", async () => {

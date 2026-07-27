@@ -13,6 +13,7 @@ import {
 import { createLogger } from "../utils/logger";
 import { formatQueryError } from "../utils/queryErrorFormatter";
 import { extractQueryAtCursor } from "../utils/queryExtractor";
+import { rewriteXlsxReferences } from "../utils/xlsxQuery";
 import { getTrailingLimit } from "../utils/sqlPagination";
 import { formatExecutionTime } from "../utils/timeFormatter";
 import { detectRemoteURLs } from "../utils/urlDetector";
@@ -237,12 +238,17 @@ export function useQueryExecution({
 		const cursorPosition = editorRef.current.getCursorPosition();
 
 		// Extract the query to execute (selected text or query at cursor)
-		const sql = extractQueryAtCursor(fullText, cursorPosition, selectedText);
+		const extracted = extractQueryAtCursor(fullText, cursorPosition, selectedText);
 
-		if (!sql.trim()) {
+		if (!extracted.trim()) {
 			updateTab(activeTabId, { error: "Please enter a SQL query" });
 			return;
 		}
+
+		// Read registered .xlsx sources through read_xlsx(..., all_varchar=true)
+		// so a column that sniffs as numeric but holds text later doesn't fail
+		// the whole query. No-op when the SQL references no registered xlsx file.
+		const sql = rewriteXlsxReferences(extracted, dataSources);
 
 		// Track which connector to use for this execution
 		// Start with the currently selected connector, may be updated by auto-detection

@@ -42,7 +42,7 @@ interface DataSourceExplorerProps {
 	onBigQueryCacheClear?: (clearFn: () => void) => void;
 	onBigQueryDataLoad?: (loadFn: () => Promise<void>) => void;
 	onLocalDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
-	onServerDatabaseRefresh?: (refreshFn: () => Promise<void>) => void;
+	onServerDatabaseRefresh?: (refreshFn: (() => Promise<void>) | null) => void;
 	onOpenExamples?: () => void;
 	onOpenServerSettings?: () => void;
 }

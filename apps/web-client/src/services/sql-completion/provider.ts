@@ -19,6 +19,7 @@ import {
 import type { AutocompleteMode } from "../../stores/settingsStore";
 import type { DataSource } from "../../types/data-source";
 import { createLogger } from "../../utils/logger";
+import { extractQueryAtCursor } from "../../utils/queryExtractor";
 import { parseTableAliases } from "./alias-resolver";
 import {
 	detectSQLContext,
@@ -33,6 +34,9 @@ const logger = createLogger("SQLCompletion");
 
 /** A Snowflake identifier safe to leave unquoted: bare uppercase token. */
 const SNOWFLAKE_SAFE_BARE = /^[A-Z_][A-Z0-9_$]*$/;
+
+/** A generic SQL identifier safe to leave unquoted. */
+const SAFE_BARE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /**
  * Wrap an identifier in the quoting style required by the source's dialect:
@@ -68,6 +72,28 @@ function quoteIdentifier(
 }
 
 /**
+ * Quote a COLUMN identifier. Distinct from `quoteIdentifier`, which quotes a
+ * table/source reference: a file source's *reference* is single-quoted
+ * (`FROM 'foo.parquet'`), but its *columns* are ordinary SQL identifiers, so
+ * single-quoting them would produce a string literal and a parser error
+ * (`SELECT x.'airline'`). Columns are left bare when safe, otherwise quoted
+ * with the dialect's identifier delimiter.
+ */
+function quoteColumn(name: string, sourceType: string | undefined): string {
+	if (sourceType === "bigquery") {
+		return SAFE_BARE_IDENT.test(name) ? name : `\`${name.replace(/`/g, "")}\``;
+	}
+	if (sourceType === "snowflake") {
+		return SNOWFLAKE_SAFE_BARE.test(name)
+			? name
+			: `"${name.replace(/"/g, '""')}"`;
+	}
+	// DuckDB, file sources, and everything else use standard double-quote
+	// identifier quoting, and only when the bare form wouldn't parse.
+	return SAFE_BARE_IDENT.test(name) ? name : `"${name.replace(/"/g, '""')}"`;
+}
+
+/**
  * Dependencies the provider needs at suggestion time. Both are
  * read-on-each-keystroke so updates to mode or data sources don't
  * require re-registering with Monaco.
@@ -100,6 +126,19 @@ export interface CompletionProviderDeps {
 		databaseName?: string;
 		schemaName?: string;
 	}) => Promise<string[] | null>;
+	/**
+	 * Non-blocking, cache-aware variant of `fetchColumns`, preferred when
+	 * present. Returns synchronously: cached columns if known, `{ loading }`
+	 * if a background fetch was kicked off (the caller should re-trigger
+	 * completion when it lands), or `null` if unresolvable. This is what lets
+	 * the popup show a "Loading columns…" placeholder instead of appearing
+	 * empty on the first `x.` against a not-yet-cached cloud table.
+	 */
+	lookupColumns?: (ref: {
+		tableName: string;
+		databaseName?: string;
+		schemaName?: string;
+	}) => { columns: string[] } | { loading: true } | null;
 	/** Monaco namespace; passed in to avoid re-importing inside the factory. */
 	monaco: typeof monaco;
 }
@@ -110,7 +149,7 @@ export interface CompletionProviderDeps {
 export function createCompletionProvider(
 	deps: CompletionProviderDeps,
 ): monaco.languages.CompletionItemProvider {
-	const { getMode, getDataSources, getDialect, fetchColumns, monaco: m } = deps;
+	const { getMode, getDataSources, getDialect, fetchColumns, lookupColumns, monaco: m } = deps;
 
 	return {
 		triggerCharacters: [" ", ".", "("],
@@ -198,14 +237,22 @@ export function createCompletionProvider(
 				return ranked as unknown as monaco.languages.CompletionItem[];
 			};
 
-			// Parse CTE names and table aliases from the WHOLE query, not just
-			// text-before-cursor: a column reference in the SELECT list
-			// (`SELECT a.|`) is typed before its FROM-clause alias, so a
-			// cursor-bounded view can't yet see that `a` aliases which table.
+			// Parse CTE names and table aliases from the CURRENT STATEMENT, not
+			// text-before-cursor and not the whole editor:
+			//   - Whole-statement (not before-cursor): a column reference in the
+			//     SELECT list (`SELECT a.|`) is typed before its FROM-clause
+			//     alias, so a cursor-bounded view can't yet see what `a` aliases.
+			//   - Statement-scoped (not whole editor): two statements can reuse
+			//     the same alias (`... as x` twice). Parsing the whole editor
+			//     lets the other statement's `x` shadow this one, offering columns
+			//     from the wrong source. extractQueryAtCursor respects ; inside
+			//     strings and comments.
 			// Context detection and dot-prefix parsing stay cursor-based above.
 			const fullText = model.getValue();
-			const cteNames = parseCTENames(fullText);
-			const aliases = parseTableAliases(fullText, cteNames);
+			const statementText =
+				extractQueryAtCursor(fullText, model.getOffsetAt(position)) || fullText;
+			const cteNames = parseCTENames(statementText);
+			const aliases = parseTableAliases(statementText, cteNames);
 			const aliasMap = new Map(aliases.map((a) => [a.alias, a]));
 
 			// Build sets of known names for matching
@@ -266,14 +313,32 @@ export function createCompletionProvider(
 			// qualified ref gives project/dataset/table), we ask the connector
 			// directly; the result is connector-cached, so the first `x.` pays
 			// one round trip and the rest are instant.
+			type ResolvedColumns =
+				| { columns: string[]; sourceType?: string }
+				| { loading: true }
+				| null;
 			const resolveColumns = async (
 				table: (typeof schema.tables)[number] | undefined,
 				ref: { tableName: string; databaseName?: string; schemaName?: string },
-			): Promise<{ columns: string[]; sourceType?: string } | null> => {
+			): Promise<ResolvedColumns> => {
 				if (table && table.columns.length > 0) {
 					return { columns: table.columns, sourceType: table.sourceType };
 				}
-				if (fetchColumns) {
+				// Preferred path: non-blocking, cache-aware lookup. Returns
+				// immediately with cached columns or a loading marker (a
+				// background fetch was started and will re-trigger completion).
+				if (lookupColumns) {
+					const looked = lookupColumns(ref);
+					if (looked && "loading" in looked) return { loading: true };
+					if (looked && looked.columns.length > 0) {
+						return {
+							columns: looked.columns,
+							sourceType: table?.sourceType ?? activeDialect,
+						};
+					}
+				} else if (fetchColumns) {
+					// Legacy blocking path (kept for callers/tests that wire the
+					// async fetch directly).
 					const fetched = await fetchColumns(ref).catch((err) => {
 						logger.debug("On-demand column fetch failed", err);
 						return null;
@@ -289,6 +354,22 @@ export function createCompletionProvider(
 					? { columns: table.columns, sourceType: table.sourceType }
 					: null;
 			};
+
+			// A single, non-selectable placeholder shown while a cloud table's
+			// columns are being fetched. sortText pins it to the top; empty
+			// filterText keeps it visible as the user's partial word changes.
+			const loadingColumnsItem = (
+				tableName: string,
+			): monaco.languages.CompletionItem => ({
+				label: `Loading columns for ${tableName}…`,
+				kind: m.languages.CompletionItemKind.Text,
+				insertText: "",
+				detail: "Refreshing metadata — suggestions appear when ready",
+				documentation: `dbxlite is fetching columns for ${tableName}. This list updates automatically once the metadata loads.`,
+				sortText: " ",
+				filterText: "",
+				range,
+			});
 
 			// Handle dot notation (e.g., "x." for alias, "data." for database, "data.main." for schema)
 			// Qualified/alias dot-resolution runs in lite too: it is scoped by a
@@ -335,12 +416,17 @@ export function createCompletionProvider(
 							databaseName: aliasInfo.databaseName,
 							schemaName: aliasInfo.schemaName,
 						});
+						if (resolved && "loading" in resolved) {
+							return {
+								suggestions: [loadingColumnsItem(aliasInfo.tableName)],
+							};
+						}
 						if (resolved && resolved.columns.length > 0) {
 							for (const c of resolved.columns) {
 								suggestions.push({
 									label: c,
 									kind: m.languages.CompletionItemKind.Field,
-									insertText: quoteIdentifier(c, resolved.sourceType),
+									insertText: quoteColumn(c, resolved.sourceType),
 									detail: `Column (${aliasInfo.tableName})`,
 									documentation: `Column from ${aliasInfo.tableName} (alias: ${prefix})`,
 									range,
@@ -409,12 +495,15 @@ export function createCompletionProvider(
 							databaseName: table?.databaseName,
 							schemaName: table?.schemaName,
 						});
+						if (resolved && "loading" in resolved) {
+							return { suggestions: [loadingColumnsItem(prefix)] };
+						}
 						if (resolved) {
 							for (const c of resolved.columns) {
 								suggestions.push({
 									label: c,
 									kind: m.languages.CompletionItemKind.Field,
-									insertText: quoteIdentifier(c, resolved.sourceType),
+									insertText: quoteColumn(c, resolved.sourceType),
 									detail: "Column",
 									documentation: `Column: ${prefix}.${c}`,
 									range,
@@ -454,12 +543,15 @@ export function createCompletionProvider(
 						databaseName: dbName,
 						schemaName,
 					});
+					if (resolved && "loading" in resolved) {
+						return { suggestions: [loadingColumnsItem(tableName)] };
+					}
 					if (resolved) {
 						for (const c of resolved.columns) {
 							suggestions.push({
 								label: c,
 								kind: m.languages.CompletionItemKind.Field,
-								insertText: quoteIdentifier(c, resolved.sourceType),
+								insertText: quoteColumn(c, resolved.sourceType),
 								detail: `Column (${tableName})`,
 								documentation: `Column: ${dbName}.${schemaName}.${tableName}.${c}`,
 								range,
@@ -540,7 +632,7 @@ export function createCompletionProvider(
 						suggestions.push({
 							label: c,
 							kind: m.languages.CompletionItemKind.Field,
-							insertText: quoteIdentifier(c, t.sourceType),
+							insertText: quoteColumn(c, t.sourceType),
 							detail: `Column from ${t.name}`,
 							documentation: `Column: ${t.name}.${c}`,
 							range,
@@ -568,7 +660,7 @@ export function createCompletionProvider(
 						suggestions.push({
 							label: c,
 							kind: m.languages.CompletionItemKind.Field,
-							insertText: quoteIdentifier(c, t.sourceType),
+							insertText: quoteColumn(c, t.sourceType),
 							detail: `Column from ${t.name}`,
 							documentation: `Column: ${t.name}.${c}`,
 							range,

@@ -228,6 +228,17 @@ export class BigQueryConnector implements CloudConnector {
       throw new Error('Failed to open OAuth popup. Please allow popups and try again.')
     }
 
+    // Optional cancellation signal (e.g. a Cancel button in the setup UI).
+    const signal = config.options.signal as AbortSignal | undefined
+    if (signal?.aborted) {
+      try { w.close() } catch { /* may already be gone */ }
+      throw new Error('Google sign-in cancelled.')
+    }
+    // Grace after focus returns before concluding the popup was closed without
+    // finishing, and the hard ceiling on the whole consent wait.
+    const CANCEL_GRACE_MS = 2000
+    const OAUTH_TIMEOUT_MS = 120000
+
     // Clear any previous OAuth data
     try {
       localStorage.removeItem('bigquery_oauth_response')
@@ -242,18 +253,20 @@ export class BigQueryConnector implements CloudConnector {
     //      from another document — works across the cross-origin redirect)
     //   3. localStorage poll (covers browser quirks where storage events drop)
     //
-    // We deliberately do NOT poll `popup.closed` to detect cancellation:
-    // under Cross-Origin-Opener-Policy: same-origin (set by the dev server
-    // for DuckDB threading), the parent's popup reference becomes a
-    // browsing-context-less Window once the popup navigates cross-origin —
-    // `popup.closed` then reports `true` even while Google's consent screen
-    // is still live, producing false-positive "cancelled by user" rejects.
-    //
-    // 5-minute hard ceiling bounds the wait. If the user genuinely
-    // X's the popup, they'll see the timeout error after 5 minutes — the
-    // trade-off vs unreliable cancel detection.
+    // We can't poll `popup.closed` to detect cancellation: under
+    // Cross-Origin-Opener-Policy: same-origin (required for the OPFS streaming
+    // export path's cross-origin isolation), the popup reference becomes a
+    // browsing-context-less Window once it navigates to Google — `popup.closed`
+    // then reads `true` while the consent screen is still live, which would
+    // produce false "cancelled" rejects. Instead we detect a closed/cancelled
+    // popup via the opener regaining focus (see the focus heuristic below), and
+    // accept an explicit AbortSignal so the UI can offer a Cancel button.
     const code = await new Promise<string>((resolve, reject) => {
       let resolved = false
+      let graceTimer: ReturnType<typeof setTimeout> | null = null
+      // Only arm the focus heuristic once the popup has actually taken focus
+      // from us, so we never fire before it opened.
+      let sawBlur = false
 
       const settle = (codeOrError: { code: string } | { error: string }) => {
         if (resolved) return
@@ -312,19 +325,67 @@ export class BigQueryConnector implements CloudConnector {
         }
       }
 
+      // Focus-return cancellation heuristic. The popup grabs focus on open;
+      // when it closes — or the user returns to this window — focus comes back
+      // here. If focus returns and no code/error lands within a short grace
+      // window, treat the popup as closed/cancelled and reject gracefully
+      // rather than hanging until the timeout. A genuine redirect delivers its
+      // result well inside the grace window, so success is unaffected.
+      const armGrace = () => {
+        if (resolved || graceTimer || !sawBlur) return
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+        graceTimer = setTimeout(() => {
+          graceTimer = null
+          if (!resolved) {
+            settle({
+              error:
+                'Google sign-in was cancelled or the window was closed before finishing. Please try again.'
+            })
+          }
+        }, CANCEL_GRACE_MS)
+      }
+      const clearGrace = () => {
+        if (graceTimer) { clearTimeout(graceTimer); graceTimer = null }
+      }
+      const onWindowBlur = () => { sawBlur = true; clearGrace() }
+      const onWindowFocus = () => { armGrace() }
+      const onVisibility = () => {
+        if (document.visibilityState === 'hidden') { sawBlur = true; clearGrace() }
+        else armGrace()
+      }
+      const onAbort = () => settle({ error: 'Google sign-in cancelled.' })
+
       const cleanup = () => {
         clearTimeout(timeout)
         clearInterval(pollInterval)
+        clearGrace()
         window.removeEventListener('message', handleMessage)
         window.removeEventListener('storage', handleStorage)
+        window.removeEventListener('blur', onWindowBlur)
+        window.removeEventListener('focus', onWindowFocus)
+        if (typeof document !== 'undefined') {
+          document.removeEventListener('visibilitychange', onVisibility)
+        }
+        signal?.removeEventListener('abort', onAbort)
       }
 
       window.addEventListener('message', handleMessage)
       window.addEventListener('storage', handleStorage)
+      window.addEventListener('blur', onWindowBlur)
+      window.addEventListener('focus', onWindowFocus)
+      if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', onVisibility)
+      }
+      signal?.addEventListener('abort', onAbort)
+      // Catch an abort that landed between the pre-check and now, since the
+      // 'abort' event won't fire again for an already-aborted signal.
+      if (signal?.aborted) { onAbort(); return }
 
+      // Hard ceiling on the wait, reduced from 5 minutes now that a closed
+      // popup is caught far sooner by the focus heuristic and the Cancel button.
       const timeout = setTimeout(() => {
-        settle({ error: 'OAuth timeout — no response after 5 minutes. Try again.' })
-      }, 300000)
+        settle({ error: 'OAuth timeout — no response after 2 minutes. Try again.' })
+      }, OAUTH_TIMEOUT_MS)
 
       // Belt-and-suspenders 500ms localStorage poll for browsers where the
       // `storage` event drops or fires unreliably.

@@ -95,7 +95,9 @@ Files are handled five different ways depending on how they enter the app:
 
 ### DuckDB in-memory
 
-DuckDB runs `:memory:` in WASM mode. OPFS-backed persistence is blocked by [duckdb-wasm#1322](https://github.com/duckdb/duckdb-wasm/discussions/1322) and related issues. Implications: `CREATE TABLE` results are session-only; export anything you need to keep.
+DuckDB runs `:memory:` in WASM mode. OPFS-backed *database* persistence is blocked by [duckdb-wasm#1322](https://github.com/duckdb/duckdb-wasm/discussions/1322) and related issues (COI-worker OPFS crashes, temp-directory bugs), so the database itself lives in RAM. Implications: `CREATE TABLE` results are session-only; export anything you need to keep. Large source files are not copied into RAM wholesale: they are read through File System Access handles (Parquet via range reads), so a file can be larger than the query working set.
+
+OPFS *is* used, in one place: as a staging area for large Parquet exports. DuckDB writes the finished file to an OPFS file and the main thread streams it to the user's chosen destination without ever holding the whole file in memory. See [Export](#export) below. This is file staging, not database persistence, so it sidesteps the persistence bugs above.
 
 ### Browser requirements
 
@@ -141,9 +143,9 @@ sequenceDiagram
     Worker-->>Main: done
 ```
 
-Worker → main: `inited`, `error`, `json-schema`, `json`, `arrow`, `file_registered`, `file_buffer`, `cancelled`, `query-stats`, `done`.
+Worker → main: `inited`, `error`, `json-schema`, `json`, `arrow`, `file_registered`, `file_buffer`, `file_dropped`, `cancelled`, `query-stats`, `done`, plus the OPFS-export replies `opfs_output_registered`, `opfs_output_released`, `opfs_probe_result`.
 
-Main → worker: `init`, `run`, `register_file`, `copy_file_to_buffer`, `register_file_handle`, `cancel`, `ack`.
+Main → worker: `init`, `run`, `register_file`, `copy_file_to_buffer`, `register_file_handle`, `drop_file`, `cancel`, `ack`, plus the OPFS-export ops `opfs_register_output`, `opfs_release_output`, `opfs_probe` (see [Export](#export)).
 
 `MAX_OUTSTANDING = 2` and `MAX_CHUNK_BYTES = 5MB` cap memory while the grid catches up.
 
@@ -175,6 +177,73 @@ A streaming-mode snapshot cache (`apps/web-client/src/components/table/hooks/use
 
 ---
 
+## Query service (composition root)
+
+`apps/web-client/src/services/streaming-query-service.ts` is the single entry point every query flows through, exported as the `queryService` singleton. It used to be a ~1,950-line god object; it is now a thin facade whose public methods delegate to focused collaborators it owns. The public API (method names and signatures) did not change during the decomposition, so call sites were untouched.
+
+Collaborators live in `apps/web-client/src/services/query/`:
+
+| Collaborator | Responsibility |
+|---|---|
+| `ConnectorRegistry` | The connector Map, the active-connector selection, operating mode, and the connector event surface (below). Owns the per-connector lifecycles. |
+| `BigQueryLifecycle` / `SnowflakeLifecycle` | Connect / restore / reconnect / disconnect orchestration, including the credential store and OAuth redirect (composition-root concerns kept out of the connectors). |
+| `PaginationPlanner` | Decides the SQL a page fetch runs: temp-table materialization with `ORDER BY rowid` for stable DuckDB paging, or the legacy trailing-`LIMIT` fallback. |
+| `RowCountEstimator` | `getRowCount` with a TTL cache and per-connector strategies (BigQuery `LIMIT 0` metadata, DuckDB `EXPLAIN`, Snowflake `COUNT(*)` with a combined-signal timeout). |
+| `QueryExecutor` | `executeQuery` / `executeStreamingQuery` / `getPage`, the per-query `SET timezone` sniff, and BigInt/Arrow value conversion. |
+| `AbortRegistry` | In-flight query controllers; `cancel` / `cancelAll`. |
+| `FileVfs` | DuckDB virtual-filesystem register / drop / copy. |
+
+Collaborators receive their dependencies by plain constructor injection (an `ExecuteOnConnector` port, a mode reader, etc.), so each is unit-tested in isolation. Cloud catalog reads use a typed `CatalogCapable` narrow (`services/query/catalog-capable.ts`) instead of the old string-keyed reflection guards.
+
+### Connector events
+
+Consumers used to discover connection state by polling on `setInterval`. They now subscribe to an event surface on the registry, reusing the shape of the existing `onSchemaChange`:
+
+```ts
+queryService.onConnectorState((e) => { /* statusChange | sessionContextChange */ }): () => void
+```
+
+Events are keyed by connector **slot**, not instance, because every reconnect builds a fresh connector (`new BigQueryConnector(...)`) and disconnect deletes the slot. The registry subscribes to each connector it installs and re-emits on the stable slot key, so a subscription survives reconnects. Connectors carry a tiny `ConnectorStateEmitter` (`packages/connectors/src/connector-state.ts`) that emits at real transitions, including the request-failure path: a `401` emits `disconnected` with reason `auth` (invalidates cached catalog), while a `503` / network blip emits nothing (`classifyAuthFailure`), so a flaky network cannot wipe the autocomplete catalog.
+
+This retired ten state-sync polling loops. Two remaining remote probes (connection health, warehouse compute status) are single ref-counted probes rather than per-component intervals. File-System-Access permission is re-checked on `visibilitychange` / `focus` plus a slow safety poll (`hooks/usePermissionRecheck.ts`).
+
+---
+
+## Export
+
+Exporting a result is a strategy dispatch (`components/table/exporters/`). `pickStrategy` chooses the first strategy whose `canHandle` matches; each owns one path from "user clicked Export" to "file on disk".
+
+| Strategy | When | How |
+|---|---|---|
+| `duckdbCopy` | DuckDB, any format | `COPY (sql) TO file (FORMAT …)` inside the engine; reports the row count DuckDB returns |
+| `cloudStreaming` | BigQuery / Snowflake, Parquet | re-runs the query, streams chunks through DuckDB's Parquet writer |
+| `cloudStreamingText` | BigQuery / Snowflake, CSV / JSON | re-runs the query, serializes each chunk straight to the file (no buffer, no cap) |
+| `preloaded` | fallback | writes the in-memory result rows; used only when they are provably complete |
+
+Key behaviors:
+
+- **Full result, not the grid.** The grid is a capped preview. `computeExportSql` (`exporters/exportSql.ts`) re-runs the query for the full set unless the in-memory buffer is provably complete (via `serverTotalRows` or the row estimate), so a non-virtual BigQuery result no longer exports just the first page.
+- **Cost / scope confirmation.** A cloud export re-scans the source (BigQuery bills by bytes). Before it runs, a dialog shows the estimate (BigQuery dry-run) and states that it re-runs the query. Declining runs nothing. DuckDB is local and skips the dialog.
+- **OPFS-streamed Parquet.** When a runtime probe confirms OPFS works, `cloudStreaming` has DuckDB `COPY` the Parquet to an OPFS file, then streams it to the Save-picker destination with `file.stream().pipeTo(writable)` — no whole-file buffer, no row cap. If the probe fails (unsupported browser, no cross-origin isolation), it falls back to the buffered path with a visible row cap and a loud truncation warning. The probe gates everything, so the fallback keeps every scenario working.
+- **Compression.** The Parquet codec is a setting (`parquetCompression`: zstd default, snappy, gzip, none), applied to the final file.
+- **Cancellation.** ESC opens a confirm dialog; confirming aborts. The abort signal is threaded into `connector.query(sql, { signal })`, so cancel stops the fetch loop and cancels the server-side job (BigQuery, Snowflake).
+
+---
+
+## Engine detection
+
+`utils/queryEngineDetector.ts` guesses which engine a query targets so the app can suggest or auto-switch the active connector. It is best-effort by design: most analytical SQL is ambiguous, and guessing wrong is worse than not guessing.
+
+Three tiers, and only the first auto-switches:
+
+1. **Definitive** — syntax only one engine can parse. A backtick `project.dataset.table` is BigQuery; `read_parquet(...)` or `FROM '<file/url>'` is DuckDB; `@stage` or `USE WAREHOUSE` is Snowflake. A definitive match on the clear-winner engine forces high confidence.
+2. **Lean** — suggestive functions (`PARSE_JSON` vs `->>`); adds score, never forces.
+3. **Ambiguous** — plain ANSI SQL; returns unknown, no switch.
+
+Detection matches on comment-stripped SQL (`stripSqlComments`) so a commented-out or string-literal token cannot trigger a switch (the `@stage` pattern is also anchored so an email literal cannot masquerade as a stage). A **catalog-aware** override (`engineDetectors/catalogDetector.ts`) resolves the genuinely ambiguous bare `db.schema.table`: if the leading name matches an attached DuckDB object, it is DuckDB. Action is gated by mode: `suggest` fires on medium-or-better with a non-blocking toast; `auto` switches only on high confidence.
+
+---
+
 ## BigQuery integration
 
 Google APIs support CORS, so no proxy is needed. The connector talks directly to GCP from the browser.
@@ -196,9 +265,19 @@ sequenceDiagram
 |----------|---------|
 | `accounts.google.com/o/oauth2/v2/auth` | Authorization |
 | `oauth2.googleapis.com/token` | Token exchange |
-| `cloudresourcemanager.googleapis.com/v1/projects` | List projects |
+| `bigquery.googleapis.com/bigquery/v2/projects` | List projects (primary) |
+| `cloudresourcemanager.googleapis.com/v1/projects` | List projects (fallback, richer metadata) |
 | `bigquery.googleapis.com/.../datasets` | List datasets |
 | `bigquery.googleapis.com/.../queries` | Execute query |
+
+Project listing tries BigQuery's own `projects.list` first (needs only the `bigquery` scope and the already-required API) and falls back to Cloud Resource Manager for richer names. A disabled API returns 403; that is caught so the fallback still runs rather than stranding the user on an empty list.
+
+Scopes are kept minimal (`bigquery`, `cloudplatformprojects.readonly`, `userinfo.email`, `openid`); the broad `cloud-platform` scopes were dropped because they granted nothing the app calls while rendering as the alarming "see, edit, configure, and delete your Google Cloud data" line on the consent screen.
+
+Two auth modes:
+
+- **OAuth** — the PKCE popup flow above. A staged setup wizard (`components/BigQuerySetupDialog.tsx`, `components/bigquery/SetupStep.tsx`) walks through consent-screen setup, test-user registration, and the redirect URI, then runs a post-connect preflight (`services/bigquery-preflight.ts`) that verifies projects list and a test query run, mapping failures to the exact step. The client secret is optional (the flow uses PKCE).
+- **Token** — paste an access token from `gcloud auth print-access-token`. No Cloud Console setup; the token is short-lived and carries no refresh token, so it suits trials rather than daily use.
 
 OAuth refresh-token races are coalesced via an in-flight `refreshPromise` lock; concurrent expired-access-token requests share a single token-exchange call.
 
@@ -360,11 +439,15 @@ State lives in three places by intent:
 
 | Surface | Files |
 |---|---|
-| Connector base + DuckDB | `packages/connectors/src/{base,duckdb-connector,duckdb-http-connector}.ts` |
+| Connector base + DuckDB | `packages/connectors/src/{base,duckdb-connector,duckdb-http-connector,connector-state}.ts` |
 | Cloud connectors | `packages/connectors/src/{bigquery-connector,snowflake-connector,transport}.ts` |
 | DuckDB WASM bridge | `packages/duckdb-wasm-adapter/src/{worker,index}.ts` |
 | Encrypted storage | `packages/storage/src/index.ts` |
-| Query lifecycle | `apps/web-client/src/{services/streaming-query-service.ts,hooks/useQueryExecution.ts}` |
+| Query service facade + collaborators | `apps/web-client/src/services/streaming-query-service.ts`, `apps/web-client/src/services/query/` |
+| Query execution hook | `apps/web-client/src/hooks/useQueryExecution.ts` |
+| Export strategies | `apps/web-client/src/components/table/exporters/` |
+| Engine detection | `apps/web-client/src/utils/{queryEngineDetector.ts,engineDetectors/}` |
+| BigQuery onboarding | `apps/web-client/src/components/{BigQuerySetupDialog.tsx,bigquery/}`, `apps/web-client/src/services/bigquery-preflight.ts` |
 | Type normalization | `apps/web-client/src/utils/{dataTypes,formatters}.ts` |
 | Catalog explorer | `apps/web-client/src/providers/catalog/` |
 | AI bridge | `apps/web-client/src/services/ai/` |

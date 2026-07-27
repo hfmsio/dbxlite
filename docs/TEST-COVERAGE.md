@@ -19,19 +19,28 @@ pnpm e2e:ui      # E2E with interactive UI
 
 ```
 apps/web-client/
-├── e2e/                    # Playwright E2E tests
+├── e2e/                                   # Playwright E2E tests
 ├── src/
-│   ├── hooks/__tests__/    # React hook tests
-│   ├── utils/__tests__/    # Utility function tests
-│   └── components/table/__tests__/
+│   ├── hooks/__tests__/                   # React hook tests
+│   ├── utils/__tests__/                   # Utility function tests
+│   ├── utils/engineDetectors/__tests__/   # Engine auto-detection
+│   ├── utils/sharingProviders/__tests__/  # URL / gist sharing
+│   ├── services/query/__tests__/          # Query-service collaborators
+│   ├── services/ai/__tests__/             # AI backends and prompts
+│   ├── services/sql-completion/__tests__/ # SQL autocomplete
+│   ├── providers/catalog/__tests__/       # Catalog providers
+│   ├── components/table/__tests__/        # Result grid
+│   ├── components/table/exporters/__tests__/  # Export strategies
+│   └── components/ai/__tests__/           # AI chat UI
 packages/
-├── duckdb-wasm-adapter/src/*.test.ts
-└── connectors/src/__tests__/
+├── duckdb-wasm-adapter/src/**/*.test.ts
+├── connectors/src/__tests__/
+└── storage/src/__tests__/
 ```
 
 ## Coverage Summary
 
-**Total: 998 passing + 10 documented skips across 45 test files** (last verified 2026-05).
+**Total: 1642 passing + 10 documented skips across 84 test files** (last verified 2026-07).
 
 Highlight test suites:
 
@@ -45,11 +54,11 @@ Highlight test suites:
 | `urlParams.vitest.ts` | 27 | URL-shareable query parameters. |
 | `queryExtractor.vitest.ts` | 27 | SQL extraction from AI chat responses. |
 | `BaseConnector contract.test.ts` | 17 | Connector contract — parameterized over BigQuery + Snowflake (DuckDB skipped, jsdom limitation). |
-| Others (~38 files) | ~660 | Hooks, components, utilities, state management. |
+| Others (~76 files) | ~1300 | Hooks, components, utilities, query-service collaborators, exporters, engine detection, state management. |
 
 Documented skips (10 total): BigQuery OAuth event-loop tests that didn't translate cleanly from jest to vitest+jsdom — diagnostic-led un-skip pending.
 
-Run `pnpm --filter @ide/web-client test` from the repo root to verify counts. Vitest 2.1 (since 2026-04-27) runs the full suite in ~6 seconds.
+Run `pnpm --filter @ide/web-client test` from the repo root to verify counts. Vitest runs the full suite in ~9 seconds.
 
 ## Writing Tests
 

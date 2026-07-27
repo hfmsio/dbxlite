@@ -61,3 +61,5 @@ plans/
 test-results/
 *.local
 
+.vercel
+.env*.local

@@ -33,10 +33,19 @@ export async function introspectFileSchema(
 		? escapeIdentifier(dataSource.tableName)
 		: escapeStringLiteral(dataSource.filePath ?? "");
 
+	// xlsx is read through read_xlsx(..., all_varchar=true) rather than the bare
+	// replacement scan: default sniffing types a column from an early sample and
+	// then fails (or here, mistypes) when a later cell doesn't match. all_varchar
+	// keeps every column as text, matching how xlsx queries actually execute.
+	const source =
+		dataSource.type === "xlsx" && dataSource.filePath
+			? `read_xlsx(${escapeStringLiteral(dataSource.filePath)}, all_varchar=true)`
+			: tableName;
+
 	try {
 		// Use DESCRIBE to get column information (metadata only, doesn't scan data)
-		const describeResult = await queryService.executeQueryOnConnector("duckdb", 
-			`DESCRIBE SELECT * FROM ${tableName} LIMIT 1`,
+		const describeResult = await queryService.executeQueryOnConnector("duckdb",
+			`DESCRIBE SELECT * FROM ${source} LIMIT 1`,
 		);
 
 		const columns: Column[] = describeResult.rows.map((row) => ({
@@ -48,8 +57,8 @@ export async function introspectFileSchema(
 		// Get row count
 		let rowCount: number | undefined;
 		try {
-			const countResult = await queryService.executeQueryOnConnector("duckdb", 
-				`SELECT COUNT(*) as cnt FROM ${tableName}`,
+			const countResult = await queryService.executeQueryOnConnector("duckdb",
+				`SELECT COUNT(*) as cnt FROM ${source}`,
 			);
 			if (countResult.rows.length > 0) {
 				rowCount = Number(countResult.rows[0].cnt);

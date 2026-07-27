@@ -6,13 +6,13 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 
-A SQL workbench that handles real data, in your browser. OPFS-backed WASM mode opens files limited only by your disk size. The result grid streams arbitrarily large sets via virtual scrolling. One UI for DuckDB, BigQuery, and Snowflake. Server mode is a drop-in replacement for `duckdb -ui`.
+A SQL workbench that handles real data, in your browser. WASM mode reads local files through File System Access handles on demand instead of loading them into RAM, so you can query files larger than browser memory. The result grid streams arbitrarily large sets via virtual scrolling. One UI for DuckDB, BigQuery, and Snowflake. Server mode is a drop-in replacement for `duckdb -ui`.
 
 **Try it now (no install):** [sql.dbxlite.com](https://sql.dbxlite.com)
 
 ## Highlights
 
-- **Disk-sized files in WASM mode.** OPFS-backed persistence opens multi-gigabyte CSV / Parquet / JSON files in the browser without hitting the 2-4 GB RAM ceiling that kills other in-browser tools.
+- **Files larger than RAM in WASM mode.** DuckDB reads local files through File System Access handles on demand (Parquet by range reads) instead of loading them into memory, so multi-gigabyte CSV / Parquet / JSON files open without hitting the 2-4 GB browser RAM ceiling. The database itself is in-memory, so `CREATE TABLE` results are session-only.
 - **Virtual-scrolled result grid.** Streams arbitrarily large result sets without freezing the renderer.
 - **One UI for three engines.** DuckDB, BigQuery, and Snowflake share the same explorer, query editor, grid, and export flow. The Snowflake explorer mirrors Snowsight (databases, schemas, tables, column preview, compute status, query history).
 - **Server mode is a drop-in for `duckdb -ui`.** Run dbxlite as the UI for your local DuckDB CLI. Full extensions, unlimited memory, direct filesystem access.
@@ -60,7 +60,7 @@ duckdb mydata.duckdb -unsigned -ui
 
 | | Server Mode | WASM Mode |
 |---|-------------|-----------|
-| **Memory** | Unlimited | ~2-4GB browser limit (OPFS extends file storage to disk size) |
+| **Memory** | Unlimited | ~2-4GB working set; larger files read on demand via file handles |
 | **Extensions** | All (httpfs, spatial, iceberg, etc.) | Limited subset |
 | **Filesystem** | Direct access | File handles only |
 | **BigQuery** | Via DuckDB extension | Browser OAuth connector |
@@ -76,7 +76,7 @@ duckdb mydata.duckdb -unsigned -ui
 
 Query CSV, Parquet, Excel, JSON, and JSONL. Local files via the File System Access API stay on disk; remote URLs are read via DuckDB's `httpfs` extension. The editor is Monaco with SQL autocomplete; results stream via Arrow IPC.
 
-Server mode gives you full native DuckDB with every extension. WASM mode runs the same engine in a Web Worker; with OPFS persistence it can open files much larger than browser RAM.
+Server mode gives you full native DuckDB with every extension. WASM mode runs the same engine in a Web Worker; because DuckDB reads files through their File System Access handle on demand, it can query files much larger than browser RAM.
 
 ### Warehouses (optional)
 
@@ -206,9 +206,9 @@ See [docs/URL-SHARING.md](docs/URL-SHARING.md) for full reference.
 
 Browser apps can only reach databases over HTTP/REST. PostgreSQL, MySQL, and other TCP-only databases aren't supported and won't be without a server-side proxy. See [CONTRIBUTING.md](CONTRIBUTING.md#adding-new-connectors).
 
-Parquet export currently round-trips through JSON; native `parquetjs` / Arrow is on the list. Most credentials are encrypted at rest with AES-GCM, but a few legacy paths still use plain `localStorage` and are being migrated.
+Cloud Parquet export (BigQuery / Snowflake) round-trips chunks through JSON into DuckDB's Parquet writer; native `parquetjs` / Arrow is on the list. DuckDB exports use native `COPY`. Most credentials are encrypted at rest with AES-GCM, but a few legacy paths still use plain `localStorage` and are being migrated.
 
-What's next: Supabase (via PostgREST, since that's HTTP-shaped), native Parquet export, and a query-result caching layer. The AI assistant likely gets a Databricks backend once we have a Databricks connector at all.
+What's next: Supabase (via PostgREST, since that's HTTP-shaped) and native Parquet export. The AI assistant likely gets a Databricks backend once we have a Databricks connector at all.
 
 ## Contributing & Community
 - See [CONTRIBUTING](CONTRIBUTING.md) for setup, workflow, and testing guidance.

@@ -58,7 +58,11 @@ export class BigQueryLifecycle {
 	}
 
 	/** Interactive setup: persists the OAuth client and runs the consent flow. */
-	async setup(clientId: string, clientSecret: string): Promise<void> {
+	async setup(
+		clientId: string,
+		clientSecret: string,
+		signal?: AbortSignal,
+	): Promise<void> {
 		const credentialStore = this.requireCredentialStore();
 
 		// Persist OAuth client credentials for auto-reconnect
@@ -72,6 +76,7 @@ export class BigQueryLifecycle {
 		await bigquery.connect({
 			options: {
 				redirectUri: `${window.location.origin}/oauth-callback`,
+				signal,
 			},
 		});
 		this.adopt(bigquery);

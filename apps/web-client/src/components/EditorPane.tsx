@@ -9,6 +9,13 @@ import { getMonacoTheme, getNextTheme, registerMonacoThemes } from "../themes";
 import type { ConnectorType, DataSource } from "../types/data-source";
 import { useQueryContext } from "../contexts/QueryContext";
 import { createLogger } from "../utils/logger";
+import { escapeStringLiteral } from "../utils/sqlSanitizer";
+
+// Inline DuckDB sources that live outside the introspected schema: a URL, or a
+// path ending in a recognised data-file extension. Matching these gates the
+// on-demand DESCRIBE so we never run one for an ordinary mistyped identifier.
+const INLINE_FILE_SOURCE_RE =
+	/:\/\/|\.(parquet|csv|tsv|json|jsonl|ndjson|xlsx|xls|arrow|feather)$/i;
 
 const logger = createLogger("EditorPane");
 
@@ -118,6 +125,11 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 		const onFocusRef = useRef(onFocus);
 		const onBlurRef = useRef(onBlur);
 		const dataSourcesRef = useRef(dataSources);
+		// Client-side cache for lazily-fetched cloud column lists, keyed by
+		// dialect+project+dataset+table, plus the set of fetches in flight so a
+		// second `x.` while the first is loading doesn't fire a duplicate call.
+		const columnCacheRef = useRef(new Map<string, string[]>());
+		const columnFetchInFlightRef = useRef(new Set<string>());
 
 		useEffect(() => {
 			activeConnectorRef.current = activeConnector;
@@ -543,38 +555,83 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 					getDialect: () => activeConnectorRef.current,
 					// Cloud sources load table columns lazily, and BigQuery keeps
 					// its explorer tree in component state that never reaches the
-					// completion schema — so `x.` on a BigQuery table finds no
-					// columns to offer. Fetch them straight from the connector on
-					// demand; getTableMetadata is connector-cached, so this is one
-					// round trip the first time and instant thereafter.
-					fetchColumns: async ({ tableName, databaseName, schemaName }) => {
+					// completion schema — so `x.` on a cloud table finds no columns
+					// to offer. Resolve them from the connector on demand, without
+					// blocking the completion: return cached columns synchronously,
+					// or a `loading` marker while a one-time background fetch runs.
+					// When it lands we re-open the suggestion widget so the columns
+					// replace the "Loading columns…" placeholder.
+					lookupColumns: ({ tableName, databaseName, schemaName }) => {
 						const dialect = activeConnectorRef.current;
-						// Both cloud paths need the project/dataset (or db/schema)
-						// qualifier to identify the table; a bare alias to an
-						// unqualified table can't be resolved this way.
-						if (!databaseName || !schemaName) return null;
-						try {
-							if (dialect === "bigquery") {
-								const meta = await queryService.getBigQueryTableMetadata(
-									databaseName,
-									schemaName,
-									tableName,
-								);
+
+						// Pick a cache key and a fetch strategy for the alias target.
+						// Anything already in the introspected schema is resolved
+						// before we get here, so this only fires for lazily-loaded
+						// sources: cloud tables and inline DuckDB file/URL sources.
+						let key: string;
+						let fetch: () => Promise<string[]>;
+
+						if (dialect === "bigquery" || dialect === "snowflake") {
+							// Both cloud paths need the project/dataset (or db/schema)
+							// qualifier to name the table.
+							if (!databaseName || !schemaName) return null;
+							key = `${dialect}:${databaseName}:${schemaName}:${tableName}`;
+							fetch = async () => {
+								const meta =
+									dialect === "bigquery"
+										? await queryService.getBigQueryTableMetadata(
+												databaseName,
+												schemaName,
+												tableName,
+											)
+										: await queryService.getSnowflakeTableMetadata(
+												databaseName,
+												schemaName,
+												tableName,
+											);
 								return (meta.columns ?? []).map((c) => c.name);
-							}
-							if (dialect === "snowflake") {
-								const meta = await queryService.getSnowflakeTableMetadata(
-									databaseName,
-									schemaName,
-									tableName,
+							};
+						} else if (dialect === "duckdb") {
+							// Inline `FROM 'foo.parquet'` / URL sources aren't in the
+							// schema. A qualifier means it's a real (attached) table,
+							// which is already introspected — skip. Otherwise describe
+							// the source lazily (parquet only reads the footer).
+							if (databaseName || schemaName) return null;
+							if (!INLINE_FILE_SOURCE_RE.test(tableName)) return null;
+							key = `duckdb-file:${tableName}`;
+							fetch = async () => {
+								const res = await queryService.executeQueryOnConnector(
+									"duckdb",
+									`DESCRIBE SELECT * FROM ${escapeStringLiteral(tableName)}`,
 								);
-								return (meta.columns ?? []).map((c) => c.name);
-							}
-						} catch {
-							// Non-fatal: fall back to whatever the schema already had.
+								return res.rows.map((r) => String(r.column_name));
+							};
+						} else {
 							return null;
 						}
-						return null;
+
+						const cached = columnCacheRef.current.get(key);
+						if (cached) return { columns: cached };
+						if (columnFetchInFlightRef.current.has(key)) return { loading: true };
+
+						columnFetchInFlightRef.current.add(key);
+						void (async () => {
+							try {
+								columnCacheRef.current.set(key, await fetch());
+							} catch {
+								// Leave uncached; a later trigger retries.
+							} finally {
+								columnFetchInFlightRef.current.delete(key);
+								// Re-open the suggestion widget so freshly loaded
+								// columns replace the placeholder without retyping.
+								editorInstanceRef.current?.trigger(
+									"dbxlite-column-fetch",
+									"editor.action.triggerSuggest",
+									{},
+								);
+							}
+						})();
+						return { loading: true };
 					},
 					monaco,
 				}),
