@@ -39,13 +39,20 @@ The hosted version at **[sql.dbxlite.com](https://sql.dbxlite.com)** is the same
 Use dbxlite as a drop-in replacement for `duckdb -ui`:
 
 ```bash
-# Start local asset server
+# Start the local asset server (downloads from npm on first run)
 npx dbxlite-ui                              # Serves UI on port 8080
 
 # In another terminal, launch DuckDB with the local UI
 export ui_remote_url="http://localhost:8080"
 duckdb -unsigned -ui
 ```
+
+Prefer a persistent install? Run `npm install -g dbxlite-ui`, then `dbxlite-ui`.
+
+> **Troubleshooting:** if `npx dbxlite-ui` reports `command not found` or seems to run a stale build (common with conda's bundled Node or a cached npx entry), clear the cache and pin the latest version:
+> ```bash
+> npx clear-npx-cache && npx --yes dbxlite-ui@latest
+> ```
 
 Open http://localhost:4213 in your browser. (DuckDB's `ui` extension serves its UI on port 4213 by default; `ui_remote_url` points it at dbxlite's assets on 8080.) You get full native DuckDB with all extensions, unlimited memory, and direct filesystem access.
 
