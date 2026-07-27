@@ -130,7 +130,7 @@ importers:
   packages/duckdb-wasm-adapter:
     dependencies:
       '@duckdb/duckdb-wasm':
-        specifier: ^1.31.0
+        specifier: ^1.32.0
         version: 1.32.0
       apache-arrow:
         specifier: ^17.0.0

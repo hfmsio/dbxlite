@@ -1,9 +1,9 @@
 import type React from "react";
 import { Logo, Wordmark } from "../Logo";
 
-// Hard-coded to match the workspace package.json. Kept here rather than
-// imported because the package.json import path differs across vite/test.
-const VERSION = "0.3.6";
+// Injected from package.json at build/test time via the __APP_VERSION__ define
+// (vite.config.ts / vitest.config.ts), so it can never drift from the release.
+const VERSION = __APP_VERSION__;
 const REPO_URL = "https://github.com/hfmsio/dbxlite";
 
 const linkStyle: React.CSSProperties = {

@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
 - Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
 
+## [0.4.1] - 2026-07-27
+
+### Fixed
+- The in-app version (About screen) is now injected from `package.json` at build time, so it no longer drifts from the released version.
+
+### Changed
+- Pin `@duckdb/duckdb-wasm` to `^1.32.0`, the latest stable release (no functional change; the previous `^1.31.0` already resolved to 1.32.0).
+
 ## [0.4.0] - 2026-07-27
 
 ### Added

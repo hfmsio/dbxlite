@@ -4,6 +4,14 @@ import path from 'path'
 import wasm from 'vite-plugin-wasm'
 import topLevelAwait from 'vite-plugin-top-level-await'
 import type { IncomingMessage, ServerResponse } from 'http'
+import { readFileSync } from 'fs'
+
+// Single source of truth for the app version: read it from package.json and
+// inject as __APP_VERSION__ so the About screen can never drift from the
+// published version again.
+const APP_VERSION = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf-8'),
+).version as string
 
 /**
  * Snowflake REST API dev proxy as a Vite plugin.
@@ -137,6 +145,9 @@ function snowflakeProxyPlugin(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   // Use relative paths for assets - required for duckdb -ui serving via ui_remote_url
   base: './',
   // Treat SQL files as assets to prevent Vite from parsing them as JS

@@ -1,7 +1,17 @@
 import { defineConfig } from 'vitest/config'
 import path from 'path'
+import { readFileSync } from 'fs'
+
+const APP_VERSION = JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf-8'),
+).version as string
 
 export default defineConfig({
+  // Mirror the app build's __APP_VERSION__ so modules that read it (AboutSettings)
+  // resolve under vitest instead of throwing a ReferenceError.
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   test: {
     environment: 'jsdom',
     include: [
