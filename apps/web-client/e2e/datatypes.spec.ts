@@ -34,11 +34,16 @@ async function waitForAppReady(page) {
   await expect(page.locator('button:has-text("Run")')).toBeEnabled({ timeout: 30000 });
 }
 
-// Helper: set editor content
+// Helper: set editor content.
+// Insert the whole query in one input event rather than typing it key-by-key.
+// With autocomplete on by default, per-key typing opens the suggestion popup
+// and the newline keystrokes get consumed as "accept suggestion", corrupting
+// multi-line queries. insertText replaces the (Cmd/Ctrl+A) selection atomically
+// so the popup never opens mid-entry.
 async function setEditorContent(page, content: string) {
   await page.locator('.monaco-editor').click();
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+a' : 'Control+a');
-  await page.keyboard.type(content, { delay: 5 });
+  await page.keyboard.insertText(content);
   await page.waitForTimeout(100);
 }
 
