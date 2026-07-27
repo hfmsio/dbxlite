@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Planned
+- Native Parquet export via parquetjs (cloud export currently uses a JSON intermediate)
+- Advanced connection testing for cloud connectors
+- BigQuery to CatalogProvider migration (UX parity with Snowflake)
+- Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
+- Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
+
+## [0.4.0] - 2026-07-27
+
 ### Added
 - **BigQuery onboarding wizard**: staged setup with live post-connect preflight, a minimal OAuth scope set, and a paste-a-token auth mode for users who can't run the OAuth flow.
+- **Schema-aware autocomplete**: suggestions come from your connected catalog across DuckDB, BigQuery, and Snowflake, resolving CTEs, aliases, quoted identifiers, and multi-level catalogs. Cloud and inline DuckDB file/URL columns load lazily on first reference, with a "Loading columns" placeholder that fills in when the fetch completes.
+- **Cancel control for BigQuery sign-in** so a closed or errored Google popup returns immediately instead of waiting on a timeout.
 - **Export cost confirmation**: a pre-run dialog surfaces row/scope and potential warehouse cost before a full-result export, so large pulls are never triggered silently.
 - **Full-result export with no row cap**: exports always re-run the query for the complete result set. OPFS-streamed Parquet and streamed CSV/JSON, with a buffered fallback when OPFS is unavailable.
 - **Parquet compression setting** (default ZSTD).
@@ -18,18 +29,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Decomposed the `streaming-query-service` god object into individually tested collaborators (connector registry, pagination planner, query executor, row-count estimator, abort registry, file VFS, per-connector lifecycles) behind an unchanged public facade.
 - Replaced ten UI state-sync polling loops with a connector event surface plus ref-counted remote probes and focus/visibility permission rechecks.
+- DuckDB attach introspects each schema with a fixed set of batched queries and estimated row counts instead of per-table column and COUNT(*) queries, keeping attach time flat on large catalogs.
+- xlsx sources are read with `all_varchar=true`, so a column that sniffs numeric but holds text further down no longer aborts the read.
+- Autocomplete alias resolution is scoped to the statement under the cursor, so a reused alias in another statement no longer offers the wrong table's columns.
 
 ### Fixed
+- BigQuery / Google OAuth: closing or cancelling the popup now returns a graceful error instead of hanging until the timeout.
+- Attached DuckDB databases appear in the in-browser explorer again (they were being routed to the server-mode path).
+- Autocomplete inserts columns as identifiers (bare or double-quoted) rather than single-quoted string literals.
+- xlsx queries with mixed-type columns no longer fail with a type-conversion error.
 - BigQuery project listing no longer strands users on a disabled API (projects.list primary, Cloud Resource Manager fallback).
-- BigQuery dot-completion (`alias.` / `table.`) now resolves columns on demand.
+- BigQuery dot-completion (`alias.` / `table.`) resolves columns on demand.
 - DuckDB Parquet export reports the real exported row count instead of 0.
 
-### Planned
-- Native Parquet export via parquetjs (cloud export currently uses a JSON intermediate)
-- Advanced connection testing for cloud connectors
-- BigQuery → CatalogProvider migration (UX parity with Snowflake)
-- Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
-- Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
+### Documentation
+- Synced ARCHITECTURE, README, CHANGELOG, and test coverage to the current codebase.
 
 ## [0.3.0] - 2026-05-03
 
