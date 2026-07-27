@@ -8,7 +8,7 @@
  */
 
 import { cpSync, mkdirSync, rmSync, existsSync, readdirSync, statSync, readFileSync } from 'fs';
-import { join, dirname, extname } from 'path';
+import { join, dirname, extname, basename, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -43,9 +43,31 @@ mkdirSync(assetsDir, { recursive: true });
 console.log('Copying CLI script...');
 cpSync(join(ROOT, 'src', 'cli.js'), join(distDir, 'cli.js'));
 
-// Copy web-client assets
+// Copy web-client assets, excluding files the CLI-served app never loads so
+// the npm tarball stays lean. The app forces DuckDB's EH bundle
+// (see web-client worker.ts), so the mvp (legacy no-EH) and coi (threaded /
+// SharedArrayBuffer) WASM bundles and their workers are dead weight — ~72 MB.
+// Screenshots are GitHub/README images, not served at runtime.
+const EXCLUDE_FROM_PACKAGE = new Set([
+  'duckdb-mvp.wasm',
+  'duckdb-coi.wasm',
+  'duckdb-browser-mvp.worker.js',
+  'duckdb-browser-coi.worker.js',
+  'duckdb-browser-coi.pthread.worker.js',
+]);
+
 console.log('Copying web-client assets...');
-cpSync(WEB_CLIENT_DIST, assetsDir, { recursive: true });
+cpSync(WEB_CLIENT_DIST, assetsDir, {
+  recursive: true,
+  filter: (src) => {
+    if (EXCLUDE_FROM_PACKAGE.has(basename(src))) return false;
+    // Drop the screenshots directory (docs images, never served).
+    if (relative(WEB_CLIENT_DIST, src).split(sep).includes('screenshots')) {
+      return false;
+    }
+    return true;
+  },
+});
 
 // Drop the public/duckdb/.gitignore that tags along from the web-client tree.
 // That .gitignore says "ignore *" (the wasm files are auto-downloaded), and
