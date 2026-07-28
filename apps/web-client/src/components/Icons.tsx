@@ -627,6 +627,36 @@ export function CheckIcon({
 	);
 }
 
+// Share icon (nodes connected by lines)
+export function ShareIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+			aria-hidden="true"
+		>
+			<circle cx="18" cy="5" r="3"></circle>
+			<circle cx="6" cy="12" r="3"></circle>
+			<circle cx="18" cy="19" r="3"></circle>
+			<line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+			<line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+		</svg>
+	);
+}
+
 // Check Circle icon
 export function CheckCircleIcon({
 	size = 16,
@@ -1322,4 +1352,158 @@ export function SendIcon({
             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
         </svg>
     );
+}
+// Layout icons: where the results grid sits relative to the editor.
+export function PanelBottomIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+		>
+			<rect x="3" y="3" width="18" height="18" rx="2"></rect>
+			<rect x="3" y="14" width="18" height="7" rx="1" fill={color} stroke="none"></rect>
+		</svg>
+	);
+}
+
+export function PanelRightIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+		>
+			<rect x="3" y="3" width="18" height="18" rx="2"></rect>
+			<rect x="14" y="3" width="7" height="18" rx="1" fill={color} stroke="none"></rect>
+		</svg>
+	);
+}
+
+export function PanelHiddenIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+		>
+			<rect x="3" y="3" width="18" height="18" rx="2"></rect>
+		</svg>
+	);
+}
+
+// Maximize / restore the editor to a focus overlay.
+export function MaximizeIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+		>
+			<polyline points="15 3 21 3 21 9"></polyline>
+			<polyline points="9 21 3 21 3 15"></polyline>
+			<line x1="21" y1="3" x2="14" y2="10"></line>
+			<line x1="3" y1="21" x2="10" y2="14"></line>
+		</svg>
+	);
+}
+
+export function MinimizeIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+		>
+			<polyline points="4 14 10 14 10 20"></polyline>
+			<polyline points="20 10 14 10 14 4"></polyline>
+			<line x1="14" y1="10" x2="21" y2="3"></line>
+			<line x1="3" y1="21" x2="10" y2="14"></line>
+		</svg>
+	);
+}
+
+export function CloseIcon({
+	size = 16,
+	color = "currentColor",
+	className,
+	style,
+}: IconProps) {
+	return (
+		<svg
+			width={size}
+			height={size}
+			viewBox="0 0 24 24"
+			fill="none"
+			stroke={color}
+			strokeWidth="2"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			className={className}
+			style={style}
+		>
+			<line x1="18" y1="6" x2="6" y2="18"></line>
+			<line x1="6" y1="6" x2="18" y2="18"></line>
+		</svg>
+	);
 }

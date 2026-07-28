@@ -12,6 +12,14 @@ import { applyTheme } from "../themes";
 export type ExplorerSortOrder = "none" | "name" | "type" | "size";
 export type SaveStrategy = "auto" | "manual" | "prompt";
 /**
+ * Where the results grid sits relative to the editor.
+ *   - "bottom": results below the editor (default), vertical splitter.
+ *   - "right" : results to the right of the editor, horizontal splitter.
+ *   - "hidden": results collapsed, editor takes the full pane.
+ * Phase 2 (drag-to-dock) reuses this same setting.
+ */
+export type ResultsLayout = "bottom" | "right" | "hidden";
+/**
  * Autocomplete mode (v0.4 redesign):
  *   - "off"  : disable the custom provider entirely (Monaco word-match only).
  *   - "lite" : keywords + function names + table names, plus qualified/alias
@@ -76,10 +84,16 @@ interface SettingsState {
 	// Explorer settings
 	explorerSortOrder: ExplorerSortOrder;
 	saveStrategy: SaveStrategy;
+	// Layout settings
+	resultsLayout: ResultsLayout;
 	// Query settings
 	engineDetectionMode: EngineDetectionMode;
 	// Export settings
 	parquetCompression: ParquetCompression;
+	// Sharing settings: optional GitHub PAT (gist scope) for creating gist
+	// share links. Stored locally in this browser only; never sent anywhere
+	// except api.github.com when the user explicitly creates a gist.
+	githubToken: string;
 }
 
 interface SettingsActions {
@@ -96,6 +110,8 @@ interface SettingsActions {
 	setSaveStrategy: (strategy: SaveStrategy) => void;
 	setEngineDetectionMode: (mode: EngineDetectionMode) => void;
 	setParquetCompression: (codec: ParquetCompression) => void;
+	setResultsLayout: (layout: ResultsLayout) => void;
+	setGithubToken: (token: string) => void;
 	// Bulk update for hydration
 	hydrate: (state: Partial<SettingsState>) => void;
 }
@@ -116,6 +132,8 @@ const DEFAULT_SETTINGS: SettingsState = {
 	saveStrategy: "auto",
 	engineDetectionMode: "suggest",
 	parquetCompression: "zstd",
+	resultsLayout: "bottom",
+	githubToken: "",
 };
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -152,6 +170,10 @@ export const useSettingsStore = create<SettingsStore>()(
 			setEngineDetectionMode: (mode) => set({ engineDetectionMode: mode }),
 
 			setParquetCompression: (codec) => set({ parquetCompression: codec }),
+
+			setResultsLayout: (layout) => set({ resultsLayout: layout }),
+
+			setGithubToken: (token) => set({ githubToken: token.trim() }),
 
 			hydrate: (state) => set(state),
 		}),

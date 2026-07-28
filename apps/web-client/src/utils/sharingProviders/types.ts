@@ -5,6 +5,9 @@ export interface ShareContent {
   sql: string;
   tabName?: string;
   filename?: string;
+  // Optional GitHub PAT (gist scope). Required for gist creation since
+  // GitHub removed anonymous gist creation. Sent only to api.github.com.
+  token?: string;
 }
 
 /**

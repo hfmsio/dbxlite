@@ -352,74 +352,32 @@ body {
 .header-section {
 	display: flex;
 	align-items: center;
-	gap: 16px;
-	padding: 4px 20px;
-	transition: all 0.3s ease;
+	gap: 12px;
+	padding: 4px 12px;
 	position: relative;
 }
 
-/* Brand section - Logo + Title + Status */
+/* Brand section — never shrinks or clips; one hairline separates it from the
+   tools. No colored stripes or hover fills: grouping comes from spacing. */
 .header-left {
-	border-right: 2px solid var(--divider-color);
-	flex-shrink: 1;
-	min-width: 0;
-	padding-left: 8px;
-	border-radius: 8px;
-	overflow: hidden;
-}
-
-.header-left:hover {
-	background: rgba(var(--bg-secondary-rgb), 0.4);
-}
-
-/* Subtle grey brand section for light theme */
-[data-theme="vs"] .header-left {
-	border-right: 1px solid #e5e5e5;
-}
-
-[data-theme="vs"] .header-left:hover {
-	background: rgba(0, 0, 0, 0.03);
-	box-shadow: none;
-}
-
-/* Tools section - Explorer + File operations */
-.header-center {
-	border-right: 2px solid var(--divider-color);
-	border-left: 3px solid rgba(6, 182, 212, 0.4);
 	flex-shrink: 0;
-	gap: 12px;
-	border-radius: 8px;
+	padding-left: 6px;
+	border-right: 1px solid var(--divider-color);
 }
 
-.header-center:hover {
-	background: rgba(var(--bg-secondary-rgb), 0.3);
-	border-left-color: rgba(6, 182, 212, 0.6);
+/* Tools section — Explorer + file operations. */
+.header-center {
+	flex-shrink: 0;
+	gap: 6px;
 }
 
-/* Enhanced tools section for light theme */
-[data-theme="vs"] .header-center {
-	border-right: 1px solid #e5e5e5;
-	border-left: 2px solid #d4d4d8;
-}
-
-[data-theme="vs"] .header-center:hover {
-	background: rgba(0, 0, 0, 0.03);
-	border-left-color: #a1a1aa;
-	box-shadow: none;
-}
-
-/* Actions section - Run + Connector + Theme + Settings */
+/* Actions section — Run + connector + utilities, pushed right, one hairline. */
 .header-right {
-	border-left: 3px solid rgba(255, 240, 0, 0.4);
-	gap: 12px;
+	gap: 8px;
 	flex-shrink: 0;
 	margin-left: auto;
-	border-radius: 8px;
-}
-
-.header-right:hover {
-	background: rgba(var(--bg-secondary-rgb), 0.25);
-	border-left-color: rgba(255, 240, 0, 0.6);
+	padding-left: 16px;
+	border-left: 1px solid var(--divider-color);
 }
 
 /* Enhanced actions section for light theme */
@@ -570,6 +528,17 @@ body {
 	font-size: 13px;
 }
 
+/* Status dot showing the active engine's color (a calm replacement for the
+   harsh colored stripe the select used to carry). */
+.connector-dot {
+	width: 9px;
+	height: 9px;
+	border-radius: 50%;
+	flex-shrink: 0;
+	background: var(--connector-accent, var(--accent));
+	box-shadow: 0 0 0 3px color-mix(in srgb, var(--connector-accent, var(--accent)) 20%, transparent);
+}
+
 .connector-selector label {
 	color: var(--text-secondary);
 	font-weight: 500;
@@ -602,29 +571,27 @@ body {
 	cursor: not-allowed;
 }
 
+/* Quiet to match the other toolbar buttons; accent shows on hover. */
 .settings-button {
-	background: var(--bg-secondary);
+	background: transparent;
 	color: var(--text-primary);
-	border: 1px solid var(--accent-muted, color-mix(in srgb, var(--accent) 40%, var(--border)));
-	padding: 6px 14px;
-	border-radius: 6px;
+	border: 1px solid transparent;
+	padding: 6px 12px;
+	border-radius: var(--btn-radius);
 	font-size: 13px;
 	cursor: pointer;
-	transition: all 0.15s ease-out;
+	transition: var(--btn-transition);
 	font-weight: 500;
-	box-shadow: var(--shadow-sm);
 }
 
 .settings-button:hover {
-	background: var(--accent-muted, color-mix(in srgb, var(--accent) 15%, var(--bg-secondary)));
-	border-color: var(--accent);
+	background: var(--bg-secondary);
+	border-color: var(--border);
 	color: var(--accent);
-	transform: translateY(-1px);
-	box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 25%, transparent);
 }
 
 .settings-button:active {
-	transform: translateY(0);
+	background: var(--bg-tertiary);
 }
 
 /* Theme Toggle Microinteractions */
@@ -824,7 +791,13 @@ body {
 }
 
 .editor-pane-compact {
-	height: 100%;
+	/* Flex-fill the wrapper (which is a flex column) rather than height:100%,
+	   so the editor grows in every layout mode without depending on a definite
+	   height. Flex column so the inner Monaco container can flex:1 to fill. */
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
 	background: var(--bg-primary);
 	overflow: visible; /* Changed to allow Monaco autocomplete to show */
 	padding: 12px 16px;
@@ -863,6 +836,36 @@ body {
 	background: rgba(59, 130, 246, 0.08);
 }
 
+/* Results-to-the-right layout: lay the editor and results out in a row and
+   turn the splitter vertical. */
+.main-compact.layout-right {
+	flex-direction: row;
+}
+
+.resize-handle-compact.vertical {
+	width: 8px;
+	height: auto;
+	align-self: stretch;
+	cursor: col-resize;
+}
+
+.resize-handle-compact.vertical .resize-handle-bar {
+	width: 3px;
+	height: 40px;
+}
+
+.resize-handle-compact.vertical:hover .resize-handle-bar,
+.resize-handle-compact.vertical.dragging .resize-handle-bar {
+	width: 4px;
+	height: 60px;
+}
+
+/* min-width mirrors the existing min-height so the results pane can shrink
+   below its content width in the row layout. */
+.results-wrapper {
+	min-width: 0;
+}
+
 .results-pane-compact {
 	background: transparent;
 	flex: 1;
@@ -885,8 +888,12 @@ body {
 }
 
 .result-stats-footer {
+	container-type: inline-size;
 	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
 	gap: 16px;
+	row-gap: 6px;
 	padding: 5px 10px;
 	background: var(--bg-secondary);
 	border-top: 1px solid var(--border);
@@ -894,6 +901,37 @@ body {
 	color: var(--text-secondary);
 	flex-shrink: 0;
 	z-index: 10;
+}
+
+/* Responsive footer (container query on the footer itself, so it reacts to the
+   results-pane width, not the viewport). As the pane narrows: shrink the text
+   and controls; at the tightest widths drop the metric labels and show just the
+   values. Wrapping (flex-wrap above) is the final fallback. */
+@container (max-width: 640px) {
+	.table-footer-stats {
+		font-size: 9px;
+		gap: var(--space-3);
+	}
+	.result-stats-footer .control-btn,
+	.result-stats-footer .export-btn {
+		font-size: 10px;
+		padding: 3px 6px;
+	}
+}
+
+@container (max-width: 460px) {
+	.table-footer-stats {
+		font-size: 8px;
+	}
+	.result-stats-footer .control-btn,
+	.result-stats-footer .export-btn {
+		font-size: 9px;
+		padding: 2px 4px;
+	}
+	/* Too tight for labels: keep just the value for each metric. */
+	.table-footer-stats strong {
+		display: none;
+	}
 }
 
 .result-stats-footer strong {
@@ -1839,11 +1877,12 @@ body {
 	color: var(--text-muted);
 }
 
-/* File Operation Buttons */
+/* File Operation Buttons — quiet by default (flat, transparent), lifting only
+   on hover, so the toolbar stays calm and the accented Run button leads. */
 .file-button {
-	background: var(--bg-secondary);
+	background: transparent;
 	color: var(--text-primary);
-	border: 1px solid var(--border);
+	border: 1px solid transparent;
 	padding: 6px 12px;
 	border-radius: var(--btn-radius);
 	font-size: 13px;
@@ -1851,19 +1890,15 @@ body {
 	cursor: pointer;
 	transition: var(--btn-transition);
 	white-space: nowrap;
-	box-shadow: var(--shadow-sm);
 }
 
 .file-button:hover:not(:disabled) {
-	background: var(--bg-tertiary);
-	border-color: var(--border-light);
-	transform: var(--btn-hover-lift);
-	box-shadow: var(--shadow-md);
+	background: var(--bg-secondary);
+	border-color: var(--border);
 }
 
 .file-button:active:not(:disabled) {
-	transform: var(--btn-active-press);
-	box-shadow: var(--shadow-sm);
+	background: var(--bg-tertiary);
 }
 
 .file-button:disabled {
@@ -3975,10 +4010,12 @@ button.server-tip-clickable:active {
 
 .table-footer-stats {
 	display: flex;
+	flex-wrap: wrap;
 	gap: var(--space-6);
+	row-gap: 2px;
 	align-items: center;
 	font-size: var(--font-sm);
-	overflow: hidden;
+	min-width: 0;
 }
 
 .table-footer-selection {
@@ -6109,4 +6146,137 @@ button.server-tip-clickable:active {
 
 .table-info-error {
 	color: var(--error);
+}
+
+/* Results-grid position toggle (segmented control in the header) */
+.results-layout-toggle {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	padding: 2px;
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	background: var(--bg-secondary);
+}
+
+.results-layout-btn {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 26px;
+	height: 24px;
+	padding: 0;
+	border: none;
+	background: transparent;
+	color: var(--text-muted);
+	border-radius: 4px;
+	cursor: pointer;
+	transition: all var(--transition-fast);
+}
+
+.results-layout-btn:hover {
+	color: var(--text-primary);
+	background: var(--bg-tertiary);
+}
+
+.results-layout-btn.active {
+	color: var(--accent);
+	background: var(--bg-tertiary);
+}
+
+/* Icon-only header button (e.g. maximize editor): square, centered glyph. */
+.file-button.icon-only {
+	padding: 6px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	line-height: 0;
+}
+
+/* Maximized (focus) panel: framed overlay with a chrome bar (title, Esc hint,
+   close button). Applied to whichever panel is maximized (editor or results). */
+.maximize-overlay {
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	background: var(--bg-primary);
+	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45);
+	overflow: hidden;
+}
+
+/* Drop the editor's own frame inside the overlay so there's a single border. */
+.maximize-overlay .editor-pane-compact {
+	border: none;
+	border-radius: 0;
+	box-shadow: none;
+}
+
+.maximize-chrome {
+	flex-shrink: 0;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 6px 8px 6px 12px;
+	border-bottom: 1px solid var(--border);
+	background: var(--bg-secondary);
+	font-size: 12px;
+}
+
+.maximize-chrome-title {
+	font-weight: 600;
+	color: var(--text-primary);
+}
+
+.maximize-chrome-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.maximize-chrome-hint {
+	color: var(--text-muted);
+	font-size: 11px;
+}
+
+.maximize-chrome-close {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 24px;
+	padding: 0;
+	background: transparent;
+	border: none;
+	border-radius: 4px;
+	color: var(--text-muted);
+	cursor: pointer;
+	transition: all var(--transition-fast);
+}
+
+.maximize-chrome-close:hover {
+	background: var(--bg-tertiary);
+	color: var(--text-primary);
+}
+
+/* Responsive header: keep the logo intact (flex-shrink:0 above) and adapt the
+   toolbar to the remaining space. First tighten spacing, then collapse the
+   button text to icons so nothing overflows into the logo on low-res screens. */
+@media (max-width: 1280px) {
+	.header {
+		gap: 10px;
+	}
+	.header-section {
+		padding: 4px 10px;
+		gap: 10px;
+	}
+}
+
+@media (max-width: 1080px) {
+	.header .btn-label {
+		display: none;
+	}
+	.header-section {
+		padding: 4px 6px;
+		gap: 6px;
+	}
 }

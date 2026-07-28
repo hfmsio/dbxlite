@@ -1,9 +1,15 @@
 import type { ConnectorType } from "../services/streaming-query-service";
 import { useMode } from "../hooks/useMode";
+import type { ResultsLayout } from "../stores/settingsStore";
 import {
 	ChevronLeftIcon,
 	ChevronRightIcon,
 	FolderOpenIcon,
+	MaximizeIcon,
+	MinimizeIcon,
+	PanelBottomIcon,
+	PanelHiddenIcon,
+	PanelRightIcon,
 	PlayIcon,
 	SaveIcon,
 	SettingsIcon,
@@ -74,6 +80,15 @@ interface HeaderProps {
 	showExplorer: boolean;
 	onToggleExplorer: () => void;
 
+	// Results grid layout (bottom / right / hidden)
+	resultsLayout: ResultsLayout;
+	onSetResultsLayout: (layout: ResultsLayout) => void;
+
+	// Maximize (focus) overlay for the focused panel (editor / results)
+	isPanelMaximized: boolean;
+	activePanel: "editor" | "results" | null;
+	onToggleMaximize: () => void;
+
 	// File operations
 	onOpenFile: () => void;
 	onSaveFile: () => void;
@@ -116,6 +131,11 @@ export default function Header({
 	showLongRunningOverlay,
 	showExplorer,
 	onToggleExplorer,
+	resultsLayout,
+	onSetResultsLayout,
+	isPanelMaximized,
+	activePanel,
+	onToggleMaximize,
 	onOpenFile,
 	onSaveFile,
 	onRunQuery,
@@ -223,7 +243,7 @@ export default function Header({
 				<button
 					onClick={onToggleExplorer}
 					className="file-button"
-					title="Toggle Data Source Explorer"
+					title="Show or hide the data source explorer (files, databases, tables)"
 					aria-label={showExplorer ? "Hide explorer sidebar" : "Show explorer sidebar"}
 					aria-expanded={showExplorer}
 					style={{ display: "flex", alignItems: "center", gap: "6px" }}
@@ -233,8 +253,77 @@ export default function Header({
 					) : (
 						<ChevronRightIcon size={16} aria-hidden="true" />
 					)}
-					Explorer
+					<span className="btn-label">Explorer</span>
 				</button>
+
+				<div
+					className="results-layout-toggle"
+					role="group"
+					aria-label="Results grid position"
+				>
+					{(
+						[
+							{
+								value: "bottom",
+								label: "Show results below the editor",
+								Icon: PanelBottomIcon,
+							},
+							{
+								value: "right",
+								label: "Show results to the right of the editor",
+								Icon: PanelRightIcon,
+							},
+							{
+								value: "hidden",
+								label: "Hide the results grid (give the editor the full pane)",
+								Icon: PanelHiddenIcon,
+							},
+						] as const
+					).map(({ value, label, Icon }) => (
+						<button
+							key={value}
+							type="button"
+							className={`results-layout-btn ${resultsLayout === value ? "active" : ""}`}
+							onClick={() => onSetResultsLayout(value)}
+							title={label}
+							aria-label={label}
+							aria-pressed={resultsLayout === value}
+						>
+							<Icon size={15} aria-hidden="true" />
+						</button>
+					))}
+				</div>
+
+				{(() => {
+					const label = isPanelMaximized
+						? "Exit the maximized view (Esc)"
+						: activePanel === "results"
+							? "Maximize the results grid to a focus overlay (Esc to close)"
+							: "Maximize the editor to a focus overlay (Esc to close)";
+					// Enabled while maximized (to restore) or when a panel is focused.
+					const disabled = !isPanelMaximized && activePanel === null;
+					return (
+						<button
+							type="button"
+							onClick={onToggleMaximize}
+							disabled={disabled}
+							className="file-button icon-only"
+							title={
+								disabled
+									? "Click into the editor or results first, then maximize it"
+									: label
+							}
+							aria-label={label}
+							aria-pressed={isPanelMaximized}
+						>
+							{isPanelMaximized ? (
+								<MinimizeIcon size={16} aria-hidden="true" />
+							) : (
+								<MaximizeIcon size={16} aria-hidden="true" />
+							)}
+						</button>
+					);
+				})()}
 				<button
 					onClick={onOpenFile}
 					className="file-button"
@@ -243,7 +332,7 @@ export default function Header({
 					style={{ display: "flex", alignItems: "center", gap: "6px" }}
 				>
 					<FolderOpenIcon size={16} aria-hidden="true" />
-					Open SQL
+					<span className="btn-label">Open SQL</span>
 				</button>
 				<button
 					onClick={onSaveFile}
@@ -253,7 +342,7 @@ export default function Header({
 					style={{ display: "flex", alignItems: "center", gap: "6px" }}
 				>
 					<SaveIcon size={16} aria-hidden="true" />
-					Save
+					<span className="btn-label">Save</span>
 				</button>
 			</div>
 
@@ -290,7 +379,7 @@ export default function Header({
 						style={{ display: "flex", alignItems: "center", gap: "6px" }}
 					>
 						<PlayIcon size={16} aria-hidden="true" />
-						Run (⌘↵)
+						<span className="btn-label">Run (⌘↵)</span>
 					</button>
 				) : null}
 				<div
@@ -303,19 +392,14 @@ export default function Header({
 						["--connector-accent" as string]: connectorAccent(activeConnector),
 					}}
 				>
-					<label htmlFor="connector-select">Connector:</label>
+					<span className="connector-dot" aria-hidden="true" />
 					<select
 						id="connector-select"
 						value={activeConnector}
 						onChange={(e) => onConnectorChange(e.target.value as ConnectorType)}
 						disabled={isDisabled}
 						aria-label="Select database connector"
-						title={`Active connector: ${connectorLabel(activeConnector, isHttpMode)}`}
-						style={{
-							borderLeft: "3px solid var(--connector-accent)",
-							boxShadow:
-								"inset 2px 0 0 0 color-mix(in srgb, var(--connector-accent) 30%, transparent)",
-						}}
+						title={`Active connector: ${connectorLabel(activeConnector, isHttpMode)}. Click to switch the database engine you're querying.`}
 					>
 						<option value="duckdb">
 							{connectorIcon("duckdb")}{" "}
@@ -342,24 +426,24 @@ export default function Header({
 					<button
 						onClick={onToggleAIChat}
 						className="file-button"
-						title="AI SQL Assistant (Cmd/Ctrl+Shift+A)"
+						title="Toggle the AI SQL assistant: draft, explain, and fix queries (Cmd/Ctrl+Shift+A)"
 						aria-label="Toggle AI SQL Assistant"
 						style={{ display: "flex", alignItems: "center", gap: "6px" }}
 					>
 						<SparklesIcon size={16} aria-hidden="true" />
-						AI
+						<span className="btn-label">AI</span>
 					</button>
 				)}
 				<ThemeToggle />
 				<button
 					className="settings-button"
 					onClick={onToggleSettings}
-					title="Settings & Security"
+					title="Open settings: appearance, connections, AI keys, and security"
 					aria-label="Open settings"
 					style={{ display: "flex", alignItems: "center", gap: "6px" }}
 				>
 					<SettingsIcon size={16} aria-hidden="true" />
-					Settings
+					<span className="btn-label">Settings</span>
 				</button>
 			</div>
 		</header>

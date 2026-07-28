@@ -13,6 +13,18 @@ Share queries via URL parameters when running locally at `http://localhost:5173`
 | `tab` | Custom tab name | `tab=My%20Query` |
 | `theme` | UI theme | `theme=dracula` |
 | `explorer` | Show file explorer | `explorer=true` |
+| `layout` | Results-grid arrangement | `layout=right` |
+
+### `layout` values
+
+Controls where the results grid lands relative to the editor. Accepts the
+canonical names or the intuitive orientation aliases:
+
+| Value | Aliases | Effect |
+|-------|---------|--------|
+| `bottom` | `vertical` | Results below the editor (default) |
+| `right` | `horizontal` | Results beside the editor (side by side) |
+| `hidden` | — | Editor only; results hidden until a query runs |
 
 ## Examples
 
@@ -39,6 +51,11 @@ http://localhost:5173/?share=gist:abc123def456&run=true
 **With theme:**
 ```
 http://localhost:5173/?example=duckdb-advanced&run=true&theme=tokyo-night
+```
+
+**Results beside the editor (side by side):**
+```
+http://localhost:5173/?example=duckdb-advanced&run=true&layout=right
 ```
 
 ## Built-in Example IDs

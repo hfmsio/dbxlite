@@ -1,6 +1,31 @@
 /**
  * URL parameters for deep linking
  */
+/** Results-grid arrangement carried in a shared link. */
+export type SharedLayout = "bottom" | "right" | "hidden";
+
+/**
+ * Normalize a `layout` param into a canonical arrangement. Accepts the
+ * internal names (bottom/right/hidden) plus intuitive aliases so links read
+ * naturally: `vertical` (editor over results) and `horizontal` (side by side).
+ */
+export function normalizeLayout(
+  value: string | null | undefined,
+): SharedLayout | undefined {
+  switch (value?.toLowerCase()) {
+    case 'bottom':
+    case 'vertical':
+      return 'bottom';
+    case 'right':
+    case 'horizontal':
+      return 'right';
+    case 'hidden':
+      return 'hidden';
+    default:
+      return undefined;
+  }
+}
+
 export interface URLParams {
   example?: string; // Example ID: "duckdb-community"
   sql?: string; // Direct SQL (URL-encoded)
@@ -9,6 +34,7 @@ export interface URLParams {
   run?: string; // Auto-execute: "true" or "false"
   theme?: string; // Theme override
   explorer?: string; // Show explorer: "true" (default: "false")
+  layout?: SharedLayout; // Results arrangement: bottom | right | hidden
 }
 
 /**
@@ -24,6 +50,7 @@ export function parseURLParams(): URLParams {
     run: params.get('run') || undefined,
     theme: params.get('theme') || undefined,
     explorer: params.get('explorer') || undefined,
+    layout: normalizeLayout(params.get('layout')),
   };
 }
 
@@ -47,6 +74,7 @@ export function generateExampleURL(
     autoRun?: boolean;
     theme?: string;
     showExplorer?: boolean;
+    layout?: SharedLayout;
   },
 ): string {
   const base = options?.baseURL || window.location.origin;
@@ -56,6 +84,7 @@ export function generateExampleURL(
   if (options?.autoRun) params.set('run', 'true');
   if (options?.theme) params.set('theme', options.theme);
   if (options?.showExplorer) params.set('explorer', 'true');
+  if (options?.layout) params.set('layout', options.layout);
 
   return `${base}?${params.toString()}`;
 }
@@ -69,6 +98,10 @@ export function generateCustomSQLURL(
   options?: {
     baseURL?: string;
     tabName?: string;
+    autoRun?: boolean;
+    theme?: string;
+    showExplorer?: boolean;
+    layout?: SharedLayout;
   },
 ): string {
   if (sql.length > 1500) {
@@ -81,6 +114,10 @@ export function generateCustomSQLURL(
   const params = new URLSearchParams({ sql });
 
   if (options?.tabName) params.set('tab', options.tabName);
+  if (options?.autoRun) params.set('run', 'true');
+  if (options?.theme) params.set('theme', options.theme);
+  if (options?.showExplorer) params.set('explorer', 'true');
+  if (options?.layout) params.set('layout', options.layout);
 
   return `${base}?${params.toString()}`;
 }

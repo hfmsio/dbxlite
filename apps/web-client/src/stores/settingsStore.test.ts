@@ -41,6 +41,7 @@ describe("settingsStore", () => {
 			store.setExplorerSortOrder("none");
 			store.setSaveStrategy("auto");
 			store.setShowExamplesButton(true);
+			store.setResultsLayout("bottom");
 		});
 		localStorageMock.clear();
 		vi.clearAllMocks();
@@ -76,6 +77,24 @@ describe("settingsStore", () => {
 			});
 
 			expect(useSettingsStore.getState().editorFontFamily).toBe("Fira Code");
+		});
+	});
+
+	describe("results layout", () => {
+		it("defaults to bottom", () => {
+			expect(useSettingsStore.getState().resultsLayout).toBe("bottom");
+		});
+
+		it("switches to right and hidden", () => {
+			const store = useSettingsStore.getState();
+			act(() => {
+				store.setResultsLayout("right");
+			});
+			expect(useSettingsStore.getState().resultsLayout).toBe("right");
+			act(() => {
+				store.setResultsLayout("hidden");
+			});
+			expect(useSettingsStore.getState().resultsLayout).toBe("hidden");
 		});
 	});
 

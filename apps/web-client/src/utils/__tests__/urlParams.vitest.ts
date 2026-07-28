@@ -67,6 +67,25 @@ describe('urlParams', () => {
       expect(params.explorer).toBe('true');
     });
 
+    test('should parse layout parameter (canonical names)', () => {
+      window.location.search = '?sql=SELECT%201&layout=right';
+      expect(parseURLParams().layout).toBe('right');
+      window.location.search = '?sql=SELECT%201&layout=hidden';
+      expect(parseURLParams().layout).toBe('hidden');
+    });
+
+    test('should accept horizontal/vertical layout aliases', () => {
+      window.location.search = '?sql=SELECT%201&layout=horizontal';
+      expect(parseURLParams().layout).toBe('right');
+      window.location.search = '?sql=SELECT%201&layout=vertical';
+      expect(parseURLParams().layout).toBe('bottom');
+    });
+
+    test('should ignore an invalid layout value', () => {
+      window.location.search = '?sql=SELECT%201&layout=sideways';
+      expect(parseURLParams().layout).toBeUndefined();
+    });
+
     test('should parse multiple parameters', () => {
       window.location.search = '?example=duckdb&run=true&tab=Test&theme=dracula&explorer=true';
       const params = parseURLParams();
@@ -220,6 +239,27 @@ describe('urlParams', () => {
       expect(url).toContain('sql=');
       // URL encoding should handle quotes and special chars
       expect(url.length).toBeGreaterThan(0);
+    });
+
+    test('should include theme, layout, run and explorer options', () => {
+      const url = generateCustomSQLURL('SELECT 1', {
+        theme: 'dracula',
+        layout: 'right',
+        autoRun: true,
+        showExplorer: true,
+      });
+      expect(url).toContain('theme=dracula');
+      expect(url).toContain('layout=right');
+      expect(url).toContain('run=true');
+      expect(url).toContain('explorer=true');
+    });
+
+    test('should omit options that are not set', () => {
+      const url = generateCustomSQLURL('SELECT 1');
+      expect(url).not.toContain('theme=');
+      expect(url).not.toContain('layout=');
+      expect(url).not.toContain('run=');
+      expect(url).not.toContain('explorer=');
     });
 
     test('should warn if SQL exceeds 1500 characters', () => {

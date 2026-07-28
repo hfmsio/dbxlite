@@ -95,7 +95,7 @@ Bring your own key for OpenAI, Anthropic, Gemini, or Groq, or use Snowflake Cort
 
 ### Sharing
 
-Queries are shareable as URLs that run on click: `?example=`, `?sql=`, `?share=gist:...`, plus `&theme=` and `&run=true`.
+Queries are shareable as URLs that run on click: `?example=`, `?sql=`, `?share=gist:...`, plus `&theme=`, `&layout=`, and `&run=true`.
 
 ---
 
@@ -201,9 +201,14 @@ http://localhost:5173/?share=gist:abc123&run=true
 
 # With theme
 http://localhost:5173/?example=covid&run=true&theme=dracula
+
+# Results beside the editor (layout=right, or the alias horizontal)
+http://localhost:5173/?example=covid&run=true&layout=right
 ```
 
-**Parameters:** `example`, `sql`, `share`, `run`, `tab`, `theme`, `explorer`
+**Parameters:** `example`, `sql`, `share`, `run`, `tab`, `theme`, `explorer`, `layout`
+
+**Layout:** `bottom` (alias `vertical`), `right` (alias `horizontal`), `hidden`
 
 **Themes:** `vs-dark`, `dracula`, `nord`, `tokyo-night`, `catppuccin`, `vs-light`, `github-light`, `solarized-light`, `ayu-light`, `one-dark`
 

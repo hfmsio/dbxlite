@@ -5,7 +5,8 @@ import {
 	useAutocompleteMode,
 	useSettingsStore,
 } from "../stores/settingsStore";
-import { LightbulbIcon } from "./Icons";
+import { LightbulbIcon, ShareIcon } from "./Icons";
+import ShareTabModal from "./ShareTabModal";
 
 export interface QueryTab {
 	id: string;
@@ -49,8 +50,11 @@ export default function TabBar({
 }: TabBarProps) {
 	const [editingTabId, setEditingTabId] = useState<string | null>(null);
 	const [editingName, setEditingName] = useState("");
+	const [shareOpen, setShareOpen] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const autocompleteMode = useAutocompleteMode();
+	const activeTab = tabs.find((t) => t.id === activeTabId);
+	const canShare = !!activeTab?.query.trim();
 
 	useEffect(() => {
 		if (editingTabId && inputRef.current) {
@@ -199,6 +203,22 @@ export default function TabBar({
 
 				<AutocompleteModeChip mode={autocompleteMode} />
 
+				<button
+					className="tab-examples"
+					type="button"
+					onClick={() => setShareOpen(true)}
+					disabled={!canShare}
+					title={
+						canShare
+							? "Share this query as a link (theme, layout, auto-run, gist)"
+							: "Write a query to share it"
+					}
+					aria-label="Share this query as a link"
+					style={{ opacity: canShare ? 1 : 0.45 }}
+				>
+					<ShareIcon size={16} />
+				</button>
+
 				{onToggleExamples && showExamplesButton && (
 					<button
 						className={`tab-examples ${examplesOpen ? "active" : ""}`}
@@ -213,6 +233,14 @@ export default function TabBar({
 				)}
 
 				</div>
+
+			{shareOpen && activeTab && (
+				<ShareTabModal
+					sql={activeTab.query}
+					tabName={activeTab.name}
+					onClose={() => setShareOpen(false)}
+				/>
+			)}
 		</div>
 	);
 }

@@ -28,6 +28,7 @@ export function useURLExampleLoader(initializing: boolean, setShowExplorer?: (sh
     (s) => s.markOnboardingComplete,
   );
   const setEditorTheme = useSettingsStore((s) => s.setEditorTheme);
+  const setResultsLayout = useSettingsStore((s) => s.setResultsLayout);
 
   // Helper to execute query after loading from URL (memoized to prevent effect re-runs)
   const executeLoadedQuery = useCallback(async (tabIds: string[], query: string) => {
@@ -108,6 +109,12 @@ export function useURLExampleLoader(initializing: boolean, setShowExplorer?: (sh
         } else {
           logger.warn(`Invalid theme from URL: ${params.theme}`);
         }
+      }
+
+      // Apply results-grid arrangement (bottom/right/hidden) if specified
+      if (params.layout) {
+        logger.info(`Applying results layout from URL: ${params.layout}`);
+        setResultsLayout(params.layout);
       }
 
       // Control explorer visibility (default: false, unless explorer=true specified)
@@ -211,7 +218,7 @@ export function useURLExampleLoader(initializing: boolean, setShowExplorer?: (sh
     }
 
     // No URL parameters to process
-  }, [createTabsWithQueries, updateTab, showToast, markOnboardingComplete, setEditorTheme, setShowExplorer]);
+  }, [createTabsWithQueries, updateTab, showToast, markOnboardingComplete, setEditorTheme, setResultsLayout, setShowExplorer]);
 
   // Execute pending auto-run query once app initialization is complete
   useEffect(() => {

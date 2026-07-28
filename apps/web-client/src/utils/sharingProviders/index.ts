@@ -14,7 +14,8 @@ import { gistProvider } from './providers/gist';
 registerSharingProvider(gistProvider);
 
 // Re-export providers for direct access
-export { gistProvider } from './providers/gist';
+export { gistProvider, verifyGithubToken } from './providers/gist';
+export type { TokenCheck } from './providers/gist';
 
 // Re-export core types and functions
 export {

@@ -665,7 +665,12 @@ const EditorPane = forwardRef<EditorPaneHandle, EditorPaneProps>(
 						}
 					}}
 					style={{
-						height: "100%",
+						// Fill the wrapper via flex-grow rather than height:100%.
+						// The app's height chain uses min-height (not a definite
+						// height), so a percentage height collapses to content size;
+						// flex-grow fills reliably in every layout mode.
+						flex: 1,
+						minHeight: 0,
 						border: "1px solid var(--border)",
 						borderRadius: "8px",
 						boxShadow: "inset 0 1px 3px rgba(0, 0, 0, 0.05)",

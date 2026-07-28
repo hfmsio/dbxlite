@@ -403,8 +403,43 @@ function AppContent() {
 		setActiveTabId,
 	});
 
-	const { editorHeight, isDragging, handleMouseDown } =
-		useEditorLayout(containerRef);
+	const resultsLayout = useSettingsStore((s) => s.resultsLayout);
+	const setResultsLayout = useSettingsStore((s) => s.setResultsLayout);
+
+	const { editorHeight, editorWidth, isDragging, handleMouseDown } =
+		useEditorLayout(
+			containerRef,
+			resultsLayout === "right" ? "right" : "bottom",
+		);
+
+	// Focus + maximize for the two focusable panels (editor / results). Maximize
+	// targets whichever panel is currently focused; the control is disabled when
+	// neither is. Transient (not persisted).
+	const [activePanel, setActivePanel] = useState<"editor" | "results" | null>(
+		null,
+	);
+	const [maximizedPanel, setMaximizedPanel] = useState<
+		"editor" | "results" | null
+	>(null);
+	const focusPanel = useCallback(
+		(p: "editor" | "results") => setActivePanel(p),
+		[],
+	);
+	const toggleMaximize = useCallback(
+		() => setMaximizedPanel((cur) => (cur ? null : activePanel)),
+		[activePanel],
+	);
+	// Esc restores. Bubble phase (not capture) so Monaco handles its own Esc
+	// first (e.g. closing the autocomplete widget); a second Esc then exits
+	// maximize — matching the existing "Esc Esc: leave editor" convention.
+	useEffect(() => {
+		if (!maximizedPanel) return;
+		const onKey = (e: KeyboardEvent) => {
+			if (e.key === "Escape") setMaximizedPanel(null);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [maximizedPanel]);
 
 	const activeTab = activeTabFromHook || tabs[0];
 
@@ -653,6 +688,11 @@ function AppContent() {
 				showLongRunningOverlay={showLongRunningOverlay}
 				showExplorer={showExplorer}
 				onToggleExplorer={toggleExplorer}
+				resultsLayout={resultsLayout}
+				onSetResultsLayout={setResultsLayout}
+				isPanelMaximized={maximizedPanel !== null}
+				activePanel={activePanel}
+				onToggleMaximize={toggleMaximize}
 				onOpenFile={handleOpenFile}
 				onSaveFile={handleSaveFile}
 				onRunQuery={handleRunQuery}
@@ -734,6 +774,11 @@ function AppContent() {
 				gridRef={gridRef}
 				showExplorer={showExplorer}
 				editorHeight={editorHeight}
+				editorWidth={editorWidth}
+				resultsLayout={resultsLayout}
+				maximizedPanel={maximizedPanel}
+				onExitMaximize={() => setMaximizedPanel(null)}
+				onFocusPanel={focusPanel}
 				isDragging={isDragging}
 				initializing={initializing}
 				editorTheme={editorTheme}

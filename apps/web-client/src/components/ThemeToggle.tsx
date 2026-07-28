@@ -1,71 +1,33 @@
-import { useEffect, useRef, useState } from "react";
+import { getNextTheme, themes } from "../themes";
 import { MoonIcon, SunIcon } from "./Icons";
-import { themes } from "../themes";
 import { useSettingsStore } from "../stores/settingsStore";
 
+/**
+ * Compact theme control for the header: a single icon button that cycles to the
+ * next theme (sun when the current theme is light, moon when dark). The full
+ * theme list lives in Settings > Appearance, so the header stays uncluttered.
+ */
 export default function ThemeToggle() {
 	const editorTheme = useSettingsStore((s) => s.editorTheme);
 	const setEditorTheme = useSettingsStore((s) => s.setEditorTheme);
-	const [isAnimating, setIsAnimating] = useState(false);
-	const prevThemeRef = useRef(editorTheme);
 
-	const currentTheme = themes.find((t) => t.id === editorTheme);
-	const isLight = currentTheme?.type === "light";
-
-	// Trigger animation when theme changes
-	useEffect(() => {
-		if (prevThemeRef.current !== editorTheme) {
-			setIsAnimating(true);
-			const timer = setTimeout(() => setIsAnimating(false), 400);
-			prevThemeRef.current = editorTheme;
-			return () => clearTimeout(timer);
-		}
-	}, [editorTheme]);
-
-	const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-		setEditorTheme(e.target.value);
-	};
+	const current = themes.find((t) => t.id === editorTheme);
+	const isLight = current?.type === "light";
+	const next = getNextTheme(editorTheme);
 
 	return (
-		<div className={`theme-toggle ${isAnimating ? "theme-changing" : ""}`}>
-			<span
-				className={`theme-icon ${isAnimating ? "icon-spin" : ""}`}
-				style={{
-					display: "flex",
-					alignItems: "center",
-					color: isLight ? "var(--warning)" : "var(--accent)",
-					transition: "color 0.3s ease, transform 0.3s ease",
-				}}
-			>
-				{isLight ? <SunIcon size={14} /> : <MoonIcon size={14} />}
-			</span>
-			<select
-				value={editorTheme}
-				onChange={handleChange}
-				className="theme-select"
-				title="Select theme (Cmd/Ctrl+Shift+K to rotate)"
-			>
-				{themes.map((t) => (
-					<option key={t.id} value={t.id}>
-						{t.label}
-					</option>
-				))}
-			</select>
-			{/* Accent color indicator */}
-			<span
-				className="theme-accent-dot"
-				style={{
-					width: "8px",
-					height: "8px",
-					borderRadius: "50%",
-					background: "var(--accent)",
-					boxShadow: isAnimating
-						? "0 0 8px var(--accent), 0 0 12px var(--accent)"
-						: "0 0 4px color-mix(in srgb, var(--accent) 50%, transparent)",
-					transition: "box-shadow 0.3s ease, transform 0.3s ease",
-					transform: isAnimating ? "scale(1.5)" : "scale(1)",
-				}}
-			/>
-		</div>
+		<button
+			type="button"
+			className="file-button icon-only"
+			onClick={() => setEditorTheme(next.id)}
+			title={`Theme: ${current?.label ?? "Dark"}. Click to switch to ${next.label} (Cmd/Ctrl+Shift+K). Choose any theme in Settings.`}
+			aria-label={`Switch theme, currently ${current?.label ?? editorTheme}`}
+		>
+			{isLight ? (
+				<SunIcon size={16} aria-hidden="true" />
+			) : (
+				<MoonIcon size={16} aria-hidden="true" />
+			)}
+		</button>
 	);
 }
