@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
 - Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
 
+## [0.5.0] - 2026-07-28
+
+### Added
+- Flexible results layout: place the results grid below or beside the editor, or hide it, with drag-to-resize and a focus-panel maximize overlay for the editor or results.
+- Share any query as a link: a tab-bar popup builds a URL with theme, layout, auto-run, and explorer options and a live preview, plus opt-in GitHub Gist links (locally-stored token) for queries too long for a URL.
+- `layout` URL parameter (`bottom`/`right`/`hidden`, with `vertical`/`horizontal` aliases) honored when a shared link loads.
+- Self-hosted Docker image: a small multi-stage build served by nginx with the cross-origin isolation headers DuckDB needs, published multi-arch (amd64/arm64) to GHCR and Docker Hub, plus docker-compose and docs.
+
+### Changed
+- Redesigned the header for clarity and low-resolution responsiveness: subtle dividers instead of section blocks, a single cycle-theme control, responsive label collapse, and clearer tooltips across the header and tab bar.
+
 ## [0.4.1] - 2026-07-27
 
 ### Fixed
