@@ -3,7 +3,7 @@
 [![CI](https://github.com/hfmsio/dbxlite/workflows/CI/badge.svg)](https://github.com/hfmsio/dbxlite/actions)
 [![npm](https://img.shields.io/npm/v/dbxlite-ui.svg)](https://www.npmjs.com/package/dbxlite-ui)
 [![npm downloads](https://img.shields.io/npm/dm/dbxlite-ui.svg)](https://www.npmjs.com/package/dbxlite-ui)
-[![Docker](https://img.shields.io/docker/v/hfmsio/dbxlite?sort=semver&logo=docker&label=docker)](https://hub.docker.com/r/hfmsio/dbxlite)
+[![Docker Hub](https://img.shields.io/docker/v/hfmsio/dbxlite?sort=semver&logo=docker&label=docker%20hub&color=2496ED)](https://hub.docker.com/r/hfmsio/dbxlite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 
