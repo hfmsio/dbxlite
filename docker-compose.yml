@@ -1,0 +1,13 @@
+# One-command deploy for internal/self-hosted use:
+#   docker compose up -d   ->   open http://localhost:8080
+#
+# dbxlite is entirely client-side (DuckDB runs as WASM in the browser), so this
+# is a single static-web container with no database or backend to wire up.
+services:
+  dbxlite:
+    build: .
+    image: dbxlite:local
+    container_name: dbxlite
+    ports:
+      - "8080:80"
+    restart: unless-stopped

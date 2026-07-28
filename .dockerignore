@@ -1,0 +1,11 @@
+# Keep the build context small and force a clean install/build in the image.
+**/node_modules
+**/dist
+**/electron-dist
+**/.turbo
+**/coverage
+**/.vercel
+.git
+.github
+*.log
+.DS_Store

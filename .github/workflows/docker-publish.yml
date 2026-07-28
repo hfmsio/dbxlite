@@ -1,0 +1,107 @@
+name: Docker Publish
+
+# Build and push the self-hosted container image on version tags (v0.4.2, ...).
+# Publishes multi-arch (amd64 + arm64) to GHCR and, if the Docker Hub secrets
+# are configured, to Docker Hub as well.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR via GITHUB_TOKEN
+    env:
+      GHCR_IMAGE: ghcr.io/${{ github.repository }}
+      # Docker Hub is optional: enabled only when both secrets are present.
+      HAS_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        if: env.HAS_DOCKERHUB == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build the image-name list: always GHCR, plus Docker Hub when configured.
+      - name: Resolve image names
+        id: images
+        run: |
+          {
+            echo "list<<EOF"
+            echo "$GHCR_IMAGE"
+            if [ "$HAS_DOCKERHUB" = "true" ]; then
+              echo "docker.io/${{ secrets.DOCKERHUB_USERNAME }}/dbxlite"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.images.outputs.list }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=dbxlite
+            org.opencontainers.image.description=Browser-native SQL workbench powered by DuckDB (WebAssembly). Query local files larger than RAM, remote Parquet/CSV/JSON/Excel, BigQuery and Snowflake - fully client-side, no backend.
+            org.opencontainers.image.url=https://github.com/hfmsio/dbxlite
+            org.opencontainers.image.documentation=https://github.com/hfmsio/dbxlite#readme
+            org.opencontainers.image.source=https://github.com/hfmsio/dbxlite
+            org.opencontainers.image.vendor=dbxlite
+            org.opencontainers.image.licenses=MIT
+          annotations: |
+            org.opencontainers.image.title=dbxlite
+            org.opencontainers.image.description=Browser-native SQL workbench powered by DuckDB (WebAssembly). Fully client-side, no backend.
+            org.opencontainers.image.source=https://github.com/hfmsio/dbxlite
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Keep the Docker Hub page (short + full description) in sync with the
+      # curated overview, so the listing stays discoverable on every release.
+      # Non-fatal: the description API needs an account-scoped token (more than
+      # the push token's Read/Write). If it 403s, set the overview once by hand
+      # in the Docker Hub UI from docker/DOCKERHUB.md - the image still ships.
+      - name: Sync Docker Hub description
+        if: env.HAS_DOCKERHUB == 'true'
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/dbxlite
+          short-description: "Browser-native SQL workbench powered by DuckDB (WASM). Fully client-side, no backend."
+          readme-filepath: ./docker/DOCKERHUB.md

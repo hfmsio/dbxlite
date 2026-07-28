@@ -3,6 +3,7 @@
 [![CI](https://github.com/hfmsio/dbxlite/workflows/CI/badge.svg)](https://github.com/hfmsio/dbxlite/actions)
 [![npm](https://img.shields.io/npm/v/dbxlite-ui.svg)](https://www.npmjs.com/package/dbxlite-ui)
 [![npm downloads](https://img.shields.io/npm/dm/dbxlite-ui.svg)](https://www.npmjs.com/package/dbxlite-ui)
+[![Docker](https://img.shields.io/docker/v/hfmsio/dbxlite?sort=semver&logo=docker&label=docker)](https://hub.docker.com/r/hfmsio/dbxlite)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 
@@ -116,6 +117,38 @@ pnpm dev  # Opens http://localhost:5173
 ```
 
 Requirements: Node.js 18+, pnpm 10+ (the `packageManager` field pins the exact version; run `corepack enable` to use it automatically). On pnpm 11+, dependency build scripts (`esbuild`, `@swc/core`) are pre-approved via `allowBuilds` in `pnpm-workspace.yaml` — no manual `pnpm approve-builds` step needed.
+
+## Docker (self-hosted)
+
+dbxlite is entirely client-side (DuckDB runs as WASM in the browser), so a deployment is a single static-web container with no database or backend to wire up. Ideal for internal use such as SQL training: point everyone at one URL and they get a full SQL workbench, sandboxed in their own browser tab.
+
+```bash
+# Prebuilt multi-arch image (no build needed), then open http://localhost:8080
+docker run -p 8080:80 ghcr.io/hfmsio/dbxlite      # or: hfmsio/dbxlite (Docker Hub)
+
+# Or build it yourself from source
+docker compose up -d                               # build + run on :8080
+docker build -t dbxlite . && docker run -p 8080:80 dbxlite
+```
+
+The image is a small multi-stage build (Node compiles the assets, nginx serves them; unused DuckDB wasm bundles are dropped). The nginx config sets the cross-origin isolation headers DuckDB needs for OPFS persistence and file export:
+
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Cross-Origin-Embedder-Policy: credentialless` (keeps the context isolated while still letting `httpfs` fetch remote files/CSVs)
+- `Cross-Origin-Resource-Policy: cross-origin`
+
+Core querying (local files, remote URLs, all the built-in examples) works fully offline of any cloud. BigQuery/Snowflake OAuth needs redirect URIs registered for your own origin and is not required for the DuckDB workflow.
+
+### Server mode against the container
+
+The container serves the same UI assets as `dbxlite-ui`, so a power user can drive it with a **native** DuckDB engine running on their own machine (full extensions, unlimited memory, direct filesystem access) while the container just serves the UI:
+
+```bash
+export ui_remote_url="http://localhost:8080"   # the container
+duckdb -unsigned -ui                            # native engine + dbxlite UI on :4213
+```
+
+The engine runs locally next to the user's files; the container only ships the interface. (Do not run a shared DuckDB engine inside the container: arbitrary SQL means filesystem and extension access, and one engine shared across users has no isolation. Keep the engine on each user's machine.)
 
 ## Screenshots
 
