@@ -37,14 +37,58 @@ describe("getStatementKeyword", () => {
 		);
 		expect(getStatementKeyword("")).toBe("");
 	});
+
+	it("peeks past leading parens for parenthesized/set-op queries", () => {
+		expect(getStatementKeyword("(SELECT 1)")).toBe("select");
+		expect(getStatementKeyword("((SELECT 1) UNION (SELECT 2))")).toBe("select");
+	});
+
+	it("yields '' for client dot-commands", () => {
+		expect(getStatementKeyword(".tables")).toBe("");
+		expect(getStatementKeyword(".schema events")).toBe("");
+	});
 });
 
 describe("isPaginatableStatement", () => {
-	it("allows plain SELECTs and WITH-SELECTs", () => {
-		expect(isPaginatableStatement("SELECT * FROM t")).toBe(true);
-		expect(
-			isPaginatableStatement("WITH a AS (SELECT 1) SELECT * FROM a"),
-		).toBe(true);
+	it("allows every query-expression head that accepts a trailing LIMIT", () => {
+		for (const sql of [
+			"SELECT * FROM t",
+			"select * from t",
+			"WITH a AS (SELECT 1) SELECT * FROM a",
+			"FROM t", // DuckDB FROM-first
+			"VALUES (1),(2),(3)",
+			"PIVOT t ON b USING sum(a)",
+			"UNPIVOT t ON a, c INTO NAME k VALUE v",
+			"(SELECT 1) UNION (SELECT 2)", // parenthesized set operation
+			"-- header comment\nSELECT * FROM t",
+		]) {
+			expect(isPaginatableStatement(sql), sql).toBe(true);
+		}
+	});
+
+	it("rejects client dot-commands (all of them, structurally)", () => {
+		for (const sql of [
+			".tables",
+			".schema events",
+			".mode json",
+			"  .help",
+			"-- note\n.tables",
+		]) {
+			expect(isPaginatableStatement(sql), sql).toBe(false);
+		}
+	});
+
+	it("rejects row-returning statements that REJECT a trailing LIMIT", () => {
+		// These leaked through the old blocklist (e.g. SUMMARIZE was never
+		// listed) and became syntax errors like `SUMMARIZE t LIMIT 100`.
+		for (const sql of [
+			"SUMMARIZE leased.events",
+			"TABLE t",
+			"DESCRIBE t",
+			"DESCRIBE SELECT * FROM t",
+		]) {
+			expect(isPaginatableStatement(sql), sql).toBe(false);
+		}
 	});
 
 	it("rejects DDL/DML and utility statements", () => {
@@ -56,6 +100,11 @@ describe("isPaginatableStatement", () => {
 			"EXPLAIN SELECT 1",
 			"SHOW TABLES",
 			"COPY t TO 'f.csv'",
+			"PRAGMA table_info('t')",
+			"CALL pragma_version()",
+			"ATTACH 'x.db'",
+			"", // empty / whitespace-only
+			"   ;",
 		]) {
 			expect(isPaginatableStatement(sql), sql).toBe(false);
 		}
