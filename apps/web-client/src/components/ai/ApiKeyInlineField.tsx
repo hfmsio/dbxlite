@@ -114,7 +114,7 @@ export default function ApiKeyInlineField({
 
 				for await (const chunk of p.streamChat(
 					[{ role: "user", content: "Reply with the single word OK." }],
-					{ apiKey: key, model, maxTokens: 5 },
+					{ apiKey: key, model, maxTokens: 256 },
 					controller.signal,
 				)) {
 					if (chunk.type === "error") {
