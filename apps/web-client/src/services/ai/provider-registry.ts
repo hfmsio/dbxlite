@@ -32,14 +32,14 @@ const providers: Record<AIProviderType, () => AIProvider> = {
 			baseUrl: "https://api.groq.com/openai/v1",
 			models: [
 				{
-					id: "llama-3.3-70b-versatile",
-					name: "Llama 3.3 70B",
+					id: "openai/gpt-oss-120b",
+					name: "GPT-OSS 120B",
 					contextWindow: 131072,
 					isFree: true,
 				},
 				{
-					id: "llama-3.1-8b-instant",
-					name: "Llama 3.1 8B (Instant)",
+					id: "openai/gpt-oss-20b",
+					name: "GPT-OSS 20B",
 					contextWindow: 131072,
 					isFree: true,
 				},
