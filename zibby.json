@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "dbxlite",
+  "category": "Utilities",
+  "summary": "A SQL workbench that runs entirely in the browser, powered by DuckDB compiled to WebAssembly. Open a CSV, Parquet, JSON or DuckDB file from your machine and query it with real SQL. Nothing is uploaded: the data stays on your computer and the engine runs in the page. Files larger than the browser's memory stay queryable, because DuckDB reads only the bytes a query touches rather than loading the whole file. The editor has SQL completion, results paginate through millions of rows, and the AI panel writes and explains queries against the schema you have open.",
+  "samples": {
+    "version": 1,
+    "requests": [
+      {
+        "action": "sql:chat",
+        "provider": "anthropic",
+        "model": "claude-sonnet-5",
+        "payload": {
+          "model": "claude-sonnet-5",
+          "max_tokens": 4096,
+          "system": "You are a SQL assistant inside a DuckDB workbench. Tables available:\nsales(order_id BIGINT, customer_id BIGINT, category VARCHAR, amount DECIMAL(10,2), ordered_at TIMESTAMP)\ncustomers(customer_id BIGINT, name VARCHAR, country VARCHAR, signed_up_at DATE)\nAnswer with DuckDB SQL in a fenced sql block, then one short sentence on what it does.",
+          "messages": [
+            {
+              "role": "user",
+              "content": "Which five categories made the most revenue last quarter, and how does each compare with the quarter before?"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
