@@ -6,6 +6,7 @@
 import { AnthropicProvider } from "./anthropic-provider";
 import { GeminiProvider } from "./gemini-provider";
 import { OpenAICompatibleProvider } from "./openai-compatible-provider";
+import { ZibbyProvider } from "./zibby-provider";
 import type { AIProvider, AIProviderType } from "./types";
 
 const providers: Record<AIProviderType, () => AIProvider> = {
@@ -22,6 +23,8 @@ const providers: Record<AIProviderType, () => AIProvider> = {
 		}),
 
 	anthropic: () => new AnthropicProvider(),
+
+	zibby: () => new ZibbyProvider(),
 
 	gemini: () => new GeminiProvider(),
 
@@ -47,6 +50,14 @@ const providers: Record<AIProviderType, () => AIProvider> = {
 		}),
 };
 
+/**
+ * Zibby holds the model keys and bills the signed-in visitor, so there is no
+ * key to ask for. Every other provider is bring-your-own.
+ */
+export function providerNeedsApiKey(type: AIProviderType): boolean {
+	return type !== "zibby";
+}
+
 // Cache provider instances
 const instanceCache = new Map<AIProviderType, AIProvider>();
 
@@ -60,11 +71,16 @@ export function getProvider(type: AIProviderType): AIProvider {
 }
 
 export function getDefaultProvider(): AIProviderType {
-	return "gemini";
+	return "zibby";
 }
 
+/**
+ * Zibby leads because it needs nothing from the visitor. The bring-your-own
+ * providers stay available for anyone who would rather spend their own key
+ * than the host's credits.
+ */
 export function getAllProviderTypes(): AIProviderType[] {
-	return ["gemini", "groq", "openai", "anthropic"];
+	return ["zibby", "gemini", "groq", "openai", "anthropic"];
 }
 
 export function getDefaultModel(type: AIProviderType): string {

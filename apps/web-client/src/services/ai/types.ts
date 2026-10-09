@@ -3,7 +3,13 @@
  * Core interfaces for the multi-provider AI chat system.
  */
 
-export type AIProviderType = "openai" | "anthropic" | "gemini" | "groq";
+export type AIProviderType =
+	| "openai"
+	| "anthropic"
+	| "gemini"
+	| "groq"
+	/** Keys live on the host; the signed-in visitor is billed in credits. */
+	| "zibby";
 
 export interface AIModelInfo {
 	id: string;

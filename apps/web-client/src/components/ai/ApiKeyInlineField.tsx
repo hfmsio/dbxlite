@@ -25,6 +25,7 @@ import {
 	getCredentialKey,
 	getProvider,
 } from "../../services/ai";
+import { providerNeedsApiKey } from "../../services/ai/provider-registry";
 
 interface ApiKeyInlineFieldProps {
 	provider: AIProviderType;
@@ -42,6 +43,8 @@ const apiKeyUrls: Record<AIProviderType, string> = {
 	groq: "https://console.groq.com/keys",
 	openai: "https://platform.openai.com/api-keys",
 	anthropic: "https://console.anthropic.com/settings/keys",
+	// Zibby holds the keys; this field never renders for it.
+	zibby: "",
 };
 
 /**
@@ -56,9 +59,11 @@ const apiKeyPatterns: Record<AIProviderType, RegExp> = {
 	anthropic: /^sk-ant-/,
 	gemini: /^(AIza|AQ\.)/, // AQ. is the newer Google auth-key prefix
 	groq: /^gsk_/,
+	zibby: /(?!)/,
 };
 
 function validateFormat(provider: AIProviderType, key: string): boolean {
+	if (!providerNeedsApiKey(provider)) return false;
 	if (!key) return false;
 	return apiKeyPatterns[provider].test(key.trim());
 }

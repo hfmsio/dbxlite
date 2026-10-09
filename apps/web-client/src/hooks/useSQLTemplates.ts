@@ -41,9 +41,12 @@ export function useSQLTemplates({
 	useEffect(() => {
 		const loadTemplates = async () => {
 			try {
+				// Root-absolute would 404 wherever the app is served under a path
+				// prefix rather than at a domain root.
+				const base = import.meta.env.BASE_URL;
 				const [initialTabResponse, newTabResponse] = await Promise.all([
-					fetch("/sql-templates/initial-tab.sql"),
-					fetch("/sql-templates/new-tab.sql"),
+					fetch(`${base}sql-templates/initial-tab.sql`),
+					fetch(`${base}sql-templates/new-tab.sql`),
 				]);
 
 				if (initialTabResponse.ok && newTabResponse.ok) {
