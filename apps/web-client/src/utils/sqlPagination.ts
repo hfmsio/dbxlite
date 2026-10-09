@@ -35,9 +35,13 @@ export function getTrailingLimit(sql: string): number | undefined {
  *     streaming). Miss a non-query in a blocklist → we corrupt valid input.
  *     "When unsure, don't paginate" is safe; "when unsure, paginate" is not.
  *
- * Deliberately excluded because they return rows but REJECT a trailing LIMIT:
- * TABLE, DESCRIBE, SUMMARIZE, SHOW, EXPLAIN, PRAGMA, CALL. They pass through
- * unbounded (server-capped) rather than being turned into a syntax error.
+ * Excluded because a trailing LIMIT is a parser error on them: DESCRIBE,
+ * SUMMARIZE, SHOW, PRAGMA, CALL. They return rows, so they pass through
+ * unbounded rather than being turned into a syntax error.
+ *
+ * EXPLAIN is excluded for the opposite reason: `EXPLAIN SELECT 1 LIMIT 1`
+ * parses, but the LIMIT binds to the inner SELECT, so appending one would
+ * silently change the query instead of bounding the plan output.
  */
 const QUERY_EXPRESSION_HEADS = new Set([
 	"select",
@@ -46,6 +50,7 @@ const QUERY_EXPRESSION_HEADS = new Set([
 	"values",
 	"pivot",
 	"unpivot",
+	"table", // `TABLE t` is sugar for SELECT * FROM t and takes LIMIT/OFFSET
 ]);
 
 /**

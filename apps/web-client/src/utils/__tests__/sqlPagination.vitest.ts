@@ -60,6 +60,7 @@ describe("isPaginatableStatement", () => {
 			"PIVOT t ON b USING sum(a)",
 			"UNPIVOT t ON a, c INTO NAME k VALUE v",
 			"(SELECT 1) UNION (SELECT 2)", // parenthesized set operation
+			"TABLE t", // sugar for SELECT * FROM t
 			"-- header comment\nSELECT * FROM t",
 		]) {
 			expect(isPaginatableStatement(sql), sql).toBe(true);
@@ -83,7 +84,6 @@ describe("isPaginatableStatement", () => {
 		// listed) and became syntax errors like `SUMMARIZE t LIMIT 100`.
 		for (const sql of [
 			"SUMMARIZE leased.events",
-			"TABLE t",
 			"DESCRIBE t",
 			"DESCRIBE SELECT * FROM t",
 		]) {
