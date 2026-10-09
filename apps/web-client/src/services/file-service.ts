@@ -6,6 +6,7 @@ import type { DataSourceType } from "../types/data-source";
 import type { CellValue, TableRow } from "../types/table";
 import { createLogger } from "../utils/logger";
 import { extractSheetNames } from "../utils/xlsxUtils";
+import { canUseFilePicker, canUseSavePicker } from "../utils/filePickerSupport";
 
 const logger = createLogger("FileService");
 
@@ -42,7 +43,7 @@ export interface DataFileInfo {
 export async function openSQLFile(): Promise<FileHandle | null> {
 	try {
 		// Check if File System Access API is supported
-		if ("showOpenFilePicker" in window) {
+		if (canUseFilePicker()) {
 			const fileHandles = await window.showOpenFilePicker?.({
 				types: [
 					{
@@ -114,7 +115,7 @@ export async function saveSQLFile(
 ): Promise<{ name: string; fileHandle?: FileSystemFileHandle } | null> {
 	try {
 		// Check if File System Access API is supported
-		if ("showSaveFilePicker" in window) {
+		if (canUseSavePicker()) {
 			const fileHandle = await window.showSaveFilePicker?.({
 				suggestedName: suggestedName || "query.sql",
 				types: [
@@ -189,7 +190,7 @@ export async function exportToCSV(
 
 	try {
 		// Check if File System Access API is supported
-		if ("showSaveFilePicker" in window) {
+		if (canUseSavePicker()) {
 			const fileHandle = await window.showSaveFilePicker?.({
 				suggestedName: filename,
 				types: [
@@ -273,7 +274,7 @@ export function detectDataSourceType(filename: string): DataSourceType {
 export async function openDataFiles(): Promise<DataFileInfo[]> {
 	try {
 		// Check if File System Access API is supported
-		if ("showOpenFilePicker" in window) {
+		if (canUseFilePicker()) {
 			const fileHandles = await window.showOpenFilePicker?.({
 				types: [
 					{
@@ -392,8 +393,14 @@ export async function openDataFiles(): Promise<DataFileInfo[]> {
 						const fileInfos: DataFileInfo[] = [];
 						for (let i = 0; i < files.length; i++) {
 							const file = files[i];
-							const buffer = await file.arrayBuffer();
 							const fileType = detectDataSourceType(file.name);
+
+							// The File object is what matters, not how it was chosen:
+							// DuckDB reads a File handle lazily, so a file larger than
+							// memory stays queryable on this path too. Buffering it here
+							// would have thrown that away for every browser and every
+							// embedded page that cannot open the picker.
+							const buffer = new ArrayBuffer(0);
 
 							// Check for full file path (available in Electron/Tauri)
 							const fileWithPath = file as FileWithPath;
@@ -405,11 +412,16 @@ export async function openDataFiles(): Promise<DataFileInfo[]> {
 								type: fileType,
 								size: file.size,
 								extension: file.name.split(".").pop() || "",
+								file,
 								fullPath,
 							};
 
 							// Extract XLSX sheets (Phase 1: only sheet names)
 							if (fileType === "xlsx") {
+								// XLSX is the one format read from a materialised buffer
+								// (requiresFullBuffer): its ZIP reader seeks all over the
+								// archive. Read the bytes once, here.
+								fileInfo.buffer = await file.arrayBuffer();
 								const sheets = await extractXLSXSheets(fileInfo);
 								if (sheets.length > 0) {
 									fileInfo.sheets = sheets;
@@ -492,7 +504,7 @@ export async function exportToJSON(
 
 	try {
 		// Check if File System Access API is supported
-		if ("showSaveFilePicker" in window) {
+		if (canUseSavePicker()) {
 			const fileHandle = await window.showSaveFilePicker?.({
 				suggestedName: filename,
 				types: [
@@ -545,7 +557,7 @@ export async function downloadBinaryFile(
 ): Promise<string | null> {
 	try {
 		// Check if File System Access API is supported
-		if ("showSaveFilePicker" in window) {
+		if (canUseSavePicker()) {
 			// Extract extension from filename
 			const extension = filename.includes(".")
 				? `.${filename.split(".").pop()}`

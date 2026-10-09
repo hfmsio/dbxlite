@@ -7,6 +7,7 @@ import {
 	type ParquetCompression,
 	parquetCompressionClause,
 } from "@ide/connectors";
+import { canUseSavePicker } from "../../utils/filePickerSupport";
 
 export type ExportFormat = "csv" | "json" | "parquet";
 
@@ -121,7 +122,7 @@ export function getFilePickerAcceptTypes(
  * Check if File System Access API is available
  */
 export function isFileSystemAccessSupported(): boolean {
-	return "showSaveFilePicker" in window;
+	return canUseSavePicker();
 }
 
 /**

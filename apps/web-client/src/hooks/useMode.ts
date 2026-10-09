@@ -12,6 +12,7 @@ import {
 	isHttpModeAvailable,
 } from "@ide/connectors";
 import { queryService } from "../services/streaming-query-service";
+import { serverModeProbeWorthwhile } from "../utils/serverModeReachable";
 
 export interface ModeInfo {
 	/** Current execution mode */
@@ -67,16 +68,25 @@ export function useMode(): ModeInfo {
 	const isWasmMode = mode === "wasm";
 	const label = isHttpMode ? "Server" : "WASM";
 
-	// Check server availability on mount (only in WASM mode)
+	// Check server availability on mount (only in WASM mode, and only where a
+	// local CLI server could answer at all)
 	useEffect(() => {
-		if (isWasmMode) {
-			isHttpModeAvailable().then(setServerAvailable);
-		} else {
+		if (!isWasmMode) {
 			setServerAvailable(true); // Already in HTTP mode, server is available
+			return;
 		}
+		if (!serverModeProbeWorthwhile()) {
+			setServerAvailable(false);
+			return;
+		}
+		isHttpModeAvailable().then(setServerAvailable);
 	}, [isWasmMode]);
 
 	const checkServerAvailability = async (): Promise<boolean> => {
+		if (!serverModeProbeWorthwhile()) {
+			setServerAvailable(false);
+			return false;
+		}
 		const available = await isHttpModeAvailable();
 		setServerAvailable(available);
 		return available;
