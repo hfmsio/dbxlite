@@ -11,7 +11,14 @@ import {
 
 export interface TableHeaderProps {
 	headerScrollRef: React.RefObject<HTMLDivElement>;
+	/** All columns. Multi-column auto-resize operates over the full set. */
 	columns: ColumnInfo[];
+	/** The same windowed slice the body renders; the two must not diverge. */
+	visibleColumns: ColumnInfo[];
+	/** Absolute index of `visibleColumns[0]`. */
+	firstVisibleCol: number;
+	leftSpacer: number;
+	rightSpacer: number;
 	rowNumWidth: number;
 	sortColumn: string | null;
 	sortDirection: SortDirection;
@@ -47,6 +54,10 @@ export interface TableHeaderProps {
 export function TableHeader({
 	headerScrollRef,
 	columns,
+	visibleColumns,
+	firstVisibleCol,
+	leftSpacer,
+	rightSpacer,
 	rowNumWidth,
 	sortColumn,
 	sortDirection,
@@ -95,8 +106,21 @@ export function TableHeader({
 				#
 			</div>
 
-			{/* Column headers */}
-			{columns.map((col, idx) => {
+			{/* Spacer mirroring the body's, so headers stay over their columns */}
+			{leftSpacer > 0 && (
+				<div
+					aria-hidden="true"
+					style={{
+						width: `${leftSpacer}px`,
+						minWidth: `${leftSpacer}px`,
+						flexShrink: 0,
+					}}
+				/>
+			)}
+
+			{/* Column headers, windowed to match the body */}
+			{visibleColumns.map((col, visibleIdx) => {
+				const idx = firstVisibleCol + visibleIdx;
 				const alignment = getCellAlignment(col.type, connectorType);
 				const justifyContent =
 					alignment === "right"
@@ -218,6 +242,17 @@ export function TableHeader({
 					</div>
 				);
 			})}
+
+			{rightSpacer > 0 && (
+				<div
+					aria-hidden="true"
+					style={{
+						width: `${rightSpacer}px`,
+						minWidth: `${rightSpacer}px`,
+						flexShrink: 0,
+					}}
+				/>
+			)}
 		</div>
 	);
 }

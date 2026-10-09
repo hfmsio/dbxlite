@@ -42,6 +42,13 @@ interface UseTableKeyboardOptions {
 	editInputRef: React.RefObject<HTMLInputElement>;
 	focusTimeoutRef: React.MutableRefObject<number | null>;
 
+	// Pagination, so vertical navigation can cross a page boundary instead of
+	// stopping dead at it.
+	currentPage: number;
+	totalPages: number;
+	pageSize: number;
+	loadPage: (page: number) => void;
+
 	// Callbacks
 	scrollToColumn: (colIdx: number) => void;
 	closeModalAndRestoreFocus: () => void;
@@ -91,6 +98,10 @@ export function useTableKeyboard({
 	scrollContainerRef,
 	editInputRef,
 	focusTimeoutRef,
+	currentPage,
+	totalPages,
+	pageSize,
+	loadPage,
 	scrollToColumn,
 	closeModalAndRestoreFocus,
 	showToast,
@@ -519,6 +530,10 @@ export function useTableKeyboard({
 		setSelectedCell,
 		setSelectionStart,
 		setSelectionEnd,
+		currentPage,
+		totalPages,
+		pageSize,
+		loadPage,
 		scrollToColumn,
 		cellRefs,
 		editInputRef,
@@ -601,6 +616,18 @@ export function useTableKeyboard({
 						setSelectedCell({ row: newRow, col: colIdx });
 						const cellKey = `${newRow}-${colIdx}`;
 						cellRefs.current.get(cellKey)?.focus();
+					} else if (!e.shiftKey && currentPage > 0) {
+						// First row of the page: step back onto the previous one,
+						// landing on its last row. Earlier pages are always full, so
+						// that is pageSize - 1.
+						setSelectionStart(null);
+						setSelectionEnd(null);
+						loadPage(currentPage - 1);
+						setSelectedCell({ row: pageSize - 1, col: colIdx });
+						if (scrollContainerRef.current) {
+							scrollContainerRef.current.scrollTop =
+								scrollContainerRef.current.scrollHeight;
+						}
 					}
 					break;
 
@@ -652,6 +679,23 @@ export function useTableKeyboard({
 						setSelectedCell({ row: newRow, col: colIdx });
 						const cellKey = `${newRow}-${colIdx}`;
 						cellRefs.current.get(cellKey)?.focus();
+					} else if (!e.shiftKey && currentPage < totalPages - 1) {
+						// Last row of the page: step onto the next one rather than
+						// stopping. Previously the key did nothing here, which reads as
+						// a frozen cursor rather than as the end of a page.
+						//
+						// Shift is excluded: a selection cannot span pages, since only
+						// one page is loaded, so extending across the boundary would
+						// silently drop the rows in between.
+						setSelectionStart(null);
+						setSelectionEnd(null);
+						loadPage(currentPage + 1);
+						setSelectedCell({ row: 0, col: colIdx });
+						if (scrollContainerRef.current) {
+							scrollContainerRef.current.scrollTop = 0;
+						}
+						// The cell does not exist yet; the mount-time auto-focus in
+						// TableBody picks it up once the new page renders.
 					}
 					break;
 

@@ -26,6 +26,10 @@ import { TableFooter } from "./table/TableFooter";
 import { TableHeader } from "./table/TableHeader";
 import type { PaginatedTableHandle, PaginatedTableProps } from "./table/types";
 import { calculateColumnContentWidth } from "./table/utils/columnWidthUtils";
+import {
+	computeColumnOffsets,
+	computeColumnWindow,
+} from "./table/utils/columnWindow";
 
 // Re-export for backwards compatibility
 export type { PaginatedTableHandle } from "./table/types";
@@ -137,6 +141,7 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 			confirmCancelExport,
 			dismissCancelExport,
 		} = useTableExport({
+			tabId,
 			// Export re-runs this to get the full result; falls back to the
 			// in-memory `result` (preloaded) only when exportSql is undefined,
 			// i.e. the buffer is already complete.
@@ -252,7 +257,13 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 		);
 
 		// Virtual scrolling hook
-		const { scrollTop, containerHeight, handleScroll } = useTableScroll({
+		const {
+			scrollTop,
+			scrollLeft,
+			containerHeight,
+			containerWidth,
+			handleScroll,
+		} = useTableScroll({
 			scrollContainerRef,
 			headerScrollRef,
 			currentPage,
@@ -262,6 +273,10 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 		// Constants
 		const ROW_HEIGHT = gridRowHeight;
 		const BUFFER_ROWS = 5;
+		// Columns rendered either side of the viewport. Smaller than the row
+		// buffer because columns are wider than rows are tall, so each one costs
+		// a whole column of cells.
+		const COLUMN_BUFFER = 2;
 
 		// Calculate row number column width based on total rows
 		const ROW_NUM_WIDTH = useMemo(() => {
@@ -285,6 +300,32 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 		const visiblePageData = pageData.slice(virtualStartRow, virtualEndRow);
 		const offsetY = virtualStartRow * ROW_HEIGHT;
 		const totalHeight = pageData.length * ROW_HEIGHT;
+
+		// Horizontal virtualization. Offsets depend only on the column widths, so
+		// they survive scrolling and are recomputed only when a column is resized
+		// or the result changes.
+		const columnOffsets = useMemo(
+			() => computeColumnOffsets(columns.map((c) => c.width)),
+			[columns],
+		);
+		const columnWindow = useMemo(
+			() =>
+				computeColumnWindow(
+					columnOffsets,
+					scrollLeft,
+					containerWidth,
+					ROW_NUM_WIDTH,
+					COLUMN_BUFFER,
+				),
+			[columnOffsets, scrollLeft, containerWidth, ROW_NUM_WIDTH],
+		);
+		// Absolute indices are preserved alongside the slice: selection, refs and
+		// every handler key off the column's real position, not its position in
+		// the rendered window.
+		const visibleColumns = useMemo(
+			() => columns.slice(columnWindow.startCol, columnWindow.endCol),
+			[columns, columnWindow.startCol, columnWindow.endCol],
+		);
 
 		// Scroll horizontally to make a column visible
 		const scrollToColumn = useCallback(
@@ -333,6 +374,10 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 			scrollContainerRef,
 			editInputRef,
 			focusTimeoutRef,
+			currentPage,
+			totalPages,
+			pageSize,
+			loadPage,
 			scrollToColumn,
 			closeModalAndRestoreFocus,
 			showToast,
@@ -421,6 +466,10 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 						<TableHeader
 							headerScrollRef={headerScrollRef}
 							columns={columns}
+					visibleColumns={visibleColumns}
+					firstVisibleCol={columnWindow.startCol}
+					leftSpacer={columnWindow.leftSpacer}
+					rightSpacer={columnWindow.rightSpacer}
 							rowNumWidth={ROW_NUM_WIDTH}
 							sortColumn={sortColumn}
 							sortDirection={sortDirection}
@@ -443,6 +492,10 @@ const PaginatedTable = React.memo(forwardRef<PaginatedTableHandle, PaginatedTabl
 					cellRefs={cellRefs}
 					editInputRef={editInputRef}
 					columns={columns}
+					visibleColumns={visibleColumns}
+					firstVisibleCol={columnWindow.startCol}
+					leftSpacer={columnWindow.leftSpacer}
+					rightSpacer={columnWindow.rightSpacer}
 					pageData={pageData}
 					formattedPageData={formattedPageData}
 					visiblePageData={visiblePageData}
