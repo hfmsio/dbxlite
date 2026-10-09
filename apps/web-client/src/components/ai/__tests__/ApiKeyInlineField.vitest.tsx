@@ -60,6 +60,9 @@ describe("ApiKeyInlineField — format validation", () => {
 		["anthropic", "sk-ant-validlooking", true],
 		["anthropic", "sk-validlooking-not-anthropic", false],
 		["gemini", "AIzaSyValidLooking", true],
+		// Google issues newer auth keys with an AQ. prefix; an AIza-only test
+		// refused them and the key could not be saved at all.
+		["gemini", "AQ.EXAMPLE_NOT_A_REAL_KEY_FOR_TESTS_ONLY_0000", true],
 		["gemini", "sk-wrongprefix", false],
 		["groq", "gsk_validlooking", true],
 		["groq", "sk-wrongprefix", false],

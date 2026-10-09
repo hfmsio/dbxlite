@@ -54,7 +54,7 @@ const apiKeyUrls: Record<AIProviderType, string> = {
 const apiKeyPatterns: Record<AIProviderType, RegExp> = {
 	openai: /^sk-/,
 	anthropic: /^sk-ant-/,
-	gemini: /^AIza/,
+	gemini: /^(AIza|AQ\.)/, // AQ. is the newer Google auth-key prefix
 	groq: /^gsk_/,
 };
 
