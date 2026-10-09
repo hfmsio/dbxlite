@@ -12,6 +12,7 @@ import type { DataSource, Schema, Table } from "../types/data-source";
 import { createLogger } from "../utils/logger";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ContextMenu } from "./ContextMenu";
+import { canUseFilePicker } from "../utils/filePickerSupport";
 
 const logger = createLogger("DatabaseTree");
 
@@ -158,7 +159,7 @@ export function DatabaseTree({
 				);
 
 				// Open file picker for user to re-select the same file
-				if ("showOpenFilePicker" in window) {
+				if (canUseFilePicker()) {
 					try {
 						const handles = await window.showOpenFilePicker?.({
 							types: [
@@ -214,7 +215,7 @@ export function DatabaseTree({
 
 				// Permission granted but file still not readable - likely large file issue
 				// Open file picker for user to re-select
-				if ("showOpenFilePicker" in window) {
+				if (canUseFilePicker()) {
 					try {
 						const handles = await window.showOpenFilePicker?.({
 							types: [
