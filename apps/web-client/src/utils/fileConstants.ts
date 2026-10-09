@@ -30,18 +30,21 @@ export function shouldUseZeroCopy(size: number): boolean {
  * 3-10x slower than reading the same sheet from a buffer. Excel tops out
  * around a million rows, so materialising the whole workbook is affordable.
  *
+ * ODS is here for the same reason as XLSX: it is the OpenDocument ZIP, and
+ * detectDataSourceType already groups it with them. It was missing, so an .ods
+ * file took the File-handle path this predicate exists to keep it off.
+ *
  * This predicate governs BOTH the decision to read the buffer up front and
  * the choice of registration call. Keep it that way: when those two decisions
  * were made independently they drifted apart, and XLSX silently ended up on
  * the slow path with its buffer read and then thrown away.
  */
+const FULL_BUFFER_EXTENSIONS = ["xlsx", "xls", "ods"];
+
 export function requiresFullBuffer(extensionOrName: string): boolean {
 	const lower = extensionOrName.toLowerCase();
-	return (
-		lower === "xlsx" ||
-		lower === "xls" ||
-		lower.endsWith(".xlsx") ||
-		lower.endsWith(".xls")
+	return FULL_BUFFER_EXTENSIONS.some(
+		(ext) => lower === ext || lower.endsWith(`.${ext}`),
 	);
 }
 
