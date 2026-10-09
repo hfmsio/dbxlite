@@ -226,6 +226,21 @@ describe("PaginationPlanner", () => {
 
 			expect(plan.sql).toBe("CREATE TABLE x (a INT)");
 		});
+
+		// The shapes that regressed: a trailing LIMIT is a parser error on
+		// SUMMARIZE and dot-commands aren't SQL at all, so both must reach the
+		// connector byte-for-byte.
+		it.each([[".tables"], ["SUMMARIZE leased.events"]])(
+			"passes %s through untouched",
+			async (sql) => {
+				const planner = new PaginationPlanner(execute.execute, wasm);
+
+				const plan = await planner.plan(sql, request());
+
+				expect(plan.sql).toBe(sql);
+				expect(execute.calls).toHaveLength(0);
+			},
+		);
 	});
 
 	describe("invalidation", () => {
