@@ -20,6 +20,7 @@ import { Logo, Wordmark } from "./Logo";
 import ModeIndicator from "./ModeIndicator";
 import SnowflakeContextButton from "./SnowflakeContextButton";
 import ThemeToggle from "./ThemeToggle";
+import { WAREHOUSE_CONNECTORS_ENABLED } from "../utils/buildTargets";
 
 // Connector accent colors — match CatalogProvider.accentColor where applicable
 // and the docs. These render through CSS custom properties so they stay
@@ -405,14 +406,18 @@ export default function Header({
 							{connectorIcon("duckdb")}{" "}
 							{isHttpMode ? "DuckDB Server" : "DuckDB WASM"}
 						</option>
-						<option value="bigquery" disabled={!isBigQueryConnected}>
-							{connectorIcon("bigquery")} BigQuery
-							{!isBigQueryConnected ? " (not connected)" : ""}
-						</option>
-						<option value="snowflake" disabled={!isSnowflakeConnected}>
-							{connectorIcon("snowflake")} Snowflake
-							{!isSnowflakeConnected ? " (not connected)" : ""}
-						</option>
+						{WAREHOUSE_CONNECTORS_ENABLED && (
+							<>
+								<option value="bigquery" disabled={!isBigQueryConnected}>
+									{connectorIcon("bigquery")} BigQuery
+									{!isBigQueryConnected ? " (not connected)" : ""}
+								</option>
+								<option value="snowflake" disabled={!isSnowflakeConnected}>
+									{connectorIcon("snowflake")} Snowflake
+									{!isSnowflakeConnected ? " (not connected)" : ""}
+								</option>
+							</>
+						)}
 					</select>
 				</div>
 				{activeConnector === "snowflake" && snowflakeContext && (
