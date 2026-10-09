@@ -17,42 +17,42 @@ interface Screenshot {
 // Screenshot gallery data - add images to public/screenshots/
 const screenshots: Screenshot[] = [
 	{
-		src: "/screenshots/main-interface-dark.png",
+		src: `${import.meta.env.BASE_URL}screenshots/main-interface-dark.png`,
 		title: "Main Interface - Dark Theme",
 		description: "Full interface with data explorer, multi-tab SQL editor, and results grid. Shows local files, remote URLs, pagination, and export options."
 	},
 	{
-		src: "/screenshots/main-interface-light.png",
+		src: `${import.meta.env.BASE_URL}screenshots/main-interface-light.png`,
 		title: "Main Interface - Light Theme",
 		description: "VS Light theme with the same powerful features. Query large CSV files, view remote Parquet from Hugging Face."
 	},
 	{
-		src: "/screenshots/main-interface-dracula.png",
+		src: `${import.meta.env.BASE_URL}screenshots/main-interface-dracula.png`,
 		title: "Main Interface - Dracula Theme",
 		description: "Popular Dracula color scheme. Multi-tab editor with syntax highlighting, ZERO-COPY file access for large datasets."
 	},
 	{
-		src: "/screenshots/main-interface-ayu-light.png",
+		src: `${import.meta.env.BASE_URL}screenshots/main-interface-ayu-light.png`,
 		title: "Main Interface - Ayu Light Theme",
 		description: "Clean Ayu Light theme with orange accents. DuckDB database explorer with 21GB database, session tables, and column type badges."
 	},
 	{
-		src: "/screenshots/explorer-multi-themes.png",
+		src: `${import.meta.env.BASE_URL}screenshots/explorer-multi-themes.png`,
 		title: "Themes & Data Explorer",
 		description: "10 color themes available. Data explorer handles simple tables to deeply nested STRUCTs. Excel files display all sheets with schemas."
 	},
 	{
-		src: "/screenshots/query-execution.png",
+		src: `${import.meta.env.BASE_URL}screenshots/query-execution.png`,
 		title: "Query Execution Status",
 		description: "Long-running query indicator with elapsed time, Stop Query button, and ESC shortcut. Non-blocking UI during execution."
 	},
 	{
-		src: "/screenshots/export-status.png",
+		src: `${import.meta.env.BASE_URL}screenshots/export-status.png`,
 		title: "Export to Parquet",
 		description: "Export progress overlay showing step-by-step status, elapsed time, filename, and ESC to cancel. Supports CSV, JSON, and Parquet formats."
 	},
 	{
-		src: "/screenshots/schema-modal.png",
+		src: `${import.meta.env.BASE_URL}screenshots/schema-modal.png`,
 		title: "Result Set Schema",
 		description: "Schema modal showing column names, data types (Text, Timestamp, Double, Big Integer), and sample values. Quick overview of query results."
 	},
