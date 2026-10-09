@@ -17,6 +17,7 @@ import {
 	type ChatBackend,
 	ChatBackendError,
 } from "./types";
+import { providerNeedsApiKey } from "./provider-registry";
 
 export class ByoChatBackend implements ChatBackend {
 	readonly kind = "byo" as const;
@@ -35,6 +36,7 @@ export class ByoChatBackend implements ChatBackend {
 	}
 
 	async isAvailable(): Promise<boolean> {
+		if (!providerNeedsApiKey(this.providerType)) return true;
 		const key = await aiCredentialStore.load(
 			getCredentialKey(this.providerType),
 		);
@@ -53,15 +55,19 @@ export class ByoChatBackend implements ChatBackend {
 			);
 		}
 
-		// Pre-handshake: load API key.
-		const apiKey = (await aiCredentialStore.load(
-			getCredentialKey(this.providerType),
-		)) as string | null;
-		if (!apiKey) {
-			throw new ChatBackendError(
-				"MISSING_API_KEY",
-				`No API key configured for ${this.label}`,
-			);
+		// Pre-handshake: load API key, where the provider has one.
+		let apiKey = "";
+		if (providerNeedsApiKey(this.providerType)) {
+			apiKey =
+				((await aiCredentialStore.load(
+					getCredentialKey(this.providerType),
+				)) as string | null) ?? "";
+			if (!apiKey) {
+				throw new ChatBackendError(
+					"MISSING_API_KEY",
+					`No API key configured for ${this.label}`,
+				);
+			}
 		}
 
 		// Handshake: from here forward, all failures are in-stream.

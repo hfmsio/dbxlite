@@ -39,6 +39,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 		anthropic: false,
 		gemini: false,
 		groq: false,
+		zibby: false,
 	});
 
 	// Tracks which providers have a stored PII consent grant. Used to
@@ -50,6 +51,7 @@ export default function AISettings({ showToast }: AISettingsProps) {
 		anthropic: false,
 		gemini: false,
 		groq: false,
+		zibby: false,
 	});
 
 	const refreshSavedKeys = useCallback(async () => {

@@ -47,6 +47,9 @@ importers:
       '@vercel/speed-insights':
         specifier: ^1.3.1
         version: 1.3.1(react@18.3.1)
+      '@zibby-run/app-kit':
+        specifier: ^0.7.1
+        version: 0.7.1(react@18.3.1)
       argon2-browser:
         specifier: ^1.18.0
         version: 1.18.0
@@ -1124,6 +1127,16 @@ packages:
 
   '@vitest/utils@2.1.9':
     resolution: {integrity: sha512-v0psaMSkNJ3A2NMrUEHFRzJtDPFn+/VWZ5WxImB21T9fjucJRmS7xCS3ppEnARb9y11OAzaD+P2Ps+b+BGX5iQ==}
+
+  '@zibby-run/app-kit@0.7.1':
+    resolution: {integrity: sha512-F245zh2rSpFtIpkTAFsbuUqf3grL9ae36Ob6WHFKKrr1I9WDkNzuTodIyrz+fLhUDuHmHdSeDJfDqre4EAo1oQ==}
+    engines: {node: '>=20'}
+    hasBin: true
+    peerDependencies:
+      react: '>=18'
+    peerDependenciesMeta:
+      react:
+        optional: true
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -2968,6 +2981,10 @@ snapshots:
       '@vitest/pretty-format': 2.1.9
       loupe: 3.2.1
       tinyrainbow: 1.2.0
+
+  '@zibby-run/app-kit@0.7.1(react@18.3.1)':
+    optionalDependencies:
+      react: 18.3.1
 
   agent-base@7.1.4: {}
 

@@ -538,7 +538,7 @@ function WelcomeCard({
 }) {
 	// Narrow incoming string to AIProviderType for the BYO grid; default to gemini if it's a warehouse id.
 	const initialBYO: AIProviderType = (
-		["gemini", "groq", "openai", "anthropic"] as const
+		["gemini", "groq", "openai", "anthropic"] as readonly AIProviderType[]
 	).includes(activeProvider as AIProviderType)
 		? (activeProvider as AIProviderType)
 		: "gemini";
