@@ -1,4 +1,5 @@
 import type React from "react";
+import { useMemo } from "react";
 import type { ConnectorType } from "../../types/data-source";
 import type { CellValue } from "../../types/table";
 import { ExportOverlay } from "./ExportOverlay";
@@ -14,7 +15,16 @@ export interface TableBodyProps {
 	editInputRef: React.MutableRefObject<HTMLInputElement | null>;
 
 	// Data
+	/** All columns, for anything that needs the full set (e.g. Tab wrap). */
 	columns: ColumnInfo[];
+	/** The horizontally windowed slice actually rendered. */
+	visibleColumns: ColumnInfo[];
+	/** Absolute index of `visibleColumns[0]`, so cells keep their real position. */
+	firstVisibleCol: number;
+	/** Width standing in for the columns before the window. */
+	leftSpacer: number;
+	/** Width standing in for the columns after the window. */
+	rightSpacer: number;
 	pageData: RowData[];
 	formattedPageData: Record<string, string>[]; // Pre-formatted cell values for performance
 	visiblePageData: RowData[];
@@ -74,6 +84,10 @@ export function TableBody({
 	cellRefs,
 	editInputRef,
 	columns,
+	visibleColumns,
+	firstVisibleCol,
+	leftSpacer,
+	rightSpacer,
 	pageData,
 	formattedPageData,
 	visiblePageData,
@@ -103,6 +117,14 @@ export function TableBody({
 	setSelectionStart,
 	setSelectionEnd,
 }: TableBodyProps) {
+	// Alignment depends only on the column's type, so it is computed once per
+	// rendered column rather than once per cell. At 18 rows that is 18x fewer
+	// calls, and it runs on every keypress.
+	const alignments = useMemo(
+		() => visibleColumns.map((col) => getCellAlignment(col.type, connectorType)),
+		[visibleColumns, connectorType],
+	);
+
 	// Handle keyboard events at container level for when focus is lost from cells
 	const handleContainerKeyDown = (e: React.KeyboardEvent) => {
 		// Only handle PageUp/PageDown at container level
@@ -216,8 +238,24 @@ export function TableBody({
 										{globalRowNum + 1}
 									</div>
 
-									{/* Data cells */}
-									{columns.map((col, colIdx) => {
+									{/* Spacer for the columns scrolled off to the left */}
+									{leftSpacer > 0 && (
+										<div
+											aria-hidden="true"
+											style={{
+												width: `${leftSpacer}px`,
+												minWidth: `${leftSpacer}px`,
+												flexShrink: 0,
+											}}
+										/>
+									)}
+
+									{/* Data cells, windowed horizontally */}
+									{visibleColumns.map((col, visibleIdx) => {
+										// Absolute index: refs, selection and every handler are
+										// keyed on the column's real position, never on where it
+										// happens to sit in the current window.
+										const colIdx = firstVisibleCol + visibleIdx;
 										const cellKey = `${rowIdx}-${colIdx}`;
 										const isSelected =
 											selectedCell?.row === rowIdx &&
@@ -226,7 +264,7 @@ export function TableBody({
 										const isViewing =
 											viewingCell?.row === rowIdx &&
 											viewingCell?.col === colIdx;
-										const alignment = getCellAlignment(col.type, connectorType);
+										const alignment = alignments[visibleIdx];
 
 										return (
 											<div
@@ -293,7 +331,10 @@ export function TableBody({
 													userSelect: "none",
 													position: "relative",
 												}}
-												title={row[col.name] ? String(row[col.name]) : ""}
+												// The pre-formatted value, not a fresh String() of the
+												// raw one: same text the cell displays, so a tooltip on a
+												// truncated cell now matches what was truncated.
+												title={formattedPageData[rowIdx]?.[col.name] ?? ""}
 											>
 												{isViewing ? (
 													<input
@@ -401,6 +442,18 @@ export function TableBody({
 											</div>
 										);
 									})}
+
+									{/* Spacer for the columns still off to the right */}
+									{rightSpacer > 0 && (
+										<div
+											aria-hidden="true"
+											style={{
+												width: `${rightSpacer}px`,
+												minWidth: `${rightSpacer}px`,
+												flexShrink: 0,
+											}}
+										/>
+									)}
 								</div>
 							);
 						})}

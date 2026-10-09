@@ -9,7 +9,11 @@ interface UseTableScrollOptions {
 
 interface UseTableScrollReturn {
 	scrollTop: number;
+	/** Horizontal position, for windowing columns. */
+	scrollLeft: number;
 	containerHeight: number;
+	/** Viewport width, for windowing columns. */
+	containerWidth: number;
 	handleScroll: (e: React.UIEvent<HTMLDivElement>) => void;
 }
 
@@ -30,7 +34,25 @@ export function useTableScroll({
 	pageDataLength: _pageDataLength,
 }: UseTableScrollOptions): UseTableScrollReturn {
 	const [scrollTop, setScrollTop] = useState(0);
+	const [scrollLeft, setScrollLeft] = useState(0);
 	const [containerHeight, setContainerHeight] = useState(600);
+	const [containerWidth, setContainerWidth] = useState(0);
+
+	/**
+	 * Coalesces scroll updates onto one animation frame.
+	 *
+	 * A scroll event can fire many times per frame, and each one used to set
+	 * state synchronously and re-render the whole body. Rendering more than once
+	 * per frame cannot show the user anything extra, so the extra renders were
+	 * pure cost.
+	 */
+	const rafRef = useRef<number | null>(null);
+	const pendingRef = useRef<{ top: number; left: number } | null>(null);
+	useEffect(() => {
+		return () => {
+			if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+		};
+	}, []);
 
 	// Track if we've done initial measurement
 	const hasMeasured = useRef(false);
@@ -41,12 +63,22 @@ export function useTableScroll({
 	const handleScroll = useCallback(
 		(e: React.UIEvent<HTMLDivElement>) => {
 			const target = e.currentTarget;
-			setScrollTop(target.scrollTop);
 
-			// Sync header horizontal scroll with body
+			// Header sync stays synchronous: deferring it by even one frame lets
+			// the header visibly lag the columns underneath it.
 			if (headerScrollRef.current) {
 				headerScrollRef.current.scrollLeft = target.scrollLeft;
 			}
+
+			pendingRef.current = { top: target.scrollTop, left: target.scrollLeft };
+			if (rafRef.current !== null) return;
+			rafRef.current = requestAnimationFrame(() => {
+				rafRef.current = null;
+				const next = pendingRef.current;
+				if (!next) return;
+				setScrollTop(next.top);
+				setScrollLeft(next.left);
+			});
 		},
 		[headerScrollRef],
 	);
@@ -66,6 +98,7 @@ export function useTableScroll({
 			// when measured during layout transitions
 			if (height >= 200) {
 				setContainerHeight(height);
+				setContainerWidth(container.clientWidth);
 				hasMeasured.current = true;
 			} else if (!hasMeasured.current) {
 				// If we haven't measured yet and height is too small,
@@ -74,6 +107,7 @@ export function useTableScroll({
 					const retryHeight = container.clientHeight;
 					if (retryHeight >= 200) {
 						setContainerHeight(retryHeight);
+						setContainerWidth(container.clientWidth);
 						hasMeasured.current = true;
 					}
 				});
@@ -132,7 +166,9 @@ export function useTableScroll({
 
 	return {
 		scrollTop,
+		scrollLeft,
 		containerHeight,
+		containerWidth,
 		handleScroll,
 	};
 }
