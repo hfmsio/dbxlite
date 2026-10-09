@@ -4,6 +4,7 @@
  */
 
 import { createLogger } from "../utils/logger";
+import { canUseFilePicker } from "../utils/filePickerSupport";
 
 const logger = createLogger("FileHandleStore");
 const DB_NAME = "dbxlite-file-handles";
@@ -55,7 +56,7 @@ class FileHandleStore {
 	 * Check if File System Access API is supported
 	 */
 	isSupported(): boolean {
-		return "showOpenFilePicker" in window;
+		return canUseFilePicker();
 	}
 
 	/**

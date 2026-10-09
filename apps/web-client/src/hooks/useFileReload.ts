@@ -21,6 +21,7 @@ import {
 	isSQLFile,
 } from "../utils/fileConstants";
 import { buildFileTypeFilter, getFileExtension } from "../utils/fileTypeFilter";
+import { canUseFilePicker } from "../utils/filePickerSupport";
 
 const logger = createLogger("FileReload");
 
@@ -599,14 +600,17 @@ export function useFileReload({
 				const extension = getFileExtension(dataSource.name);
 				const fileTypeFilter = buildFileTypeFilter(extension);
 
-				if (!window.showOpenFilePicker) {
+				if (!canUseFilePicker()) {
 					throw new Error("File System Access API not supported");
 				}
 
-				const [fileHandle] = await window.showOpenFilePicker({
+				// Optional call keeps `window` as the receiver; canUseFilePicker()
+				// above has already ruled out the unsupported and embedded cases.
+				const fileHandles = await window.showOpenFilePicker?.({
 					multiple: false,
 					types: fileTypeFilter,
 				});
+				const fileHandle = fileHandles?.[0];
 
 				if (!fileHandle) {
 					showToast("No file selected", "info", 2000);
