@@ -20,6 +20,9 @@ const CREDENTIAL_PATTERNS: { name: string; re: RegExp }[] = [
 	{ name: "openai-style", re: /\bsk-[A-Za-z0-9_-]{20,}\b/g },
 	{ name: "slack-bot", re: /\bxoxb-[0-9]+-[0-9]+-[A-Za-z0-9]+\b/g },
 	{ name: "google-api", re: /\bAIza[0-9A-Za-z_-]{35}\b/g },
+	// Google's newer auth keys: "AQ." then an unpublished length, so this
+	// bounds below rather than exactly. Under-matching here leaks a key.
+	{ name: "google-auth-key", re: /\bAQ\.[A-Za-z0-9_-]{20,}\b/g },
 	{ name: "aws-access", re: /\bAKIA[0-9A-Z]{16}\b/g },
 	{ name: "github-pat", re: /\bghp_[A-Za-z0-9]{36}\b/g },
 	{ name: "jwt", re: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g },
