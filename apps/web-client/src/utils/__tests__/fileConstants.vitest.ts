@@ -19,6 +19,13 @@ describe("requiresFullBuffer", () => {
 		expect(requiresFullBuffer("legacy.xls")).toBe(true);
 	});
 
+	it("is true for ODS, which detectDataSourceType groups with Excel", () => {
+		// It was missing from this list, so an .ods file took the File-handle
+		// path while being treated as a spreadsheet everywhere else.
+		expect(requiresFullBuffer("ods")).toBe(true);
+		expect(requiresFullBuffer("quarterly_budget.ods")).toBe(true);
+	});
+
 	it("is false for streaming formats, which are faster via a File handle", () => {
 		for (const f of ["parquet", "csv", "tsv", "json", "jsonl", "arrow"]) {
 			expect(requiresFullBuffer(f)).toBe(false);
