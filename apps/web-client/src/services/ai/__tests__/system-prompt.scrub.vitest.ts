@@ -28,6 +28,16 @@ describe("scrubCredentials", () => {
 		expect(r.matches[0]).toEqual({ pattern: "google-api", count: 1 });
 	});
 
+	it("redacts a Google AQ. auth key", () => {
+		// The AIza pattern does not match these, so before this was added a key
+		// pasted into the chat reached the model verbatim.
+		const r = scrubCredentials("my key is AQ.EXAMPLE_NOT_A_REAL_KEY_FOR_TESTS_ONLY_0000 thanks");
+
+		expect(r.cleaned).toContain("[REDACTED:google-auth-key]");
+		expect(r.cleaned).not.toContain("AQ.EXAMPLE_NOT_A_REAL_KEY_FOR_TESTS_ONLY_0000");
+		expect(r.matches).toEqual([{ pattern: "google-auth-key", count: 1 }]);
+	});
+
 	it("redacts AWS access key IDs", () => {
 		const r = scrubCredentials("AKIAIOSFODNN7EXAMPLE inside a comment");
 		expect(r.cleaned).toContain("[REDACTED:aws-access]");
