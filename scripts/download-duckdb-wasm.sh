@@ -37,9 +37,28 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 mkdir -p "$TARGET_DIR"
-cp "$DIST_DIR"/duckdb-*.wasm "$TARGET_DIR/"
-cp "$DIST_DIR"/duckdb-browser-*.worker.js "$TARGET_DIR/"
 cp "$DIST_DIR"/duckdb-browser*.mjs "$TARGET_DIR/"
+
+# DBXLITE_WASM_BUNDLES=eh copies only the exception-handling bundle, which is
+# the one the adapter selects by name (see worker.ts: `selectedBundles.eh ||
+# selectBundle(...)`), so coi and mvp are never reached while eh is present.
+# They cost ~70 MB each time the tree is copied, which is twice on a build
+# machine: once here and again into dist. Unset copies everything, so an
+# ordinary build is unchanged.
+case "${DBXLITE_WASM_BUNDLES:-all}" in
+  eh)
+    cp "$DIST_DIR"/duckdb-eh.wasm "$TARGET_DIR/"
+    cp "$DIST_DIR"/duckdb-browser-eh.worker.js "$TARGET_DIR/"
+    ;;
+  all)
+    cp "$DIST_DIR"/duckdb-*.wasm "$TARGET_DIR/"
+    cp "$DIST_DIR"/duckdb-browser-*.worker.js "$TARGET_DIR/"
+    ;;
+  *)
+    echo "ERROR: DBXLITE_WASM_BUNDLES must be 'eh' or 'all', got '$DBXLITE_WASM_BUNDLES'" >&2
+    exit 1
+    ;;
+esac
 
 # A silent partial copy would leave the app fetching a file that is not there.
 for required in duckdb-eh.wasm duckdb-browser-eh.worker.js; do
