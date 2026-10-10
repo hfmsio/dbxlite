@@ -2,14 +2,15 @@
 
 This directory contains DuckDB WebAssembly bundles (~107 MB total).
 
-## Auto-Downloaded (not in git)
+## Copied from node_modules (not in git)
 
-Files are automatically downloaded when you run:
+Files are copied out of the installed `@duckdb/duckdb-wasm` package when you
+run:
 ```bash
 pnpm install  # Runs postinstall hook
 ```
 
-Or manually:
+Or manually, after the install:
 ```bash
 bash scripts/download-duckdb-wasm.sh
 ```
@@ -20,5 +21,7 @@ bash scripts/download-duckdb-wasm.sh
 - `duckdb-browser*.mjs` - JavaScript loaders
 
 ## Why not in git?
-These files total ~107 MB and would bloat the repository.
-They're sourced from `@duckdb/duckdb-wasm` npm package instead.
+These files total ~107 MB and would bloat the repository. They come from the
+`@duckdb/duckdb-wasm` package the workspace already depends on, at the version
+the lockfile pins, so the bundles served always match the JavaScript that
+drives them.
