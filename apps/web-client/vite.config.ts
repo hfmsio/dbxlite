@@ -177,9 +177,19 @@ export default defineConfig({
         'oauth-callback': path.resolve(__dirname, 'oauth-callback.html'),
       },
       output: {
-        manualChunks: {
-          'monaco-editor': ['monaco-editor'],
-          'react-vendor': ['react', 'react-dom']
+        // Split per dependency rather than into two large chunks. Rendering
+        // and minifying one 5 MB chunk is the peak of the build's memory, and
+        // a build machine capped at 2 GiB is killed there. Smaller chunks are
+        // processed one at a time, and a visitor also re-downloads less when
+        // one dependency changes.
+        manualChunks(id: string) {
+          if (!id.includes('node_modules')) return
+          if (id.includes('monaco-editor')) return 'monaco-editor'
+          if (id.includes('react-dom') || id.includes('/react/')) return 'react-vendor'
+          const match = id.match(/node_modules\/\.pnpm\/([^/]+)/) ?? id.match(/node_modules\/((?:@[^/]+\/)?[^/]+)/)
+          if (!match) return 'vendor'
+          // `@scope+name@1.2.3` and `@scope/name` both collapse to a safe slug
+          return `vendor-${match[1].replace(/@[\d].*$/, '').replace(/[@/+]/g, '-')}`
         }
       },
       // External modules (argon2-browser has unusual WASM imports that can't be bundled)
