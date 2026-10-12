@@ -26,7 +26,7 @@ interface UseSQLTemplatesReturn {
 
 /**
  * Hook to manage SQL templates
- * - Loads templates from /sql-templates/ on mount
+ * - Loads templates from sql-templates/ next to the page on mount
  * - Updates first tab with initial template when loaded
  * - Falls back to defaults if loading fails
  */
@@ -41,9 +41,12 @@ export function useSQLTemplates({
 	useEffect(() => {
 		const loadTemplates = async () => {
 			try {
+				// Relative to the page, not the origin root: the app is built with
+				// a relative base and some hosts mount it under a path prefix.
+				const base = new URL("sql-templates/", document.baseURI);
 				const [initialTabResponse, newTabResponse] = await Promise.all([
-					fetch("/sql-templates/initial-tab.sql"),
-					fetch("/sql-templates/new-tab.sql"),
+					fetch(new URL("initial-tab.sql", base)),
+					fetch(new URL("new-tab.sql", base)),
 				]);
 
 				if (initialTabResponse.ok && newTabResponse.ok) {

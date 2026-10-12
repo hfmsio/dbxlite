@@ -1,30 +1,21 @@
 import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/react";
+import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { LockProvider } from "./state/lock";
 
-// Monaco version must match package.json
-const MONACO_VERSION = "0.54.0";
-const MONACO_CDN = `https://cdn.jsdelivr.net/npm/monaco-editor@${MONACO_VERSION}/min/vs`;
-
-// Configure Monaco Editor workers via CDN for proxy compatibility
+// Monaco's worker ships with the app rather than from a CDN. A page that is
+// cross-origin isolated (the COOP/COEP headers DuckDB needs) refuses to build
+// a Worker from another origin, and Monaco then silently runs its language
+// services on the main thread and freezes the UI.
+//
+// Every editor in the app is `language: "sql"`, which has no language service
+// worker of its own, so the generic editor worker is the only one Monaco can
+// ask for. Bundling the json/css/html/typescript workers as well would add
+// 8 MB to the build for code that can never run.
 self.MonacoEnvironment = {
-	getWorkerUrl(_: string, label: string) {
-		if (label === "json") {
-			return `${MONACO_CDN}/language/json/json.worker.js`;
-		}
-		if (label === "css" || label === "scss" || label === "less") {
-			return `${MONACO_CDN}/language/css/css.worker.js`;
-		}
-		if (label === "html" || label === "handlebars" || label === "razor") {
-			return `${MONACO_CDN}/language/html/html.worker.js`;
-		}
-		if (label === "typescript" || label === "javascript") {
-			return `${MONACO_CDN}/language/typescript/ts.worker.js`;
-		}
-		return `${MONACO_CDN}/editor/editor.worker.js`;
-	},
+	getWorker: () => new EditorWorker(),
 };
 
 const container = document.getElementById("root")!;
