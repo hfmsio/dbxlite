@@ -459,8 +459,17 @@ async function tryLoadBundles(bundleConfigs: BundleConfig[]): Promise<BundleConf
       // Test if the EH bundle (most commonly used) is available
       const testUrl = config.eh?.mainModule || config.mvp?.mainModule;
       if (testUrl) {
-        const res = await fetch(testUrl, { method: 'HEAD' });
-        if(res.ok){
+        // A one-byte ranged GET rather than HEAD: some static hosts answer HEAD
+        // with 404 or 405 while serving the file fine. A host that ignores the
+        // Range header sends the whole 34 MB bundle, so drop the body as soon
+        // as the headers have answered the question.
+        const res = await fetch(testUrl, { headers: { Range: 'bytes=0-0' } });
+        // An SPA host rewrites unknown paths to index.html and answers 200, so
+        // a success code alone does not mean the wasm is there.
+        const type = res.headers.get('content-type') || '';
+        const found = res.ok && !type.includes('text/html');
+        await res.body?.cancel().catch(() => {});
+        if(found){
           return config;
         }
       }
@@ -496,7 +505,13 @@ self.addEventListener('message', async (ev) => {
       // Try to use custom bundles first, then fall back to default jsdelivr bundles
       let selectedBundles = await tryLoadBundles(bundleConfigs);
       if (!selectedBundles) {
-        // Fall back to jsdelivr CDN bundles
+        // Fall back to jsdelivr CDN bundles. This only works on a page without
+        // COEP; under the cross-origin isolation DuckDB wants, constructing a
+        // Worker from another origin throws, so say why before it does.
+        console.error(
+          '[DuckDB] No local wasm bundle found under any of:', baseUrls,
+          '- falling back to the jsDelivr CDN, which a cross-origin-isolated page will refuse.',
+        );
         selectedBundles = duckdb.getJsDelivrBundles();
       }
 

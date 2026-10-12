@@ -112,6 +112,32 @@ if (import.meta.env?.DEV) {
   logger.debug('Module loaded', { version: ADAPTER_VERSION });
 }
 
+/**
+ * Where to look for the local DuckDB wasm bundles, best candidate first.
+ *
+ * The app is built with `base: './'`, so it can be served from any path, and
+ * a host that mounts it under a prefix breaks an origin-rooted `/duckdb/`.
+ * Resolving against this module's own URL follows the app wherever it lands;
+ * `document.baseURI` covers dev, where this module is served from its source
+ * path rather than from `assets/`. The origin root stays last so existing
+ * root-mounted deployments keep working.
+ */
+export function duckdbBundleBaseUrls(): string[] {
+  const candidates: string[] = []
+  try {
+    candidates.push(new URL('../duckdb', import.meta.url).href)
+  } catch {
+    // import.meta.url unavailable (non-module context)
+  }
+  try {
+    candidates.push(new URL('duckdb', document.baseURI).href)
+  } catch {
+    // no document (worker/SSR)
+  }
+  if (typeof location !== 'undefined') candidates.push(`${location.origin}/duckdb`)
+  return [...new Set(candidates.map((u) => u.replace(/\/$/, '')))]
+}
+
 export class DuckDBWorkerAdapter {
   private worker: Worker | null = null
   private handlers = new Map<string, (msg: WorkerMessage) => void>()
@@ -139,9 +165,7 @@ export class DuckDBWorkerAdapter {
         console.error('[Worker] Error event:', e, 'filename:', e.filename, 'lineno:', e.lineno, 'colno:', e.colno)
         reject(new Error(`Worker error: ${e.message || 'Unknown error'} at ${e.filename}:${e.lineno}:${e.colno}`))
       }
-      // Provide base URLs for bundle loading: prefer local /duckdb/, fallback handled by worker
-      const localBundleBase = `${location.origin}/duckdb`
-      this.worker.postMessage({ type: 'init', baseUrls: [localBundleBase] })
+      this.worker.postMessage({ type: 'init', baseUrls: duckdbBundleBaseUrls() })
     })
 
     await this.initPromise
