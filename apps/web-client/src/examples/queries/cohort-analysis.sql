@@ -29,7 +29,7 @@ WITH activity AS (
 cohort AS (
     SELECT
         user_id,
-        DATE_TRUNC('month', MIN(activity_date)) AS cohort_month
+        DATE_TRUNC('month', MIN(activity_date))::DATE AS cohort_month
     FROM activity
     GROUP BY user_id
 ),
@@ -38,8 +38,8 @@ activity_with_cohort AS (
     SELECT
         a.user_id,
         c.cohort_month,
-        DATE_TRUNC('month', a.activity_date)                              AS active_month,
-        DATE_DIFF('month', c.cohort_month, DATE_TRUNC('month', a.activity_date)) AS months_since_signup
+        DATE_TRUNC('month', a.activity_date)::DATE                        AS active_month,
+        DATE_DIFF('month', c.cohort_month, DATE_TRUNC('month', a.activity_date)::DATE) AS months_since_signup
     FROM activity a
     JOIN cohort   c USING (user_id)
 ),

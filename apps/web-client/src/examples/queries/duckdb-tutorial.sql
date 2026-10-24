@@ -88,7 +88,7 @@ SELECT
     name,
     hire_date::DATE AS hired,
     DATE_PART('year', CURRENT_DATE) - DATE_PART('year', hire_date::DATE) AS years_employed,
-    DATE_TRUNC('month', hire_date::DATE) AS hire_month,
+    DATE_TRUNC('month', hire_date::DATE)::DATE AS hire_month,
     DAYNAME(hire_date::DATE) AS hired_day,
     AGE(CURRENT_DATE, hire_date::DATE) AS tenure
 FROM employees
