@@ -37,6 +37,13 @@ if [ ! -d "$DIST_DIR" ]; then
 fi
 
 mkdir -p "$TARGET_DIR"
+
+# Clear the generated bundles before copying. An upgrade can rename them
+# (DuckDB 2.0 turns eh/mvp/coi into base/threads), and a stale duckdb-eh.wasm
+# left behind is 30 MB that ships in dist and is never loaded. Only generated
+# files go; .gitignore and README.md in this directory are tracked.
+rm -f "$TARGET_DIR"/duckdb-*.wasm "$TARGET_DIR"/duckdb-browser*.js "$TARGET_DIR"/duckdb-browser*.mjs
+
 cp "$DIST_DIR"/duckdb-browser*.mjs "$TARGET_DIR/"
 
 # DBXLITE_WASM_BUNDLES=eh copies only the exception-handling bundle, which is
