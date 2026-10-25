@@ -14,6 +14,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
 - Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
 
+## [0.6.0] - 2026-10-25
+
+### Added
+- DuckDB engine upgraded from 1.4.3 to 1.5.4, bringing two minor releases of SQL
+  features and fixes. DuckDB 1.4 loses upstream support on 17 November 2026; the
+  1.5 line is supported to March 2027.
+- Column virtualization in the results grid: wide tables draw only the columns on
+  screen, and arrow keys page across them.
+
+### Fixed
+- Assets load relative to the app rather than the domain root, so dbxlite works
+  when a host serves it under a path prefix. Previously DuckDB, the Monaco editor
+  workers and the SQL templates all 404'd there, leaving an app that loaded but
+  could run nothing.
+- Pagination no longer appends LIMIT to statements that reject it, so `.tables`,
+  `SUMMARIZE` and `TABLE` run correctly.
+- File pickers are offered only where the browser can actually open them, with a
+  working path for everyone else.
+- ODS spreadsheets are buffered like the other spreadsheet formats.
+- Gemini keys in Google's `AQ.` format are accepted, and redacted in logs.
+- Groq's deprecated model names replaced with current ones.
+
+### Changed
+- `date_trunc` over a DATE now returns a TIMESTAMP, following DuckDB 1.5. A query
+  like `date_trunc('month', order_date)` that used to show `2026-01-01` now shows
+  `2026-01-01 00:00:00`. Add a `::DATE` cast to get the old shape back. The
+  bundled cohort and tutorial examples are already updated.
+- The production build splits chunks per dependency and copies only the DuckDB
+  bundle it needs, so it completes on a memory constrained machine.
+- Installing no longer downloads a second copy of the DuckDB bundles; it reads the
+  one the dependency install already placed on disk.
+- The AI key pattern is assembled at runtime so no private key header appears in
+  the built bundle, which was tripping secret scanners.
+
 ## [0.5.0] - 2026-07-28
 
 ### Added
