@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-dialect SQL autocomplete (Snowflake QUALIFY/IFF, BigQuery STRUCT, DuckDB-specific)
 - Hosted Cortex model manifest for auto-refresh as Snowflake adds/deprecates models
 
+## [0.6.1] - 2026-10-26
+
+Maintenance only. The application is unchanged from 0.6.0; this release exists
+to harden the release pipeline and to exercise it end to end.
+
+### Changed
+- Releases now publish to npm from CI using trusted publishing, so no npm token
+  is stored anywhere and each release carries provenance you can verify.
+- The Docker `latest` tag only moves on a version tag. A manual workflow run
+  from a branch previously re-pointed it, which could have made `latest` mean
+  unreleased code.
+
 ## [0.6.0] - 2026-10-25
 
 ### Added
