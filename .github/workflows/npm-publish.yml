@@ -1,0 +1,84 @@
+name: npm Publish
+
+# Publishes dbxlite-ui on a version tag using npm trusted publishing (OIDC).
+#
+# No npm token is stored anywhere. GitHub hands this job a short-lived signed
+# token proving it is this workflow in this repository, and npm checks that
+# against the trusted publisher configured on the package. The npm side must
+# name this exact filename, npm-publish.yml, and the "release" environment.
+#
+# Publishing this way from a public repo also attaches provenance, so anyone
+# can verify the tarball was built from this source.
+
+# Tags only, no manual trigger. A publish must come from a tag so the version
+# guard below always has something to check, and a failed run can be retried
+# with "Re-run jobs", which keeps the original tag ref.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # Pauses here for a manual approval. An npm version can never be reused or
+    # replaced, so the last step before the registry is a human.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # the OIDC token trusted publishing runs on
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 11
+
+      # No registry-url here on purpose. It makes setup-node write an .npmrc
+      # holding `_authToken=${NODE_AUTH_TOKEN}`, and with no token set npm reads
+      # that as "auth is configured", skips the OIDC exchange and fails with
+      # ENEEDAUTH or a misleading 404. See actions/setup-node#1551 and
+      # npm/documentation#1960. npm defaults to registry.npmjs.org anyway.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      # Node 22 ships npm 10, which has no OIDC support. Trusted publishing
+      # needs 11.5.1 or later, so take the npm that knows how to use it.
+      - name: Upgrade npm for trusted publishing
+        run: |
+          npm install -g npm@latest
+          echo "npm $(npm -v) on node $(node -v)"
+
+      # A mistyped tag would otherwise publish a version nobody can take back.
+      # Unconditional: a run that is somehow not on a tag stops here rather
+      # than publishing whatever version happens to be in package.json.
+      - name: Check the tag matches package.json
+        run: |
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::not a tag ref ($GITHUB_REF); publishing is tag-only"
+            exit 1
+          fi
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./apps/cli/package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match apps/cli/package.json $pkg"
+            exit 1
+          fi
+          echo "tag and package.json agree on $pkg"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The CLI package serves the built web client out of assets/, so the app
+      # has to exist before apps/cli can be packed.
+      - name: Build the web client
+        run: pnpm --filter web-client build
+
+      - name: Publish to npm
+        run: npm publish
+        working-directory: apps/cli
