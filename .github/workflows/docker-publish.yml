@@ -60,10 +60,14 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.images.outputs.list }}
+          # The semver patterns read the version out of the git tag, so they
+          # are inert on a branch. `latest` has no such safeguard, so gate it
+          # on a tag ref too: otherwise a workflow_dispatch run from a branch
+          # silently points `latest` at unreleased code.
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=dbxlite
             org.opencontainers.image.description=Browser-native SQL workbench powered by DuckDB (WebAssembly). Query local files larger than RAM, remote Parquet/CSV/JSON/Excel, BigQuery and Snowflake - fully client-side, no backend.
