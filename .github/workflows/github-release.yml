@@ -1,0 +1,90 @@
+name: GitHub Release
+
+# Creates the GitHub Release for a version tag, with notes taken from the
+# matching CHANGELOG section.
+#
+# This is the step that used to be done by hand after tagging, and the one that
+# got silently skipped on 0.6.1 while Docker and npm published themselves.
+# It runs independently of those two: the npm job waits on a human approval, and
+# the Releases page should not sit empty until someone clicks it.
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the release notes from CHANGELOG
+        id: notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+
+          # Everything between this version's heading and the next one.
+          awk -v v="## [$version]" '
+            index($0, v) == 1 { inside = 1; next }
+            inside && /^## \[/ { exit }
+            inside { print }
+          ' CHANGELOG.md > notes.md
+
+          if [ ! -s notes.md ]; then
+            echo "::error::no CHANGELOG section found for $version"
+            exit 1
+          fi
+
+          cat >> notes.md <<EOF
+
+          ### Install
+
+          \`\`\`
+          npx dbxlite-ui@$version
+          \`\`\`
+
+          \`\`\`
+          docker run -p 8080:80 hfmsio/dbxlite:$version
+          \`\`\`
+
+          Also on GHCR as \`ghcr.io/hfmsio/dbxlite:$version\`, for linux/amd64
+          and linux/arm64. The npm package carries a signed provenance
+          statement, so you can verify it was built from this repository.
+          EOF
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.notes.outputs.version }}
+        run: |
+          # A semver prerelease carries a hyphen (1.0.0-rc.1). Those should not
+          # become the "Latest" release people land on.
+          if [[ "$VERSION" == *-* ]]; then
+            flag="--prerelease"
+          else
+            flag="--latest"
+          fi
+
+          # Creating over an existing release is a 422, which would fail a
+          # re-run of this job for no good reason. Update it instead, so the
+          # step is safe to repeat and self-heals a release made by hand.
+          # --repo is explicit: gh otherwise infers it from the checkout, and
+          # when it cannot it reports "no release found" rather than an error,
+          # which would send this down the create path and 422.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release already exists, updating its notes"
+            gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --notes-file notes.md \
+              $flag
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md \
+              $flag
+          fi
