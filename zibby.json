@@ -2,7 +2,7 @@
   "version": 1,
   "name": "dbxlite",
   "category": "Utilities",
-  "summary": "A SQL workbench that runs entirely in the browser, powered by DuckDB compiled to WebAssembly. Open a CSV, Parquet, JSON or DuckDB file from your machine and query it with real SQL. Nothing is uploaded: the data stays on your computer and the engine runs in the page. Files larger than the browser's memory stay queryable, because DuckDB reads only the bytes a query touches rather than loading the whole file. The editor has SQL completion, results paginate through millions of rows, and the AI panel writes and explains queries against the schema you have open.",
+  "summary": "A SQL workbench that runs entirely in the browser, powered by DuckDB compiled to WebAssembly. Open a CSV, Parquet, JSON or DuckDB file from your machine and query it with real SQL. Nothing is uploaded: the data stays on your computer and the engine runs in the page. Files larger than the browser's memory stay queryable, because DuckDB reads only the bytes a query touches rather than loading the whole file. The editor has SQL completion, results paginate through millions of rows, and the AI panel writes, explains and fixes queries from the SQL in your editor and your chat.",
   "samples": {
     "version": 1,
     "requests": [
