@@ -329,7 +329,10 @@ function OverviewTab({ table, fullName }: { table: TableMetadata; fullName: stri
 					<div className="table-info-columns-list">
 						{table.columns?.map((col, idx) => (
 							<div key={idx} className="table-info-column-row">
-								<div className="table-info-column-name">{col.name}</div>
+								<div className="table-info-column-name">
+									{col.name}
+									{col.comment && <div className="table-info-column-description">{col.comment}</div>}
+								</div>
 								<div className="table-info-column-type">{col.type}</div>
 								{col.nullable === false && (
 									<div className="table-info-column-not-null">NOT NULL</div>
