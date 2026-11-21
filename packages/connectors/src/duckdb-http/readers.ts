@@ -302,6 +302,30 @@ function readListEntryList(d: BinaryDeserializer): ListEntry[] {
   return d.readList(readListEntry)
 }
 
+// DuckDB 2.0 serializes string-like vectors as row lengths and concatenated
+// bytes. Invalid rows do not consume bytes, even if their length is nonzero.
+function readByteVectors(d: BinaryDeserializer, validity: DataView | null): DataView[] {
+  const totalLength = d.readProperty(107, readVarInt)
+  const lengths = d.readProperty(108, readData)
+  const bytes = d.readProperty(109, readData)
+  if (lengths.byteLength % 4 !== 0 || bytes.byteLength !== totalLength) {
+    throw new Error('Invalid string-like vector byte lengths')
+  }
+  const values: DataView[] = []
+  let offset = 0
+  for (let row = 0; row < lengths.byteLength / 4; row++) {
+    const valid = !validity || (validity.getUint8(Math.floor(row / 8)) & (1 << (row % 8))) !== 0
+    const length = valid ? lengths.getUint32(row * 4, true) : 0
+    if (length > totalLength - offset) {
+      throw new Error('String-like vector lengths exceed byte data')
+    }
+    values.push(new DataView(bytes.buffer, bytes.byteOffset + offset, length))
+    offset += length
+  }
+  if (offset !== totalLength) throw new Error('String-like vector has unused byte data')
+  return values
+}
+
 function readVector(d: BinaryDeserializer, type: TypeIdAndInfo): Vector {
   const allValid = d.readProperty(100, readUint8)
   const validity = allValid ? d.readProperty(101, readData) : null
@@ -342,7 +366,9 @@ function readVector(d: BinaryDeserializer, type: TypeIdAndInfo): Vector {
     case LogicalTypeId.CHAR:
     case LogicalTypeId.VARCHAR:
       {
-        const data = d.readProperty(102, readStringList)
+        const legacy = d.readPropertyWithDefault<string[] | null>(102, readStringList, null)
+        const decoder = new TextDecoder()
+        const data = legacy ?? readByteVectors(d, validity).map((value) => decoder.decode(value))
         vector = { ...baseVector, kind: 'string', data }
       }
       break
@@ -350,7 +376,8 @@ function readVector(d: BinaryDeserializer, type: TypeIdAndInfo): Vector {
     case LogicalTypeId.BIT:
     case LogicalTypeId.BIGNUM:
       {
-        const data = d.readProperty(102, readDataList)
+        const data = d.readPropertyWithDefault<DataView[] | null>(102, readDataList, null)
+          ?? readByteVectors(d, validity)
         vector = { ...baseVector, kind: 'datalist', data }
       }
       break
