@@ -39,6 +39,7 @@ export class DuckDBHttpConnector implements BaseConnector {
   private baseUrl: string
   private connectionName: string
   private connected = false
+  private pendingRequest: Promise<void> = Promise.resolve()
   private eventSource: EventSource | null = null
   private schemaChangeListeners: Array<() => void> = []
 
@@ -150,6 +151,34 @@ export class DuckDBHttpConnector implements BaseConnector {
    * Execute a SQL query and return raw result
    */
   private async executeQuery(
+    sql: string,
+    options?: { maxRows?: number; signal?: AbortSignal }
+  ): Promise<SuccessQueryResult> {
+    const { signal } = options ?? {}
+    if (signal?.aborted) throw new DOMException('Query cancelled', 'AbortError')
+
+    // A named DuckDB connection cannot execute a new request until the
+    // preceding response has been fully consumed. Keep the queue alive after
+    // failures, and retain the slot until an in-flight response is consumed.
+    const request = this.pendingRequest.then(async () => {
+      if (signal?.aborted) throw new DOMException('Query cancelled', 'AbortError')
+      return this.executeQueryNow(sql, options)
+    })
+    this.pendingRequest = request.then(() => undefined, () => undefined)
+
+    if (!signal) return request
+    return new Promise((resolve, reject) => {
+      const onAbort = () => reject(new DOMException('Query cancelled', 'AbortError'))
+      signal.addEventListener('abort', onAbort, { once: true })
+      request.then(
+        (result) => { signal.removeEventListener('abort', onAbort); resolve(result) },
+        (error) => { signal.removeEventListener('abort', onAbort); reject(error) }
+      )
+      if (signal.aborted) onAbort()
+    })
+  }
+
+  private async executeQueryNow(
     sql: string,
     options?: { maxRows?: number }
   ): Promise<SuccessQueryResult> {
@@ -500,7 +529,7 @@ export class DuckDBHttpConnector implements BaseConnector {
     const maxRows = opts?.maxRows ?? 10000
 
     try {
-      const result = await this.executeQuery(sql, { maxRows })
+      const result = await this.executeQuery(sql, { maxRows, signal: opts?.signal })
 
       // Convert to rows
       const rows = this.chunksToRows(result)
