@@ -3972,8 +3972,17 @@ button.server-tip-clickable:active {
 
 .table-info-column-name {
 	flex: 1;
+	min-width: 0;
 	font-family: monospace;
 	font-weight: 600;
+}
+
+.table-info-column-description {
+	margin-top: var(--space-2);
+	color: var(--text-muted);
+	font-family: var(--font-family, sans-serif);
+	font-weight: 400;
+	overflow-wrap: anywhere;
 }
 
 .table-info-column-type {

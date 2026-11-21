@@ -831,6 +831,12 @@ function UnifiedTreeView({
 							})()}
 						</div>
 
+						{(node.type === "table" || node.type === "view" || node.type === "column") && node.metadata?.description && (
+							<div className="tree-node-secondary" title={node.metadata.description}>
+								{node.metadata.description}
+							</div>
+						)}
+
 						{/* Secondary row: metadata for files/databases, or "Analyzing..." state */}
 						{node.metadata && (
 							(node.metadata.isIntrospecting ||

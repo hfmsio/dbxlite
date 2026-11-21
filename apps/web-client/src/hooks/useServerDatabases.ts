@@ -82,6 +82,7 @@ export function useServerDatabases(isHttpMode: boolean) {
 					SELECT DISTINCT
 						schema_name,
 						table_name,
+						comment,
 						CASE WHEN temporary THEN 'TEMP TABLE' ELSE 'BASE TABLE' END AS table_type
 					FROM duckdb_tables()
 					WHERE database_name = ${escapedDbName}
@@ -94,6 +95,7 @@ export function useServerDatabases(isHttpMode: boolean) {
 					SELECT DISTINCT
 						schema_name,
 						view_name AS table_name,
+						comment,
 						'VIEW' AS table_type
 					FROM duckdb_views()
 					WHERE database_name = ${escapedDbName}
@@ -121,12 +123,13 @@ export function useServerDatabases(isHttpMode: boolean) {
 
 				// Combine tables and views, group by schema
 				const allObjects = [...tablesResult.rows, ...viewsResult.rows];
-				const schemaMap = new Map<string, Array<{ table_name: string; table_type: string }>>();
+				const schemaMap = new Map<string, Array<{ table_name: string; table_type: string; description?: string }>>();
 				for (const row of allObjects) {
 					const schemaName = String(row.schema_name);
 					const tableInfo = {
 						table_name: String(row.table_name),
 						table_type: String(row.table_type),
+						description: typeof row.comment === "string" ? row.comment : undefined,
 					};
 					if (!schemaMap.has(schemaName)) {
 						schemaMap.set(schemaName, []);
@@ -151,7 +154,7 @@ export function useServerDatabases(isHttpMode: boolean) {
 						let columns: Column[] = [];
 						try {
 							const columnsQuery = `
-								SELECT column_name, data_type, is_nullable
+								SELECT column_name, data_type, is_nullable, comment
 								FROM duckdb_columns()
 								WHERE database_name = ${escapedDbName}
 								  AND schema_name = ${escapedSchema}
@@ -163,6 +166,7 @@ export function useServerDatabases(isHttpMode: boolean) {
 								name: String(col.column_name),
 								type: String(col.data_type),
 								nullable: col.is_nullable === true || col.is_nullable === "YES",
+								description: typeof col.comment === "string" ? col.comment : undefined,
 							}));
 						} catch (err) {
 							logger.debug(`Could not get columns for ${dbName}.${schemaName}.${tableName}:`, err);
@@ -187,6 +191,7 @@ export function useServerDatabases(isHttpMode: boolean) {
 
 						tables.push({
 							name: tableName,
+							description: tableInfo.description,
 							schema: schemaName,
 							columns,
 							rowCount,

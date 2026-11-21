@@ -160,6 +160,27 @@ describe("useServerDatabases", () => {
 	});
 
 	describe("schema introspection", () => {
+		it("preserves table, view, and column comments from the server catalog", async () => {
+			mockExecuteQuery.mockImplementation(async (sql: string) => {
+				if (sql.includes("duckdb_databases()")) return { rows: [{ database_name: "catalog", path: null, readonly: true }] };
+				if (sql.includes("duckdb_tables()")) return { rows: [{ schema_name: "main", table_name: "sample", table_type: "BASE TABLE", comment: "Table description" }] };
+				if (sql.includes("duckdb_views()")) return { rows: [{ schema_name: "main", table_name: "sample_view", table_type: "VIEW", comment: "View description" }] };
+				if (sql.includes("duckdb_columns()")) return { rows: [
+					{ column_name: "id", data_type: "INTEGER", is_nullable: false, comment: "Identifier" },
+					{ column_name: "value", data_type: "VARCHAR", is_nullable: true, comment: null },
+				] };
+				return mockEmptyResponse;
+			});
+
+			const { result } = renderHook(() => useServerDatabases(true));
+			await act(async () => { await result.current.refreshDatabases(); });
+			const tables = result.current.databases[0].schemas[0].tables;
+			expect(tables[0].description).toBe("Table description");
+			expect(tables[1].description).toBe("View description");
+			expect(tables[0].columns[0].description).toBe("Identifier");
+			expect(tables[0].columns[1].description).toBeUndefined();
+		});
+
 		it("uses escapeStringLiteral for SQL safety", async () => {
 			mockExecuteQuery
 				.mockResolvedValueOnce({

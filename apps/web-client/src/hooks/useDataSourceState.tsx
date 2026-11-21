@@ -646,6 +646,7 @@ export function useDataSourceState({
 								metadata: {
 									rowCount: table.rowCount,
 									columnCount: table.columns.length,
+									description: table.description,
 								},
 								children: table.columns.map((col) => ({
 									id: `server-db-${db.name}-col-${table.name}-${col.name}`,
@@ -655,6 +656,7 @@ export function useDataSourceState({
 									iconColor: "#6b7280",
 									source: "duckdb" as const,
 									metadata: {
+										description: col.description,
 										dataType: col.type,
 										nullable: col.nullable,
 									},
@@ -673,8 +675,9 @@ export function useDataSourceState({
 												id: table.name,
 												name: table.name,
 												type: table.type || "table",
-												columns: table.columns,
+												columns: table.columns.map((col) => ({ ...col, comment: col.description })),
 												rowCount: table.rowCount,
+												description: table.description,
 											},
 											fullName: `"${db.name}"."${schema.name}"."${table.name}"`,
 											databaseName: db.name,
@@ -707,6 +710,7 @@ export function useDataSourceState({
 									metadata: {
 										rowCount: table.rowCount,
 										columnCount: table.columns.length,
+										description: table.description,
 									},
 									children: table.columns.map((col) => ({
 										id: `server-db-${db.name}-col-${schema.name}-${table.name}-${col.name}`,
@@ -716,6 +720,7 @@ export function useDataSourceState({
 										iconColor: "#6b7280",
 										source: "duckdb" as const,
 										metadata: {
+											description: col.description,
 											dataType: col.type,
 											nullable: col.nullable,
 										},
@@ -734,8 +739,9 @@ export function useDataSourceState({
 													id: table.name,
 													name: table.name,
 													type: table.type || "table",
-													columns: table.columns,
+													columns: table.columns.map((col) => ({ ...col, comment: col.description })),
 													rowCount: table.rowCount,
+													description: table.description,
 												},
 												fullName: `"${db.name}"."${schema.name}"."${table.name}"`,
 												databaseName: db.name,
